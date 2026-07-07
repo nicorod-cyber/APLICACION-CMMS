@@ -1,0 +1,1670 @@
+{
+  "id": "98874456-1b17-4203-89d8-39edb6af641c",
+  "entity": "activos",
+  "schemaName": "activos",
+  "originalFileName": "plantilla_faenas.xlsx",
+  "storedOriginalFileName": "98874456-1b17-4203-89d8-39edb6af641c_plantilla_faenas.xlsx",
+  "simulateOnly": false,
+  "status": 1,
+  "uploadedAtUtc": "2026-07-02T00:53:40.2875037+00:00",
+  "uploadedBy": "1dc348ae-ab97-4182-a1e4-b29d684dde2a",
+  "appliedAtUtc": null,
+  "appliedBy": null,
+  "rejectedAtUtc": null,
+  "rejectedBy": null,
+  "rejectReason": null,
+  "summary": {
+    "totalRows": 34,
+    "newRows": 0,
+    "updatedRows": 0,
+    "unchangedRows": 0,
+    "errorRows": 34,
+    "duplicateRows": 0
+  },
+  "rows": [
+    {
+      "rowNumber": 2,
+      "values": {
+        "Codigo": "FAE_EDB",
+        "Nombre": "EQUIPOS DADOS DE BAJA",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 2,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 2,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 3,
+      "values": {
+        "Codigo": "FAE_COL",
+        "Nombre": "Collahuasi",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 3,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 3,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 4,
+      "values": {
+        "Codigo": "FAE_CHU",
+        "Nombre": "Chuquicamata",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 4,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 4,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 5,
+      "values": {
+        "Codigo": "FAE_RT",
+        "Nombre": "Radomiro Tomic",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 5,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 5,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 6,
+      "values": {
+        "Codigo": "FAE_MH",
+        "Nombre": "Ministro Hales",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Inactiva",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 6,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 6,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 7,
+      "values": {
+        "Codigo": "FAE_CC",
+        "Nombre": "Cerro Colorado",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Inactiva",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 7,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 7,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 8,
+      "values": {
+        "Codigo": "FAE_QB",
+        "Nombre": "Quebrada Blanca",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Inactiva",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 8,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 8,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 9,
+      "values": {
+        "Codigo": "FAE_TES",
+        "Nombre": "Tesoro",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 9,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 9,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 10,
+      "values": {
+        "Codigo": "FAE_ESP",
+        "Nombre": "Esperanza",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 10,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 10,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 11,
+      "values": {
+        "Codigo": "FAE_ANT",
+        "Nombre": "Antucoya",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 11,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 11,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 12,
+      "values": {
+        "Codigo": "FAE_SG",
+        "Nombre": "Sierra Gorda",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 12,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 12,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 13,
+      "values": {
+        "Codigo": "FAE_ENC",
+        "Nombre": "Encuentro",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 13,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 13,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 14,
+      "values": {
+        "Codigo": "FAE_MB",
+        "Nombre": "Mantos Blancos",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Inactiva",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 14,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 14,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 15,
+      "values": {
+        "Codigo": "FAE_FRA",
+        "Nombre": "Franke",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Inactiva",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 15,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 15,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 16,
+      "values": {
+        "Codigo": "FAE_ZAL",
+        "Nombre": "Zald\u00EDvar",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 16,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 16,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 17,
+      "values": {
+        "Codigo": "FAE_GM",
+        "Nombre": "Gabriela Mistral",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Inactiva",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 17,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 17,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 18,
+      "values": {
+        "Codigo": "FAE_MIC",
+        "Nombre": "Michilla",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 18,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 18,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 19,
+      "values": {
+        "Codigo": "FAE_LOB",
+        "Nombre": "Lomas Bayas",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 19,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 19,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 20,
+      "values": {
+        "Codigo": "FAE_SPE",
+        "Nombre": "Spence",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 20,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 20,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 21,
+      "values": {
+        "Codigo": "FAE_MV",
+        "Nombre": "Manto Verde",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Inactiva",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 21,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 21,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 22,
+      "values": {
+        "Codigo": "FAE_ESV",
+        "Nombre": "El Salvador",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 22,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 22,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 23,
+      "values": {
+        "Codigo": "FAE_ER",
+        "Nombre": "El Romeral",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 23,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 23,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 24,
+      "values": {
+        "Codigo": "FAE_SN",
+        "Nombre": "Salares Norte",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 24,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 24,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 25,
+      "values": {
+        "Codigo": "FAE_LC",
+        "Nombre": "Los Colorados",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 25,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 25,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 26,
+      "values": {
+        "Codigo": "FAE_CNN",
+        "Nombre": "Cerro Negro Norte",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 26,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 26,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 27,
+      "values": {
+        "Codigo": "FAE_PLE",
+        "Nombre": "Pleito",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 27,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 27,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 28,
+      "values": {
+        "Codigo": "FAE_PT",
+        "Nombre": "Punta Teatino",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 28,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 28,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 29,
+      "values": {
+        "Codigo": "FAE_LP",
+        "Nombre": "Los Pelambres",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 29,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 29,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 30,
+      "values": {
+        "Codigo": "FAE_ES",
+        "Nombre": "El Soldado",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 30,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 30,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 31,
+      "values": {
+        "Codigo": "FAE_LB",
+        "Nombre": "Los Bronces",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 31,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 31,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 32,
+      "values": {
+        "Codigo": "FAE_AND",
+        "Nombre": "Andina",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 32,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 32,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 33,
+      "values": {
+        "Codigo": "FAE_PEL",
+        "Nombre": "Peldehue",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 33,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 33,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 34,
+      "values": {
+        "Codigo": "FAE_ET",
+        "Nombre": "El Teniente",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 34,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 34,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    },
+    {
+      "rowNumber": 35,
+      "values": {
+        "Codigo": "FAE_POL",
+        "Nombre": "Polpaico",
+        "FaenaCodigo": null,
+        "TipoActivo": null,
+        "Estado": "Activa",
+        "UbicacionTecnicaCodigo": null,
+        "Familia": null,
+        "Marca": null,
+        "Modelo": null,
+        "Patente": null,
+        "NumeroSerie": null,
+        "Propiedad": null,
+        "Criticidad": null,
+        "EstadoDocumental": null,
+        "EstadoOperacional": null,
+        "CompletitudFicha": null,
+        "FichaValidada": null,
+        "FichaTecnicaJson": null,
+        "FechaAlta": null,
+        "FechaActualizacion": null
+      },
+      "operation": "Error",
+      "errors": [
+        {
+          "rowNumber": 35,
+          "columnName": "FaenaCodigo",
+          "message": "Required value is missing."
+        },
+        {
+          "rowNumber": 35,
+          "columnName": "TipoActivo",
+          "message": "Required value is missing."
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "rowNumber": 1,
+      "columnName": "FaenaCodigo",
+      "message": "La columna requerida \u0027FaenaCodigo\u0027 no existe."
+    },
+    {
+      "rowNumber": 1,
+      "columnName": "TipoActivo",
+      "message": "La columna requerida \u0027TipoActivo\u0027 no existe."
+    },
+    {
+      "rowNumber": 2,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 2,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 3,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 3,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 4,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 4,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 5,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 5,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 6,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 6,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 7,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 7,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 8,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 8,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 9,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 9,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 10,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 10,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 11,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 11,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 12,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 12,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 13,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 13,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 14,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 14,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 15,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 15,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 16,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 16,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 17,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 17,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 18,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 18,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 19,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 19,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 20,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 20,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 21,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 21,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 22,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 22,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 23,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 23,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 24,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 24,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 25,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 25,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 26,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 26,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 27,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 27,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 28,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 28,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 29,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 29,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 30,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 30,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 31,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 31,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 32,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 32,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 33,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 33,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 34,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 34,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 35,
+      "columnName": "FaenaCodigo",
+      "message": "Required value is missing."
+    },
+    {
+      "rowNumber": 35,
+      "columnName": "TipoActivo",
+      "message": "Required value is missing."
+    }
+  ]
+}

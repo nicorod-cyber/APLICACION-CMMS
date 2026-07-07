@@ -1,0 +1,130 @@
+# CONTEXTO GENERAL PARA TODOS LOS PROMPTS
+
+Proyecto: Mantenimiento [Nombre Empresa]
+
+Objetivo:
+Crear un CMMS web industrial funcional, no maqueta, no prototipo visual aislado. El sistema debe funcionar inicialmente con Excel como fuente de datos, pero debe quedar preparado para migrar a SQL Server o PostgreSQL sin rehacer la lógica de negocio.
+
+Stack obligatorio:
+Backend:
+- C#
+- ASP.NET Core Web API
+- Clean Architecture
+- Entity Framework Core preparado para SQL
+- Repositorios desacoplados
+- Implementación inicial con Excel
+- Implementación SQL preparada
+- JWT Auth
+- Serilog
+- FluentValidation
+- OpenAPI / Swagger
+- Jobs programados con Quartz.NET o Hangfire
+- PDF generado desde plantillas HTML configurables
+- Adaptadores para correo y SharePoint
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- React Router
+- TanStack Query
+- TanStack Table
+- Zustand o Redux Toolkit
+- Tailwind CSS
+- Diseño tipo Fracttal
+- Modo claro y modo oscuro
+- Responsive
+- Preparado para PWA
+- IndexedDB para offline
+
+Infraestructura:
+- Docker Compose
+- Backend
+- Frontend
+- Nginx
+- Mailhog o simulador de correo
+- Carpeta local simulada para SharePoint
+- Scripts de seed/importación
+- README técnico
+- Despliegue Linux-ready
+
+Reglas generales:
+- No entregar solo pseudocódigo.
+- Todo debe quedar integrado al repositorio.
+- Cada módulo debe incluir backend, frontend cuando aplique, validaciones, pruebas básicas y documentación.
+- La fuente de datos inicial será Excel.
+- Debe existir una capa clara para reemplazar Excel por SQL.
+- Marcar en código y documentación dónde se modifica para usar SQL.
+- No hardcodear rutas, usuarios, correos ni credenciales.
+- Usar variables de entorno y archivos de configuración.
+- Mantener auditoría completa.
+- Todo flujo crítico debe tener estados configurables.
+- Todo módulo debe considerar permisos por rol y faena.
+- Técnicos solo ven sus OT asignadas.
+- Supervisores ven su faena.
+- Bodega ve todas las bodegas.
+- Costos solo visibles para roles autorizados.
+- Importaciones Excel requieren validación y aprobación.
+- Campos validados quedan bloqueados y solo se corrigen con auditoría.
+- SharePoint y correo deben quedar con adaptadores configurables.
+- El sistema debe generar PDFs desde plantillas HTML configurables.
+- El sistema debe tener dashboards por rol con widgets configurables.
+- Power BI debe consumir datasets/vistas de reporting, no tablas operacionales.
+
+
+# PROMPT 07 — MÓDULO DE ACTIVOS Y FICHAS TÉCNICAS
+
+
+Implementa módulo completo de activos.
+
+Backend:
+- CRUD de activos.
+- Estados de activo.
+- Ficha técnica.
+- Faena.
+- Ubicación técnica.
+- Familia.
+- Marca.
+- Modelo.
+- Patente.
+- Número de serie.
+- Propiedad: propio, arriendo, tercero.
+- Criticidad.
+- Estado documental.
+- Estado operacional.
+- Completitud de ficha.
+- Historial de cambios.
+- Eventos de estado.
+
+Endpoints:
+- GET `/api/assets`
+- GET `/api/assets/{id}`
+- POST `/api/assets`
+- PUT `/api/assets/{id}`
+- POST `/api/assets/{id}/state-events`
+- GET `/api/assets/{id}/history`
+- GET `/api/assets/{id}/documents`
+- GET `/api/assets/{id}/costs`
+- GET `/api/assets/{id}/availability`
+
+Frontend:
+- Listado de activos.
+- Filtros por faena, estado, familia, criticidad.
+- Ficha 360° del activo.
+- Tabs: General, ficha técnica, documentos, repuestos compatibles, OT, costos, disponibilidad, historial.
+- Estados visuales.
+- Indicador ficha completa/parcial/pendiente.
+
+Reglas:
+- Código de activo único.
+- No permitir duplicados.
+- Código bloqueado tras validación.
+- Cambio de faena requiere permiso.
+- Documento crítico vencido cambia estado documental.
+- Activo con documento crítico vencido debe figurar no disponible documentalmente.
+
+Tests:
+- Crear activo.
+- Bloquear duplicado.
+- Cambiar estado.
+- Calcular completitud de ficha.

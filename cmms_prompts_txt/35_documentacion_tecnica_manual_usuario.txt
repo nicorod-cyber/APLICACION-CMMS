@@ -1,0 +1,111 @@
+# CONTEXTO GENERAL PARA TODOS LOS PROMPTS
+
+Proyecto: Mantenimiento [Nombre Empresa]
+
+Objetivo:
+Crear un CMMS web industrial funcional, no maqueta, no prototipo visual aislado. El sistema debe funcionar inicialmente con Excel como fuente de datos, pero debe quedar preparado para migrar a SQL Server o PostgreSQL sin rehacer la lógica de negocio.
+
+Stack obligatorio:
+Backend:
+- C#
+- ASP.NET Core Web API
+- Clean Architecture
+- Entity Framework Core preparado para SQL
+- Repositorios desacoplados
+- Implementación inicial con Excel
+- Implementación SQL preparada
+- JWT Auth
+- Serilog
+- FluentValidation
+- OpenAPI / Swagger
+- Jobs programados con Quartz.NET o Hangfire
+- PDF generado desde plantillas HTML configurables
+- Adaptadores para correo y SharePoint
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- React Router
+- TanStack Query
+- TanStack Table
+- Zustand o Redux Toolkit
+- Tailwind CSS
+- Diseño tipo Fracttal
+- Modo claro y modo oscuro
+- Responsive
+- Preparado para PWA
+- IndexedDB para offline
+
+Infraestructura:
+- Docker Compose
+- Backend
+- Frontend
+- Nginx
+- Mailhog o simulador de correo
+- Carpeta local simulada para SharePoint
+- Scripts de seed/importación
+- README técnico
+- Despliegue Linux-ready
+
+Reglas generales:
+- No entregar solo pseudocódigo.
+- Todo debe quedar integrado al repositorio.
+- Cada módulo debe incluir backend, frontend cuando aplique, validaciones, pruebas básicas y documentación.
+- La fuente de datos inicial será Excel.
+- Debe existir una capa clara para reemplazar Excel por SQL.
+- Marcar en código y documentación dónde se modifica para usar SQL.
+- No hardcodear rutas, usuarios, correos ni credenciales.
+- Usar variables de entorno y archivos de configuración.
+- Mantener auditoría completa.
+- Todo flujo crítico debe tener estados configurables.
+- Todo módulo debe considerar permisos por rol y faena.
+- Técnicos solo ven sus OT asignadas.
+- Supervisores ven su faena.
+- Bodega ve todas las bodegas.
+- Costos solo visibles para roles autorizados.
+- Importaciones Excel requieren validación y aprobación.
+- Campos validados quedan bloqueados y solo se corrigen con auditoría.
+- SharePoint y correo deben quedar con adaptadores configurables.
+- El sistema debe generar PDFs desde plantillas HTML configurables.
+- El sistema debe tener dashboards por rol con widgets configurables.
+- Power BI debe consumir datasets/vistas de reporting, no tablas operacionales.
+
+
+# PROMPT 35 — DOCUMENTACIÓN TÉCNICA Y MANUAL DE USUARIO
+
+
+Genera documentación completa.
+
+Documentos:
+- `README.md`
+- `docs/installation-linux.md`
+- `docs/user-manual.md`
+- `docs/admin-manual.md`
+- `docs/warehouse-manual.md`
+- `docs/maintenance-supervisor-manual.md`
+- `docs/technician-manual.md`
+- `docs/data-import-guide.md`
+- `docs/excel-to-sql-migration.md`
+- `docs/sharepoint-integration.md`
+- `docs/email-integration.md`
+- `docs/powerbi-reporting.md`
+- `docs/security-hardening.md`
+- `docs/backup-restore.md`
+- `docs/known-limitations.md`
+
+Debe explicar:
+- Cómo levantar el sistema.
+- Cómo importar Excel.
+- Cómo operar bodega.
+- Cómo gestionar documentos.
+- Cómo crear OT.
+- Cómo ejecutar tareas.
+- Cómo revisar dashboard.
+- Cómo cambiar de Excel a SQL.
+- Cómo pedir permisos para SharePoint/correo/Microsoft 365.
+- Cómo desplegar en Linux.
+- Cómo respaldar y restaurar.
+- Qué limitaciones tiene operar con Excel.
+
+Incluir capturas placeholder o instrucciones de captura si no hay screenshots.

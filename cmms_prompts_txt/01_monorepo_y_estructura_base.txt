@@ -1,0 +1,190 @@
+# CONTEXTO GENERAL PARA TODOS LOS PROMPTS
+
+Proyecto: Mantenimiento [Nombre Empresa]
+
+Objetivo:
+Crear un CMMS web industrial funcional, no maqueta, no prototipo visual aislado. El sistema debe funcionar inicialmente con Excel como fuente de datos, pero debe quedar preparado para migrar a SQL Server o PostgreSQL sin rehacer la lógica de negocio.
+
+Stack obligatorio:
+Backend:
+- C#
+- ASP.NET Core Web API
+- Clean Architecture
+- Entity Framework Core preparado para SQL
+- Repositorios desacoplados
+- Implementación inicial con Excel
+- Implementación SQL preparada
+- JWT Auth
+- Serilog
+- FluentValidation
+- OpenAPI / Swagger
+- Jobs programados con Quartz.NET o Hangfire
+- PDF generado desde plantillas HTML configurables
+- Adaptadores para correo y SharePoint
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- React Router
+- TanStack Query
+- TanStack Table
+- Zustand o Redux Toolkit
+- Tailwind CSS
+- Diseño tipo Fracttal
+- Modo claro y modo oscuro
+- Responsive
+- Preparado para PWA
+- IndexedDB para offline
+
+Infraestructura:
+- Docker Compose
+- Backend
+- Frontend
+- Nginx
+- Mailhog o simulador de correo
+- Carpeta local simulada para SharePoint
+- Scripts de seed/importación
+- README técnico
+- Despliegue Linux-ready
+
+Reglas generales:
+- No entregar solo pseudocódigo.
+- Todo debe quedar integrado al repositorio.
+- Cada módulo debe incluir backend, frontend cuando aplique, validaciones, pruebas básicas y documentación.
+- La fuente de datos inicial será Excel.
+- Debe existir una capa clara para reemplazar Excel por SQL.
+- Marcar en código y documentación dónde se modifica para usar SQL.
+- No hardcodear rutas, usuarios, correos ni credenciales.
+- Usar variables de entorno y archivos de configuración.
+- Mantener auditoría completa.
+- Todo flujo crítico debe tener estados configurables.
+- Todo módulo debe considerar permisos por rol y faena.
+- Técnicos solo ven sus OT asignadas.
+- Supervisores ven su faena.
+- Bodega ve todas las bodegas.
+- Costos solo visibles para roles autorizados.
+- Importaciones Excel requieren validación y aprobación.
+- Campos validados quedan bloqueados y solo se corrigen con auditoría.
+- SharePoint y correo deben quedar con adaptadores configurables.
+- El sistema debe generar PDFs desde plantillas HTML configurables.
+- El sistema debe tener dashboards por rol con widgets configurables.
+- Power BI debe consumir datasets/vistas de reporting, no tablas operacionales.
+
+
+# PROMPT 01 — CREACIÓN DEL MONOREPO Y ESTRUCTURA BASE
+
+Crea la estructura base del repositorio para el CMMS “Mantenimiento [Nombre Empresa]”.
+
+## Carpetas requeridas
+
+Crear:
+
+```text
+/backend
+/frontend
+/data/excel
+/data/templates
+/data/sharepoint-simulated
+/docs
+/infra
+/tests
+```
+
+## Backend
+
+Crear solución .NET con proyectos:
+
+- `MaintenanceCMMS.Api`
+- `MaintenanceCMMS.Application`
+- `MaintenanceCMMS.Domain`
+- `MaintenanceCMMS.Infrastructure`
+- `MaintenanceCMMS.Tests`
+
+Configurar referencias correctas:
+
+- Api referencia Application e Infrastructure.
+- Application referencia Domain.
+- Infrastructure referencia Application y Domain.
+- Tests referencia los proyectos necesarios.
+
+Configurar:
+
+- ASP.NET Core Web API.
+- Swagger/OpenAPI.
+- Health check básico.
+- Serilog.
+- appsettings con secciones:
+  - DataProvider
+  - Jwt
+  - SharePoint
+  - Mail
+  - Pdf
+  - PowerBI
+  - Offline
+
+Crear endpoint:
+- GET `/api/health`
+- GET `/api/system/info`
+
+## Frontend
+
+Crear app React + TypeScript + Vite.
+
+Configurar:
+
+- Tailwind CSS.
+- React Router.
+- TanStack Query.
+- Zustand o Redux Toolkit.
+- Tema claro/oscuro.
+- Layout base con menú lateral izquierdo.
+- Header con búsqueda global placeholder.
+- Logo genérico reemplazable.
+- Nombre del sistema: `Mantenimiento [Nombre Empresa]`.
+
+Pantallas placeholder:
+
+- Login
+- Dashboard
+- Activos
+- Documentos
+- Bodega
+- Repuestos
+- Solicitudes
+- Avisos
+- OT
+- Preventivos
+- Programación
+- Reportes
+- Alertas
+- Importaciones
+- Administración
+
+## Infraestructura
+
+Crear:
+
+- `docker-compose.yml`
+- Nginx básico
+- Mailhog
+- Volumen para `/data/excel`
+- Volumen para `/data/templates`
+- Volumen para `/data/sharepoint-simulated`
+- `.env.example`
+
+## Entregables
+
+- Backend compila.
+- Frontend compila.
+- Docker Compose levanta servicios base.
+- README con comandos:
+  - ejecutar backend
+  - ejecutar frontend
+  - ejecutar docker
+  - correr tests
+
+Al finalizar, entrega:
+- Resumen de archivos creados.
+- Comandos para ejecutar.
+- Próximo paso recomendado.

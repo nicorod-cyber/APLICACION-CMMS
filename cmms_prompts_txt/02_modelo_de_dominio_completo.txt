@@ -1,0 +1,246 @@
+# CONTEXTO GENERAL PARA TODOS LOS PROMPTS
+
+Proyecto: Mantenimiento [Nombre Empresa]
+
+Objetivo:
+Crear un CMMS web industrial funcional, no maqueta, no prototipo visual aislado. El sistema debe funcionar inicialmente con Excel como fuente de datos, pero debe quedar preparado para migrar a SQL Server o PostgreSQL sin rehacer la lógica de negocio.
+
+Stack obligatorio:
+Backend:
+- C#
+- ASP.NET Core Web API
+- Clean Architecture
+- Entity Framework Core preparado para SQL
+- Repositorios desacoplados
+- Implementación inicial con Excel
+- Implementación SQL preparada
+- JWT Auth
+- Serilog
+- FluentValidation
+- OpenAPI / Swagger
+- Jobs programados con Quartz.NET o Hangfire
+- PDF generado desde plantillas HTML configurables
+- Adaptadores para correo y SharePoint
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- React Router
+- TanStack Query
+- TanStack Table
+- Zustand o Redux Toolkit
+- Tailwind CSS
+- Diseño tipo Fracttal
+- Modo claro y modo oscuro
+- Responsive
+- Preparado para PWA
+- IndexedDB para offline
+
+Infraestructura:
+- Docker Compose
+- Backend
+- Frontend
+- Nginx
+- Mailhog o simulador de correo
+- Carpeta local simulada para SharePoint
+- Scripts de seed/importación
+- README técnico
+- Despliegue Linux-ready
+
+Reglas generales:
+- No entregar solo pseudocódigo.
+- Todo debe quedar integrado al repositorio.
+- Cada módulo debe incluir backend, frontend cuando aplique, validaciones, pruebas básicas y documentación.
+- La fuente de datos inicial será Excel.
+- Debe existir una capa clara para reemplazar Excel por SQL.
+- Marcar en código y documentación dónde se modifica para usar SQL.
+- No hardcodear rutas, usuarios, correos ni credenciales.
+- Usar variables de entorno y archivos de configuración.
+- Mantener auditoría completa.
+- Todo flujo crítico debe tener estados configurables.
+- Todo módulo debe considerar permisos por rol y faena.
+- Técnicos solo ven sus OT asignadas.
+- Supervisores ven su faena.
+- Bodega ve todas las bodegas.
+- Costos solo visibles para roles autorizados.
+- Importaciones Excel requieren validación y aprobación.
+- Campos validados quedan bloqueados y solo se corrigen con auditoría.
+- SharePoint y correo deben quedar con adaptadores configurables.
+- El sistema debe generar PDFs desde plantillas HTML configurables.
+- El sistema debe tener dashboards por rol con widgets configurables.
+- Power BI debe consumir datasets/vistas de reporting, no tablas operacionales.
+
+
+# PROMPT 02 — MODELO DE DOMINIO COMPLETO
+
+Implementa el modelo de dominio completo en `MaintenanceCMMS.Domain`.
+
+## Crear entidades, enums y value objects para:
+
+### Usuarios y seguridad
+- User
+- Role
+- Permission
+- UserFaena
+- UserRole
+- AuditLog
+
+### Organización
+- Company
+- Faena
+- TechnicalLocation
+- Contract
+- ContractAssetRequirement
+
+### Activos
+- Asset
+- AssetFamily
+- AssetType
+- AssetPropertyType
+- AssetStatus
+- AssetTechnicalRecord
+- AssetStateEvent
+- AssetAvailabilityEvent
+
+### Jerarquía técnica
+- TechnicalSystem
+- TechnicalSubsystem
+- Component
+- Subcomponent
+- AssetComponentAssignment
+
+### Documentos
+- DocumentType
+- AssetDocument
+- DocumentRequirement
+- DocumentAlertRule
+- DocumentValidation
+- DocumentStatus
+
+### Bodega
+- Warehouse
+- WarehouseLocation
+- SparePart
+- SparePartFamilyCompatibility
+- StockItem
+- StockMovement
+- StockReservation
+- InventoryAdjustment
+- InventoryCount
+- WarehouseTransfer
+
+### Solicitudes y abastecimiento
+- SparePartRequest
+- SparePartRequestLine
+- NonCodedMaterialRequest
+- ProcurementRequest
+- PurchaseOrderReference
+- Supplier
+- LeadTimeTracking
+
+### Avisos y OT
+- WorkNotice
+- WorkOrder
+- WorkOrderTask
+- WorkOrderTaskTechnician
+- WorkOrderStatusHistory
+- WorkOrderEvidence
+- WorkOrderChecklist
+- WorkOrderChecklistItem
+- WorkOrderSignature
+- LaborEntry
+
+### Preventivos
+- PreventivePlan
+- PreventivePlanFrequency
+- PreventivePlanChecklist
+- PreventiveTrigger
+- MeterReading
+
+### Programación
+- SchedulePlan
+- ScheduleItem
+- Workshop
+- WorkshopCapacity
+- GanttDependency
+
+### Costos
+- CostEntry
+- LaborRate
+- ExternalService
+- PaymentStatement
+
+### Alertas y notificaciones
+- Alert
+- Notification
+- NotificationRecipient
+- NotificationPdfRecord
+
+### Reportes
+- KpiDefinition
+- KpiTarget
+- DashboardWidget
+- UserDashboardWidget
+
+### Importaciones
+- ImportBatch
+- ImportBatchRow
+- ImportValidationError
+- ImportApproval
+
+### Offline
+- OfflineSyncPackage
+- OfflineSyncItem
+- SyncConflict
+
+## Enums obligatorios
+
+- AssetStatus
+- WorkOrderStatus
+- WorkNoticeStatus
+- SparePartRequestStatus
+- DocumentStatus
+- AlertSeverity
+- StockMovementType
+- UserRoleType
+- DataProviderType
+- ImportStatus
+- SyncStatus
+- CostType
+- MaintenanceType
+
+## Reglas de dominio mínimas
+
+Implementar métodos o reglas para:
+
+1. Documento crítico vencido bloquea disponibilidad.
+2. Stock disponible = stock físico - stock reservado.
+3. OT no puede cerrarse si faltan evidencias requeridas.
+4. OT no puede cerrarse si faltan HH obligatorias.
+5. Movimiento de consumo de mantenimiento debe tener activo u OT.
+6. Código de activo debe ser único por maestro.
+7. Código SAP de repuesto debe ser único si existe.
+8. Documento validado bloquea campos críticos.
+9. Stock no se modifica directamente, solo por movimientos.
+10. Material no codificado puede convertirse en repuesto maestro.
+
+## Requisitos técnicos
+
+- Usar nombres en inglés para código.
+- Documentar con comentarios XML las entidades críticas.
+- Las entidades deben tener Id, CreatedAt, CreatedBy, UpdatedAt, UpdatedBy cuando aplique.
+- No implementar base de datos aún.
+- Agregar tests unitarios en `MaintenanceCMMS.Tests`.
+
+## Tests mínimos
+
+- Documento crítico vencido bloquea disponibilidad.
+- Stock disponible descuenta reservas.
+- OT no cierra si falta evidencia.
+- Consumo sin activo ni OT falla.
+- Material no codificado se puede convertir en repuesto maestro.
+
+Al finalizar:
+- Ejecutar tests.
+- Entregar resumen del modelo.

@@ -1,0 +1,163 @@
+# CONTEXTO GENERAL PARA TODOS LOS PROMPTS
+
+Proyecto: Mantenimiento [Nombre Empresa]
+
+Objetivo:
+Crear un CMMS web industrial funcional, no maqueta, no prototipo visual aislado. El sistema debe funcionar inicialmente con Excel como fuente de datos, pero debe quedar preparado para migrar a SQL Server o PostgreSQL sin rehacer la lógica de negocio.
+
+Stack obligatorio:
+Backend:
+- C#
+- ASP.NET Core Web API
+- Clean Architecture
+- Entity Framework Core preparado para SQL
+- Repositorios desacoplados
+- Implementación inicial con Excel
+- Implementación SQL preparada
+- JWT Auth
+- Serilog
+- FluentValidation
+- OpenAPI / Swagger
+- Jobs programados con Quartz.NET o Hangfire
+- PDF generado desde plantillas HTML configurables
+- Adaptadores para correo y SharePoint
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- React Router
+- TanStack Query
+- TanStack Table
+- Zustand o Redux Toolkit
+- Tailwind CSS
+- Diseño tipo Fracttal
+- Modo claro y modo oscuro
+- Responsive
+- Preparado para PWA
+- IndexedDB para offline
+
+Infraestructura:
+- Docker Compose
+- Backend
+- Frontend
+- Nginx
+- Mailhog o simulador de correo
+- Carpeta local simulada para SharePoint
+- Scripts de seed/importación
+- README técnico
+- Despliegue Linux-ready
+
+Reglas generales:
+- No entregar solo pseudocódigo.
+- Todo debe quedar integrado al repositorio.
+- Cada módulo debe incluir backend, frontend cuando aplique, validaciones, pruebas básicas y documentación.
+- La fuente de datos inicial será Excel.
+- Debe existir una capa clara para reemplazar Excel por SQL.
+- Marcar en código y documentación dónde se modifica para usar SQL.
+- No hardcodear rutas, usuarios, correos ni credenciales.
+- Usar variables de entorno y archivos de configuración.
+- Mantener auditoría completa.
+- Todo flujo crítico debe tener estados configurables.
+- Todo módulo debe considerar permisos por rol y faena.
+- Técnicos solo ven sus OT asignadas.
+- Supervisores ven su faena.
+- Bodega ve todas las bodegas.
+- Costos solo visibles para roles autorizados.
+- Importaciones Excel requieren validación y aprobación.
+- Campos validados quedan bloqueados y solo se corrigen con auditoría.
+- SharePoint y correo deben quedar con adaptadores configurables.
+- El sistema debe generar PDFs desde plantillas HTML configurables.
+- El sistema debe tener dashboards por rol con widgets configurables.
+- Power BI debe consumir datasets/vistas de reporting, no tablas operacionales.
+
+
+# PROMPT 00 — CONTEXTO MAESTRO DEL PROYECTO
+
+Actúa como arquitecto senior full-stack y genera el contexto maestro del proyecto CMMS llamado “Mantenimiento [Nombre Empresa]”.
+
+No programes todavía el sistema completo. Crea documentación base para que los siguientes prompts trabajen de forma consistente.
+
+Debe generar:
+
+1. `docs/00-project-context.md`
+2. `docs/architecture-decisions.md`
+3. `docs/module-map.md`
+4. `docs/data-provider-strategy.md`
+5. Estructura inicial de carpetas propuesta
+6. Lista de decisiones técnicas
+7. Lista de riesgos y mitigaciones
+
+Incluye en la documentación:
+
+## Módulos obligatorios
+
+1. Usuarios, roles, permisos y faenas.
+2. Auditoría completa.
+3. Activos y fichas técnicas.
+4. Jerarquía técnica: sistema, subsistema, componente, subcomponente.
+5. Documentación con vencimiento.
+6. Alertas documentales.
+7. PDF de respaldo configurable por HTML.
+8. Correo mediante adaptador configurable.
+9. SharePoint mediante adaptador configurable.
+10. Bodega.
+11. Repuestos.
+12. Stock por bodega.
+13. Stock mínimo.
+14. Reservas.
+15. Transferencias entre bodegas.
+16. Recepciones.
+17. Ajustes de inventario.
+18. Material no codificado.
+19. Solicitudes a abastecimiento.
+20. Número de solicitud, OC, proveedor y lead time.
+21. Avisos de trabajo.
+22. Órdenes de trabajo.
+23. Tareas internas de OT.
+24. Varios técnicos por tarea.
+25. HH por tarea y por técnico.
+26. Evidencias por tarea/OT.
+27. Checklists digitales.
+28. Firma digital: dibujo en pantalla + validación por usuario.
+29. Preventivos automáticos.
+30. Programación diaria, semanal y mensual.
+31. Calendario.
+32. Carta Gantt.
+33. Kanban.
+34. Disponibilidad contractual.
+35. Causas de indisponibilidad.
+36. Costos: repuestos, HH, servicios externos, estados de pago.
+37. Dashboard interno por rol.
+38. Widgets configurables.
+39. Vistas/tablas para Power BI.
+40. Importadores Excel con validación y aprobación.
+41. Offline para técnicos y supervisores.
+42. Búsqueda global.
+43. Modo claro/oscuro.
+44. Docker y despliegue Linux.
+45. Documentación técnica y manual de usuario.
+
+## Fuente de datos inicial
+
+El sistema debe partir usando Excel como fuente de datos operativa inicial.  
+Debe existir una capa de abstracción para reemplazar Excel por SQL Server o PostgreSQL después.
+
+Implementar conceptualmente:
+
+- `IDataProvider`
+- `IRepository<T>`
+- `ExcelDataProvider`
+- `SqlDataProvider`
+- Configuración `DataProvider: Excel | SqlServer | PostgreSql`
+
+Los archivos Excel deben estar en `/data/excel/`.
+
+## Reglas críticas
+
+- Excel es temporal, no el corazón definitivo.
+- El corazón debe ser la arquitectura de servicios, repositorios e interfaces.
+- La migración a SQL no debe obligar a rehacer frontend ni lógica de negocio.
+- Los documentos se almacenan en SharePoint o simulador local, no dentro de Excel.
+- Los PDFs se generan desde plantillas HTML.
+- Las integraciones reales con SharePoint, correo corporativo y Microsoft 365 deben quedar preparadas por adaptadores.

@@ -1,0 +1,74 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: infra/docker/backend.Dockerfile
+    container_name: maintenance-cmms-backend
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      DataProvider__Provider: Excel
+      DataProvider__ExcelPath: /app/data/excel
+      DataProvider__SqlServerConnectionString: ""
+      DataProvider__PostgreSqlConnectionString: ""
+      DataProviders__Excel__BasePath: /app/data/excel
+      Jwt__Issuer: MaintenanceCMMS
+      Jwt__Audience: MaintenanceCMMS.Clients
+      Jwt__Secret: dev-local-maintenance-cmms-jwt-secret-change-me-2026
+      Jwt__ExpirationMinutes: 60
+      Auth__SeedAdmin__Username: admin
+      Auth__SeedAdmin__Email: admin@example.local
+      Auth__SeedAdmin__DisplayName: Administrador CMMS
+      Auth__SeedAdmin__Password: ChangeMe.Admin123!
+      SharePoint__Provider: LocalSimulation
+      SharePoint__LocalPath: /app/data/sharepoint-simulated
+      SharePoint__ManualRootUrl: ""
+      SharePoint__SiteUrl: ""
+      SharePoint__TenantId: ""
+      SharePoint__ClientId: ""
+      SharePoint__SiteId: ""
+      SharePoint__DriveId: ""
+      Mail__Provider: Mailhog
+      Mail__From: cmms@example.local
+      Mail__PlanningEmail: planificacion@example.local
+      Mail__Host: mailhog
+      Mail__Port: 1025
+      Pdf__TemplatePath: /app/data/templates
+      Imports__StoragePath: /app/data/imports
+    volumes:
+      - ./data/excel:/app/data/excel
+      - ./data/imports:/app/data/imports
+      - ./data/templates:/app/data/templates
+      - ./data/sharepoint-simulated:/app/data/sharepoint-simulated
+    ports:
+      - "5041:8080"
+    depends_on:
+      - mailhog
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/docker/frontend.Dockerfile
+    container_name: maintenance-cmms-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: maintenance-cmms-nginx
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+      - frontend
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: maintenance-cmms-mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"

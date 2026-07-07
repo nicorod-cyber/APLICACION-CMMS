@@ -1,0 +1,25 @@
+# Build outputs
+bin/
+obj/
+dist/
+coverage/
+TestResults/
+
+# Dependencies
+node_modules/
+
+# Local environment
+.env
+.env.local
+appsettings.Local.json
+
+# Logs
+*.log
+logs/
+
+# IDE/editor
+.vs/
+.vscode/
+*.user
+*.suo
+

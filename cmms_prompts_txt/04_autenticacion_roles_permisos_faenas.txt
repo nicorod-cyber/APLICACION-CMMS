@@ -1,0 +1,182 @@
+# CONTEXTO GENERAL PARA TODOS LOS PROMPTS
+
+Proyecto: Mantenimiento [Nombre Empresa]
+
+Objetivo:
+Crear un CMMS web industrial funcional, no maqueta, no prototipo visual aislado. El sistema debe funcionar inicialmente con Excel como fuente de datos, pero debe quedar preparado para migrar a SQL Server o PostgreSQL sin rehacer la lógica de negocio.
+
+Stack obligatorio:
+Backend:
+- C#
+- ASP.NET Core Web API
+- Clean Architecture
+- Entity Framework Core preparado para SQL
+- Repositorios desacoplados
+- Implementación inicial con Excel
+- Implementación SQL preparada
+- JWT Auth
+- Serilog
+- FluentValidation
+- OpenAPI / Swagger
+- Jobs programados con Quartz.NET o Hangfire
+- PDF generado desde plantillas HTML configurables
+- Adaptadores para correo y SharePoint
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- React Router
+- TanStack Query
+- TanStack Table
+- Zustand o Redux Toolkit
+- Tailwind CSS
+- Diseño tipo Fracttal
+- Modo claro y modo oscuro
+- Responsive
+- Preparado para PWA
+- IndexedDB para offline
+
+Infraestructura:
+- Docker Compose
+- Backend
+- Frontend
+- Nginx
+- Mailhog o simulador de correo
+- Carpeta local simulada para SharePoint
+- Scripts de seed/importación
+- README técnico
+- Despliegue Linux-ready
+
+Reglas generales:
+- No entregar solo pseudocódigo.
+- Todo debe quedar integrado al repositorio.
+- Cada módulo debe incluir backend, frontend cuando aplique, validaciones, pruebas básicas y documentación.
+- La fuente de datos inicial será Excel.
+- Debe existir una capa clara para reemplazar Excel por SQL.
+- Marcar en código y documentación dónde se modifica para usar SQL.
+- No hardcodear rutas, usuarios, correos ni credenciales.
+- Usar variables de entorno y archivos de configuración.
+- Mantener auditoría completa.
+- Todo flujo crítico debe tener estados configurables.
+- Todo módulo debe considerar permisos por rol y faena.
+- Técnicos solo ven sus OT asignadas.
+- Supervisores ven su faena.
+- Bodega ve todas las bodegas.
+- Costos solo visibles para roles autorizados.
+- Importaciones Excel requieren validación y aprobación.
+- Campos validados quedan bloqueados y solo se corrigen con auditoría.
+- SharePoint y correo deben quedar con adaptadores configurables.
+- El sistema debe generar PDFs desde plantillas HTML configurables.
+- El sistema debe tener dashboards por rol con widgets configurables.
+- Power BI debe consumir datasets/vistas de reporting, no tablas operacionales.
+
+
+# PROMPT 04 — AUTENTICACIÓN, USUARIOS, ROLES, PERMISOS Y FAENAS
+
+Implementa login propio con username y contraseña.
+
+## Backend
+
+Implementar:
+
+- JWT.
+- Hash seguro de contraseña.
+- Login.
+- Logout.
+- Usuario actual.
+- Roles.
+- Permisos.
+- Faenas autorizadas.
+- Middleware de autorización por rol y faena.
+
+## Endpoints
+
+- POST `/api/auth/login`
+- POST `/api/auth/logout`
+- GET `/api/auth/me`
+- POST `/api/users`
+- GET `/api/users`
+- GET `/api/users/{id}`
+- PUT `/api/users/{id}`
+- POST `/api/users/{id}/roles`
+- POST `/api/users/{id}/faenas`
+- POST `/api/users/{id}/lock`
+- POST `/api/users/{id}/unlock`
+
+## Roles iniciales
+
+Crear seed inicial:
+
+- admin
+- planificador
+- supervisor_mantenimiento
+- tecnico
+- bodeguero
+- supervisor_bodega
+- gerencia
+- consulta_faena
+
+## Reglas
+
+- Técnicos ven solo sus OT asignadas.
+- Supervisores ven datos de sus faenas.
+- Planificadores pueden tener varias faenas.
+- Bodega ve todas las bodegas.
+- Costos solo roles autorizados.
+- Administración solo administradores.
+- Importaciones requieren permiso.
+- Ajustes de stock requieren permiso.
+- Cierre de OT requiere rol supervisor.
+- Validación final de OT requiere planificación.
+
+## Futuro Microsoft 365
+
+Preparar interfaz:
+
+```csharp
+IExternalIdentityProvider
+```
+
+Crear placeholder:
+
+```csharp
+MicrosoftEntraIdentityProvider
+```
+
+Documentar que queda preparado para Entra ID, pero la primera versión usa usuarios propios.
+
+## Frontend
+
+Implementar:
+
+- Pantalla Login.
+- Guardar sesión segura.
+- Protección de rutas.
+- Menú según rol.
+- Dashboard inicial por rol.
+- Pantalla de administración de usuarios.
+- Edición de roles.
+- Asignación de faenas.
+- Bloqueo/desbloqueo.
+
+## Auditoría
+
+Auditar:
+
+- Login.
+- Logout.
+- Login fallido.
+- Creación de usuario.
+- Cambio de rol.
+- Cambio de faena.
+- Bloqueo/desbloqueo.
+
+## Tests
+
+- Login válido.
+- Login inválido.
+- Usuario bloqueado.
+- Técnico no accede a OT no asignada.
+- Supervisor no ve otra faena.
+- Bodega ve bodegas globales.

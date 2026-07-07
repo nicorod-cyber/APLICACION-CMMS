@@ -1,0 +1,707 @@
+{
+  "id": "2037df5a-6fa1-4b89-9aac-450a9122b7ce",
+  "entity": "faenas",
+  "schemaName": "faenas",
+  "originalFileName": "plantilla_faenas.xlsx",
+  "storedOriginalFileName": "2037df5a-6fa1-4b89-9aac-450a9122b7ce_plantilla_faenas.xlsx",
+  "simulateOnly": false,
+  "status": 5,
+  "uploadedAtUtc": "2026-07-02T00:55:00.8194841+00:00",
+  "uploadedBy": "1dc348ae-ab97-4182-a1e4-b29d684dde2a",
+  "appliedAtUtc": null,
+  "appliedBy": null,
+  "rejectedAtUtc": "2026-07-02T01:12:23.5772864+00:00",
+  "rejectedBy": "1dc348ae-ab97-4182-a1e4-b29d684dde2a",
+  "rejectReason": "",
+  "summary": {
+    "totalRows": 34,
+    "newRows": 0,
+    "updatedRows": 0,
+    "unchangedRows": 34,
+    "errorRows": 0,
+    "duplicateRows": 0
+  },
+  "rows": [
+    {
+      "rowNumber": 2,
+      "values": {
+        "Codigo": "FAE_EDB",
+        "Nombre": "EQUIPOS DADOS DE BAJA",
+        "Empresa": "ENAEX",
+        "Descripcion": "Ubicaci\u00F3n Equipos dados de baja, no utilizable para movimientos de equipos",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-29",
+        "centro_costes": "EC06Z00O41",
+        "tipo_faena": "Planta de Servicio",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "Sin dato",
+        "longitud": "Sin dato",
+        "responsable": "Carlos Troncoso Tapia",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 3,
+      "values": {
+        "Codigo": "FAE_COL",
+        "Nombre": "Collahuasi",
+        "Empresa": "Collahuasi",
+        "Descripcion": "Faena Collahuasi",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-17",
+        "centro_costes": "EC06W63001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Tarapac\u00E1",
+        "comuna": "Pica",
+        "latitud": "-20.967828",
+        "longitud": "-68.683631",
+        "responsable": "Jhon Alvarado",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 4,
+      "values": {
+        "Codigo": "FAE_CHU",
+        "Nombre": "Chuquicamata",
+        "Empresa": "Codelco",
+        "Descripcion": "Faena Chuquicamata Rajo abierto",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-01",
+        "centro_costes": "EC06W31001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Calama",
+        "latitud": "-22.324556",
+        "longitud": "-68.882705",
+        "responsable": "Ricardo Riffo",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 5,
+      "values": {
+        "Codigo": "FAE_RT",
+        "Nombre": "Radomiro Tomic",
+        "Empresa": "Codelco",
+        "Descripcion": "Faena Radomiro Tomic",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-02",
+        "centro_costes": "EC06W42001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Calama",
+        "latitud": "-22.254427",
+        "longitud": "-68.902992",
+        "responsable": "Luis Araya",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 6,
+      "values": {
+        "Codigo": "FAE_MH",
+        "Nombre": "Ministro Hales",
+        "Empresa": "Codelco",
+        "Descripcion": "Faena inactiva, contrato perdido",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-03",
+        "centro_costes": "NA",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "-",
+        "longitud": "-",
+        "responsable": "-",
+        "Estado": "Inactiva"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 7,
+      "values": {
+        "Codigo": "FAE_CC",
+        "Nombre": "Cerro Colorado",
+        "Empresa": "BHP",
+        "Descripcion": "Faena inactiva, contrato perdido",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-04",
+        "centro_costes": "NA",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "-",
+        "longitud": "-",
+        "responsable": "-",
+        "Estado": "Inactiva"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 8,
+      "values": {
+        "Codigo": "FAE_QB",
+        "Nombre": "Quebrada Blanca",
+        "Empresa": "Teck",
+        "Descripcion": "Faena inactiva, contrato perdido",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-05",
+        "centro_costes": "NA",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "-",
+        "longitud": "-",
+        "responsable": "-",
+        "Estado": "Inactiva"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 9,
+      "values": {
+        "Codigo": "FAE_TES",
+        "Nombre": "Tesoro",
+        "Empresa": "Antofagasta Minerals",
+        "Descripcion": "Faena Tesoro",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-06",
+        "centro_costes": "EC06W34001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Sierra Gorda",
+        "latitud": "-22.936010",
+        "longitud": "-69.083627",
+        "responsable": "Isaac Rivera",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 10,
+      "values": {
+        "Codigo": "FAE_ESP",
+        "Nombre": "Esperanza",
+        "Empresa": "Antofagasta Minerals",
+        "Descripcion": "Faena Esperanza",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-07",
+        "centro_costes": "EC06W23001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Sierra Gorda",
+        "latitud": "-22.990509",
+        "longitud": "-69.071008",
+        "responsable": "Isaac Rivera",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 11,
+      "values": {
+        "Codigo": "FAE_ANT",
+        "Nombre": "Antucoya",
+        "Empresa": "Antofagasta Minerals",
+        "Descripcion": "Faena Antucoya",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-08",
+        "centro_costes": "EC06W59001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Mar\u00EDa Elena",
+        "latitud": "-22.631111",
+        "longitud": "-69.856667",
+        "responsable": "Wilson Castro",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 12,
+      "values": {
+        "Codigo": "FAE_SG",
+        "Nombre": "Sierra Gorda",
+        "Empresa": "KGHM",
+        "Descripcion": "Faena Sierra Gorda",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-09",
+        "centro_costes": "EC06W53001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Sierra Gorda",
+        "latitud": "-22.849714",
+        "longitud": "-69.365585",
+        "responsable": "Luis Guzman",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 13,
+      "values": {
+        "Codigo": "FAE_ENC",
+        "Nombre": "Encuentro",
+        "Empresa": "Antofagasta Minerals",
+        "Descripcion": "Faena Encuentro",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-10",
+        "centro_costes": "EC06W61001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Sierra Gorda",
+        "latitud": "-23.073170",
+        "longitud": "-69.08347",
+        "responsable": "Isaac Rivera",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 14,
+      "values": {
+        "Codigo": "FAE_MB",
+        "Nombre": "Mantos Blancos",
+        "Empresa": "Capstone",
+        "Descripcion": "Faena inactiva, contrato perdido",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-11",
+        "centro_costes": "NA",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "-",
+        "longitud": "-",
+        "responsable": "-",
+        "Estado": "Inactiva"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 15,
+      "values": {
+        "Codigo": "FAE_FRA",
+        "Nombre": "Franke",
+        "Empresa": "Las Cenizas",
+        "Descripcion": "Faena inactiva, contrato perdido",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-12",
+        "centro_costes": "NA",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "-",
+        "longitud": "-",
+        "responsable": "-",
+        "Estado": "Inactiva"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 16,
+      "values": {
+        "Codigo": "FAE_ZAL",
+        "Nombre": "Zald\u00EDvar",
+        "Empresa": "Antofagasta Minerals",
+        "Descripcion": "Faena Zald\u00EDvar",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-20",
+        "centro_costes": "EC06W77001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Antofagasta",
+        "latitud": "-24.185417",
+        "longitud": "-69.078114",
+        "responsable": "Fernando Garrido",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 17,
+      "values": {
+        "Codigo": "FAE_GM",
+        "Nombre": "Gabriela Mistral",
+        "Empresa": "Codelco",
+        "Descripcion": "Faena inactiva, contrato perdido",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-23",
+        "centro_costes": "NA",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "-",
+        "longitud": "-",
+        "responsable": "-",
+        "Estado": "Inactiva"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 18,
+      "values": {
+        "Codigo": "FAE_MIC",
+        "Nombre": "Michilla",
+        "Empresa": "HMC",
+        "Descripcion": "Faena Michilla",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-27",
+        "centro_costes": "EC06W41001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Mejillones",
+        "latitud": "-22.669292",
+        "longitud": "-70.176219",
+        "responsable": "Hans Arredondo",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 19,
+      "values": {
+        "Codigo": "FAE_LOB",
+        "Nombre": "Lomas Bayas",
+        "Empresa": "Glencore",
+        "Descripcion": "Faena Lomas Bayas",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-28",
+        "centro_costes": "EC06W35001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Sierra Gorda",
+        "latitud": "-23.470203",
+        "longitud": "-69.546932",
+        "responsable": "Yerko Pavez",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 20,
+      "values": {
+        "Codigo": "FAE_SPE",
+        "Nombre": "Spence",
+        "Empresa": "BHP",
+        "Descripcion": "Faena Spence",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-34",
+        "centro_costes": "EC06W46001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Antofagasta",
+        "comuna": "Sierra Gorda",
+        "latitud": "-22.826729",
+        "longitud": "-69.272859",
+        "responsable": "Jorge Hidalgo",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 21,
+      "values": {
+        "Codigo": "FAE_MV",
+        "Nombre": "Manto Verde",
+        "Empresa": "Capstone",
+        "Descripcion": "Faena inactiva, cantrato perdido",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-13",
+        "centro_costes": "NA",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "-",
+        "longitud": "-",
+        "responsable": "-",
+        "Estado": "Inactiva"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 22,
+      "values": {
+        "Codigo": "FAE_ESV",
+        "Nombre": "El Salvador",
+        "Empresa": "Codelco",
+        "Descripcion": "Faena El Salvador",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-19",
+        "centro_costes": "EC06W73001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Atacama",
+        "comuna": "Diego de Almagro",
+        "latitud": "-26.249839",
+        "longitud": "-69.575164",
+        "responsable": "Carlos Hervas",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 23,
+      "values": {
+        "Codigo": "FAE_ER",
+        "Nombre": "El Romeral",
+        "Empresa": "CMP",
+        "Descripcion": "Faena El Romeral",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-21",
+        "centro_costes": "EC06W58001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Coquimbo",
+        "comuna": "La Higuera",
+        "latitud": "-29,741,724",
+        "longitud": "-71,234,336",
+        "responsable": "Javier Ayestar\u00E1n",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 24,
+      "values": {
+        "Codigo": "FAE_SN",
+        "Nombre": "Salares Norte",
+        "Empresa": "Gold Fields",
+        "Descripcion": "Faena Salares Norte",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-22",
+        "centro_costes": "EC06W65001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Atacama",
+        "comuna": "Diego de Almagro",
+        "latitud": "-26.075916",
+        "longitud": "-68.980397",
+        "responsable": "Juan Acevedo",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 25,
+      "values": {
+        "Codigo": "FAE_LC",
+        "Nombre": "Los Colorados",
+        "Empresa": "CMP",
+        "Descripcion": "Faena Los Colorados",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-24",
+        "centro_costes": "EC06W66001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Atacama",
+        "comuna": "Alto del Carmen",
+        "latitud": "-28.283208",
+        "longitud": "-70.817642",
+        "responsable": "Sergio Arriagada",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 26,
+      "values": {
+        "Codigo": "FAE_CNN",
+        "Nombre": "Cerro Negro Norte",
+        "Empresa": "CMP",
+        "Descripcion": "Faena Cerro Negro Norte",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-25",
+        "centro_costes": "EC06W67001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Atacama",
+        "comuna": "Copiap\u00F3",
+        "latitud": "-27.113979",
+        "longitud": "-70.363975",
+        "responsable": "Cristian Pacheco",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 27,
+      "values": {
+        "Codigo": "FAE_PLE",
+        "Nombre": "Pleito",
+        "Empresa": "CMP",
+        "Descripcion": "Faena Pleito",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-26",
+        "centro_costes": "EC06W68001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Coquimbo",
+        "comuna": "La Serena",
+        "latitud": "-29.241639",
+        "longitud": "-71.066929",
+        "responsable": "Javier Ayestar\u00E1n",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 28,
+      "values": {
+        "Codigo": "FAE_PT",
+        "Nombre": "Punta Teatino",
+        "Empresa": "ENAEX",
+        "Descripcion": "Planta Punta teatinos",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-32",
+        "centro_costes": "EC06E05004",
+        "tipo_faena": "Planta de Servicio",
+        "region": "Coquimbo",
+        "comuna": "La Serena",
+        "latitud": "-29.816033",
+        "longitud": "-71.289946",
+        "responsable": "Miguel Bahamondes",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 29,
+      "values": {
+        "Codigo": "FAE_LP",
+        "Nombre": "Los Pelambres",
+        "Empresa": "Antofagasta Minerals",
+        "Descripcion": "Faena Los Pelambres",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-14",
+        "centro_costes": "EC06W37001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Coquimbo",
+        "comuna": "Salamanca",
+        "latitud": "-31.725454",
+        "longitud": "-70.499556",
+        "responsable": "Manuel Zu\u00F1iga",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 30,
+      "values": {
+        "Codigo": "FAE_ES",
+        "Nombre": "El Soldado",
+        "Empresa": "Anglo American",
+        "Descripcion": "Faena El Soldado",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-15",
+        "centro_costes": "EC06W33001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Valpara\u00EDso",
+        "comuna": "Nogales",
+        "latitud": "-32.663198",
+        "longitud": "-71.154743",
+        "responsable": "Alexis Morales",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 31,
+      "values": {
+        "Codigo": "FAE_LB",
+        "Nombre": "Los Bronces",
+        "Empresa": "Anglo American",
+        "Descripcion": "Faena Los Bronces",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-16",
+        "centro_costes": "EC06W38001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Valpara\u00EDso",
+        "comuna": "Los Andes",
+        "latitud": "-33.157121",
+        "longitud": "-70.298701",
+        "responsable": "Baltazar Marin",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 32,
+      "values": {
+        "Codigo": "FAE_AND",
+        "Nombre": "Andina",
+        "Empresa": "Codelco",
+        "Descripcion": "Faena Andina rajo abierto",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-18",
+        "centro_costes": "EC06W74001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Valpara\u00EDso",
+        "comuna": "Los Andes",
+        "latitud": "-33.124589",
+        "longitud": "-70.265671",
+        "responsable": "Jos\u00E9 Vera",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 33,
+      "values": {
+        "Codigo": "FAE_PEL",
+        "Nombre": "Peldehue",
+        "Empresa": "ENAEX",
+        "Descripcion": "Planta Peldehue",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-33",
+        "centro_costes": "EC06W27001",
+        "tipo_faena": "Planta de Servicio",
+        "region": "Metropolitana de Santiago",
+        "comuna": "Colina",
+        "latitud": "-33.115551",
+        "longitud": "-70.666803",
+        "responsable": "Diego Olivares",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 34,
+      "values": {
+        "Codigo": "FAE_ET",
+        "Nombre": "El Teniente",
+        "Empresa": "Codelco",
+        "Descripcion": "Faena El Teniente Rajo abierto",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-35",
+        "centro_costes": "EC06W32001",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Libertador General Bernardo O\u2019Higgins",
+        "comuna": "Machal\u00ED",
+        "latitud": "-34.087985",
+        "longitud": "-70.458988",
+        "responsable": "Jos\u00E9 Ibarra",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    },
+    {
+      "rowNumber": 35,
+      "values": {
+        "Codigo": "FAE_POL",
+        "Nombre": "Polpaico",
+        "Empresa": "Polpaico",
+        "Descripcion": "Faena Polpaico",
+        "Ubicaci\u00F3n T\u00E9cnica": "SERV-04-30",
+        "centro_costes": "NA",
+        "tipo_faena": "Mina Rajo Abierto",
+        "region": "Sin dato",
+        "comuna": "Sin dato",
+        "latitud": "-",
+        "longitud": "-",
+        "responsable": "-",
+        "Estado": "Activa"
+      },
+      "operation": "SinCambios",
+      "errors": []
+    }
+  ],
+  "errors": []
+}
