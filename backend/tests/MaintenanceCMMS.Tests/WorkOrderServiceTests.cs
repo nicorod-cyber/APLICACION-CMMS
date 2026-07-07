@@ -48,7 +48,9 @@ public sealed class WorkOrderServiceTests
 
         await fixture.Service.ScheduleAsync(created.Summary.NumeroOT, new ScheduleWorkOrderRequest(Day(2), "Programada"), Planner, CancellationToken.None);
         await fixture.Service.StartAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Inicio"), Technician, CancellationToken.None);
-        await fixture.Service.RegisterLaborAsync(created.Summary.NumeroOT, task.CodigoTarea, new RegisterLaborRequest("tech-1", 2, "Cambio de sello", Day(2)), Technician, CancellationToken.None);
+        var labor = await fixture.Service.RegisterLaborAsync(created.Summary.NumeroOT, task.CodigoTarea, new RegisterLaborRequest("tech-1", 2, "Cambio de sello", Day(2)), Technician, CancellationToken.None);
+        Assert.NotNull(labor);
+        await fixture.Service.ValidateLaborAsync(created.Summary.NumeroOT, labor.HHId, new ValidateLaborRequest(true, "HH conforme"), Supervisor, CancellationToken.None);
         await fixture.Service.RegisterEvidenceAsync(created.Summary.NumeroOT, new RegisterEvidenceRequest("Foto final", task.CodigoTarea, ArchivoKey: "evidencia/final.jpg"), Technician, CancellationToken.None);
         var checklist = (await fixture.Service.GetByIdAsync(created.Summary.NumeroOT, Planner, CancellationToken.None))!.Checklist.Single();
         await fixture.Service.UpdateChecklistItemAsync(created.Summary.NumeroOT, checklist.ItemId, new UpdateChecklistItemRequest(true, "Completo"), Technician, CancellationToken.None);
@@ -105,6 +107,83 @@ public sealed class WorkOrderServiceTests
         Assert.Single(technicianView);
     }
 
+    [Fact]
+    public async Task RegisterLaborAsync_CalculatesHoursAcrossSeveralDaysAndSupervisorValidates()
+    {
+        var fixture = CreateFixture();
+        var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
+        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Trabajo por turnos"), Planner, CancellationToken.None);
+        Assert.NotNull(task);
+        await fixture.Service.AssignTechnicianAsync(created.Summary.NumeroOT, task.CodigoTarea, new AssignTaskTechnicianRequest("tech-1"), Planner, CancellationToken.None);
+
+        var firstDay = await fixture.Service.RegisterLaborAsync(
+            created.Summary.NumeroOT,
+            task.CodigoTarea,
+            new RegisterLaborRequest("tech-1", null, "Turno dia 1", Day(2), Day(2).AddHours(8), Day(2).AddHours(12), "Sin novedades"),
+            Technician,
+            CancellationToken.None);
+        var secondDay = await fixture.Service.RegisterLaborAsync(
+            created.Summary.NumeroOT,
+            task.CodigoTarea,
+            new RegisterLaborRequest("tech-1", null, "Turno dia 2", Day(3), Day(3).AddHours(9), Day(3).AddHours(11.5), "Cierre"),
+            Technician,
+            CancellationToken.None);
+
+        Assert.NotNull(firstDay);
+        Assert.NotNull(secondDay);
+        Assert.Equal(4, firstDay.Horas);
+        Assert.Equal(2.5m, secondDay.Horas);
+
+        var validated = await fixture.Service.ValidateLaborAsync(created.Summary.NumeroOT, firstDay.HHId, new ValidateLaborRequest(true, "Validado"), Supervisor, CancellationToken.None);
+
+        Assert.NotNull(validated);
+        Assert.True(validated.ValidadoSupervisor);
+        Assert.Equal("supervisor", validated.ValidadoPor);
+    }
+
+    [Fact]
+    public async Task RegisterSignatureAsync_AllowsTaskSignatureWithDrawnImage()
+    {
+        var fixture = CreateFixture();
+        var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
+        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Firmar tarea"), Planner, CancellationToken.None);
+        Assert.NotNull(task);
+        await fixture.Service.AssignTechnicianAsync(created.Summary.NumeroOT, task.CodigoTarea, new AssignTaskTechnicianRequest("tech-1"), Planner, CancellationToken.None);
+
+        var signature = await fixture.Service.RegisterSignatureAsync(
+            created.Summary.NumeroOT,
+            new RegisterWorkOrderSignatureRequest(UsuarioId: "tech-1", CodigoTarea: task.CodigoTarea, Scope: "Tarea", SignatureImageDataUrl: "data:image/png;base64,ZmlybWE="),
+            Technician,
+            CancellationToken.None);
+
+        Assert.NotNull(signature);
+        Assert.Equal(task.CodigoTarea, signature.CodigoTarea);
+        Assert.Equal("Tarea", signature.Scope);
+        Assert.StartsWith("data:image/png", signature.SignatureImageDataUrl);
+    }
+
+    [Fact]
+    public async Task CloseTechnicallyAsync_BlocksWhenMandatoryChecklistIsIncomplete()
+    {
+        var fixture = CreateFixture();
+        var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
+        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest(
+            "Checklist obligatorio",
+            RequiereEvidencia: false,
+            RequiereHH: false,
+            ChecklistObligatorio: true), Planner, CancellationToken.None);
+        Assert.NotNull(task);
+        await fixture.Service.AddChecklistItemAsync(created.Summary.NumeroOT, new AddWorkOrderChecklistItemRequest(task.CodigoTarea, "Prueba funcional", true), Planner, CancellationToken.None);
+        await fixture.Service.ScheduleAsync(created.Summary.NumeroOT, new ScheduleWorkOrderRequest(Day(2), "Programada"), Planner, CancellationToken.None);
+        await fixture.Service.StartAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Inicio"), Planner, CancellationToken.None);
+        await fixture.Service.FinishByTechnicianAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Lista para cierre"), Planner, CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<DomainException>(() =>
+            fixture.Service.CloseTechnicallyAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Cerrar"), Supervisor, CancellationToken.None));
+
+        Assert.Contains("Checklist obligatorio pendiente", exception.Message);
+    }
+
     private static CreateWorkOrderRequest OrderRequest(bool requiresSignature = false)
     {
         return new CreateWorkOrderRequest(
@@ -144,6 +223,7 @@ public sealed class WorkOrderServiceTests
             ["ot_checklists"] = [],
             ["ot_firmas"] = [],
             ["ot_estado_historial"] = [],
+            ["checklists"] = [],
             ["activos"] =
             [
                 new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)

@@ -20,6 +20,7 @@ public sealed class WorkOrderService : IWorkOrderService
     private const string SignaturesSchema = "ot_firmas";
     private const string HistorySchema = "ot_estado_historial";
     private const string AssetsSchema = "activos";
+    private const string ChecklistTemplatesSchema = "checklists";
 
     private readonly IDataProvider _dataProvider;
     private readonly IAuditService _auditService;
@@ -222,7 +223,8 @@ public sealed class WorkOrderService : IWorkOrderService
     {
         ValidateRequired(request.TecnicoUserId, nameof(request.TecnicoUserId));
         ValidateRequired(request.Descripcion, nameof(request.Descripcion));
-        if (request.Horas <= 0)
+        var calculatedHours = CalculateLaborHours(request.Horas, request.HoraInicio, request.HoraTermino);
+        if (calculatedHours <= 0)
         {
             throw new DomainException("Las HH deben ser mayores a cero.");
         }
@@ -240,16 +242,54 @@ public sealed class WorkOrderService : IWorkOrderService
             ["NumeroOT"] = NormalizeCode(numeroOt),
             ["CodigoTarea"] = NormalizeCode(codigoTarea),
             ["TecnicoUserId"] = NormalizeText(request.TecnicoUserId),
-            ["Horas"] = FormatNumber(request.Horas),
+            ["Horas"] = FormatNumber(calculatedHours),
             ["Descripcion"] = NormalizeText(request.Descripcion),
-            ["FechaTrabajo"] = FormatDate(request.FechaTrabajo ?? DateTimeOffset.UtcNow),
-            ["RegistradoPor"] = user.UserId
+            ["FechaTrabajo"] = FormatDate(request.FechaTrabajo ?? request.HoraInicio ?? DateTimeOffset.UtcNow),
+            ["HoraInicio"] = FormatOptionalDate(request.HoraInicio),
+            ["HoraTermino"] = FormatOptionalDate(request.HoraTermino),
+            ["RegistradoPor"] = user.UserId,
+            ["Comentario"] = NormalizeText(request.Comentario),
+            ["ValidadoSupervisor"] = "false",
+            ["ValidadoPor"] = null,
+            ["ValidadoEnUtc"] = null
         });
 
         rows.Add(rowToCreate);
         await _dataProvider.SaveRowsAsync(LaborSchema, rows, cancellationToken);
         await RecordAuditAsync(user, "work_order.labor_registered", numeroOt, null, rowToCreate, order.Summary.FaenaCodigo, request.Descripcion, cancellationToken);
         return ToLabor(rowToCreate);
+    }
+
+    public async Task<WorkOrderLaborResponse?> ValidateLaborAsync(
+        string numeroOt,
+        string hhId,
+        ValidateLaborRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequired(request.Reason, nameof(request.Reason));
+        EnsureCanPlanOrSupervisor(user);
+
+        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
+        var rows = (await _dataProvider.ReadRowsAsync(LaborSchema, cancellationToken)).ToList();
+        var index = rows.FindIndex(row => Same(row.GetValue("NumeroOT"), numeroOt) && Same(row.GetValue("HHId"), hhId));
+        if (index < 0)
+        {
+            return null;
+        }
+
+        var previous = rows[index];
+        var values = CopyRow(previous, LaborColumns);
+        values["ValidadoSupervisor"] = request.Validado.ToString(CultureInfo.InvariantCulture);
+        values["ValidadoPor"] = request.Validado ? user.UserId : null;
+        values["ValidadoEnUtc"] = request.Validado ? FormatDate(DateTimeOffset.UtcNow) : null;
+        values["Comentario"] = Append(values.GetValueOrDefault("Comentario"), request.Reason);
+        var updated = LaborRow(values);
+
+        rows[index] = updated;
+        await _dataProvider.SaveRowsAsync(LaborSchema, rows, cancellationToken);
+        await RecordAuditAsync(user, "work_order.labor_validated", numeroOt, previous, updated, order.FaenaCodigo, request.Reason, cancellationToken);
+        return ToLabor(updated);
     }
 
     public async Task<WorkOrderEvidenceResponse?> RegisterEvidenceAsync(
@@ -259,9 +299,13 @@ public sealed class WorkOrderService : IWorkOrderService
         CancellationToken cancellationToken)
     {
         ValidateRequired(request.Nombre, nameof(request.Nombre));
-        if (string.IsNullOrWhiteSpace(request.ArchivoKey) && string.IsNullOrWhiteSpace(request.SharePointUrl))
+        var isCommentOnly = request.TipoEvidencia == WorkOrderEvidenceType.Comentario;
+        if (!isCommentOnly &&
+            string.IsNullOrWhiteSpace(request.ArchivoKey) &&
+            string.IsNullOrWhiteSpace(request.SharePointUrl) &&
+            string.IsNullOrWhiteSpace(request.LocalPath))
         {
-            throw new DomainException("Debe indicar ArchivoKey o SharePointUrl para la evidencia.");
+            throw new DomainException("Debe indicar ArchivoKey, SharePointUrl o LocalPath para la evidencia.");
         }
 
         var data = await ReadDataAsync(cancellationToken);
@@ -287,6 +331,13 @@ public sealed class WorkOrderService : IWorkOrderService
             ["ArchivoKey"] = NormalizeText(request.ArchivoKey),
             ["SharePointUrl"] = NormalizeText(request.SharePointUrl),
             ["CubreEvidenciaObligatoria"] = request.CubreEvidenciaObligatoria.ToString(CultureInfo.InvariantCulture),
+            ["TipoEvidencia"] = request.TipoEvidencia.ToString(),
+            ["EsFoto"] = (request.EsFoto || request.TipoEvidencia is WorkOrderEvidenceType.FotoAntes or WorkOrderEvidenceType.FotoDespues).ToString(CultureInfo.InvariantCulture),
+            ["EsObligatoria"] = request.EsObligatoria.ToString(CultureInfo.InvariantCulture),
+            ["StorageProvider"] = NormalizeText(request.StorageProvider) ?? InferStorageProvider(request),
+            ["LocalPath"] = NormalizeText(request.LocalPath),
+            ["OfflineId"] = NormalizeText(request.OfflineId),
+            ["SyncStatus"] = NormalizeText(request.SyncStatus) ?? "Synced",
             ["CreadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow),
             ["CreadoPor"] = user.UserId,
             ["Observaciones"] = NormalizeText(request.Observaciones)
@@ -392,7 +443,17 @@ public sealed class WorkOrderService : IWorkOrderService
             ["Obligatorio"] = request.Obligatorio.ToString(CultureInfo.InvariantCulture),
             ["Completado"] = request.Completado.ToString(CultureInfo.InvariantCulture),
             ["CompletadoEnUtc"] = request.Completado ? FormatDate(DateTimeOffset.UtcNow) : null,
-            ["CompletadoPor"] = request.Completado ? user.UserId : null
+            ["CompletadoPor"] = request.Completado ? user.UserId : null,
+            ["TemplateCode"] = NormalizeCode(request.TemplateCode),
+            ["TipoRespuesta"] = request.TipoRespuesta.ToString(),
+            ["Respuesta"] = request.Completado ? DefaultChecklistResponse(request.TipoRespuesta) : null,
+            ["ValorNumerico"] = null,
+            ["Texto"] = null,
+            ["EvidenciaId"] = null,
+            ["RequiereFoto"] = request.RequiereFoto.ToString(CultureInfo.InvariantCulture),
+            ["RequiereArchivo"] = request.RequiereArchivo.ToString(CultureInfo.InvariantCulture),
+            ["RequiereFirma"] = request.RequiereFirma.ToString(CultureInfo.InvariantCulture),
+            ["FirmaId"] = null
         });
 
         rows.Add(rowToCreate);
@@ -422,14 +483,81 @@ public sealed class WorkOrderService : IWorkOrderService
 
         var previous = rows[index];
         var values = CopyRow(previous, ChecklistColumns);
+        ValidateChecklistCompletion(values, request);
         values["Completado"] = request.Completado.ToString(CultureInfo.InvariantCulture);
         values["CompletadoEnUtc"] = request.Completado ? FormatDate(DateTimeOffset.UtcNow) : null;
         values["CompletadoPor"] = request.Completado ? user.UserId : null;
+        var responseType = ParseEnum(values.GetValueOrDefault("TipoRespuesta"), WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica);
+        values["Respuesta"] = NormalizeText(request.Respuesta) ?? values.GetValueOrDefault("Respuesta") ?? DefaultChecklistResponse(responseType);
+        values["ValorNumerico"] = request.ValorNumerico.HasValue ? FormatNumber(request.ValorNumerico.Value) : values.GetValueOrDefault("ValorNumerico");
+        values["Texto"] = NormalizeText(request.Texto) ?? values.GetValueOrDefault("Texto");
+        values["EvidenciaId"] = NormalizeText(request.EvidenciaId) ?? values.GetValueOrDefault("EvidenciaId");
+        values["FirmaId"] = NormalizeText(request.FirmaId) ?? values.GetValueOrDefault("FirmaId");
         var updated = ChecklistRow(values);
         rows[index] = updated;
         await _dataProvider.SaveRowsAsync(ChecklistSchema, rows, cancellationToken);
         await RecordAuditAsync(user, "work_order.checklist_updated", numeroOt, previous, updated, order.Summary.FaenaCodigo, request.Reason, cancellationToken);
         return ToChecklist(updated);
+    }
+
+    public async Task<IReadOnlyCollection<WorkOrderChecklistItemResponse>> ApplyChecklistTemplateAsync(
+        string numeroOt,
+        ApplyChecklistTemplateRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
+    {
+        EnsureCanPlan(user);
+        ValidateRequired(request.CodigoTarea, nameof(request.CodigoTarea));
+        ValidateRequired(request.TemplateCode, nameof(request.TemplateCode));
+
+        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
+        EnsureTaskExists(await _dataProvider.ReadRowsAsync(TasksSchema, cancellationToken), numeroOt, request.CodigoTarea);
+
+        var templates = await _dataProvider.ReadRowsAsync(ChecklistTemplatesSchema, cancellationToken);
+        var template = templates.FirstOrDefault(row => Same(row.GetValue("Codigo"), request.TemplateCode));
+        if (template is null)
+        {
+            throw new DomainException("La plantilla de checklist no existe.");
+        }
+
+        var templateItems = ParseTemplateItems(template.GetValue("Items"));
+        if (templateItems.Count == 0)
+        {
+            throw new DomainException("La plantilla de checklist no tiene items configurados.");
+        }
+
+        var rows = (await _dataProvider.ReadRowsAsync(ChecklistSchema, cancellationToken)).ToList();
+        var created = new List<WorkOrderChecklistItemResponse>();
+        foreach (var item in templateItems)
+        {
+            var rowToCreate = ChecklistRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ItemId"] = NewId("CHKOT"),
+                ["NumeroOT"] = NormalizeCode(numeroOt),
+                ["CodigoTarea"] = NormalizeCode(request.CodigoTarea),
+                ["Item"] = NormalizeText(item.Item),
+                ["Obligatorio"] = item.Obligatorio.ToString(CultureInfo.InvariantCulture),
+                ["Completado"] = "false",
+                ["CompletadoEnUtc"] = null,
+                ["CompletadoPor"] = null,
+                ["TemplateCode"] = NormalizeCode(request.TemplateCode),
+                ["TipoRespuesta"] = item.TipoRespuesta.ToString(),
+                ["Respuesta"] = null,
+                ["ValorNumerico"] = null,
+                ["Texto"] = null,
+                ["EvidenciaId"] = null,
+                ["RequiereFoto"] = item.RequiereFoto.ToString(CultureInfo.InvariantCulture),
+                ["RequiereArchivo"] = item.RequiereArchivo.ToString(CultureInfo.InvariantCulture),
+                ["RequiereFirma"] = item.RequiereFirma.ToString(CultureInfo.InvariantCulture),
+                ["FirmaId"] = null
+            });
+            rows.Add(rowToCreate);
+            created.Add(ToChecklist(rowToCreate));
+        }
+
+        await _dataProvider.SaveRowsAsync(ChecklistSchema, rows, cancellationToken);
+        await RecordAuditAsync(user, "work_order.checklist_template_applied", numeroOt, null, ChecklistRow(CopyRow(rows.Last(), ChecklistColumns)), order.FaenaCodigo, request.TemplateCode, cancellationToken);
+        return created;
     }
 
     public async Task<WorkOrderSignatureResponse?> RegisterSignatureAsync(
@@ -438,18 +566,29 @@ public sealed class WorkOrderService : IWorkOrderService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        ValidateRequired(request.SignatureFileKey, nameof(request.SignatureFileKey));
+        if (string.IsNullOrWhiteSpace(request.SignatureFileKey) && string.IsNullOrWhiteSpace(request.SignatureImageDataUrl))
+        {
+            throw new DomainException("Debe registrar archivo o imagen de firma.");
+        }
         var data = await ReadDataAsync(cancellationToken);
         var order = BuildDetail(FindOrder(data.Orders, numeroOt) ?? throw new DomainException("La OT no existe."), data);
         EnsureCanPlanOrSupervisorOrAssigned(user, order);
+        if (!string.IsNullOrWhiteSpace(request.CodigoTarea))
+        {
+            EnsureTaskExists(data.Tasks, numeroOt, request.CodigoTarea);
+            EnsureTechnicianCanWork(user, order, request.CodigoTarea, request.UsuarioId ?? user.UserId);
+        }
 
         var rows = data.Signatures.ToList();
         var rowToCreate = SignatureRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["FirmaId"] = NewId("FIRMA"),
             ["NumeroOT"] = NormalizeCode(numeroOt),
+            ["CodigoTarea"] = NormalizeCode(request.CodigoTarea),
+            ["Scope"] = NormalizeText(request.Scope) ?? (string.IsNullOrWhiteSpace(request.CodigoTarea) ? "OT" : "Tarea"),
             ["UsuarioId"] = NormalizeText(request.UsuarioId) ?? user.UserId,
             ["SignatureFileKey"] = NormalizeText(request.SignatureFileKey),
+            ["SignatureImageDataUrl"] = NormalizeText(request.SignatureImageDataUrl),
             ["FirmadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow),
             ["Comentario"] = NormalizeText(request.Comentario)
         });
@@ -770,15 +909,33 @@ public sealed class WorkOrderService : IWorkOrderService
 
         foreach (var task in tasks.Where(item => item.RequiereHH))
         {
-            if (labor.Where(item => Same(item.CodigoTarea, task.CodigoTarea)).Sum(item => item.Horas) <= 0)
+            var taskLabor = labor.Where(item => Same(item.CodigoTarea, task.CodigoTarea)).ToArray();
+            if (taskLabor.Sum(item => item.Horas) <= 0)
             {
                 blockers.Add(new WorkOrderClosureBlocker("missing_labor", $"La tarea {task.CodigoTarea} requiere HH."));
+            }
+            else if (!taskLabor.Any(item => item.ValidadoSupervisor))
+            {
+                blockers.Add(new WorkOrderClosureBlocker("labor_not_validated", $"La tarea {task.CodigoTarea} tiene HH sin validacion de supervisor."));
             }
         }
 
         foreach (var item in checklist.Where(item => item.Obligatorio && !item.Completado))
         {
             blockers.Add(new WorkOrderClosureBlocker("incomplete_checklist", $"Checklist obligatorio pendiente: {item.Item}."));
+        }
+
+        foreach (var item in checklist.Where(item => item.Completado))
+        {
+            if ((item.RequiereFoto || item.RequiereArchivo) && string.IsNullOrWhiteSpace(item.EvidenciaId))
+            {
+                blockers.Add(new WorkOrderClosureBlocker("missing_checklist_evidence", $"Checklist {item.Item} requiere evidencia asociada."));
+            }
+
+            if (item.RequiereFirma && string.IsNullOrWhiteSpace(item.FirmaId))
+            {
+                blockers.Add(new WorkOrderClosureBlocker("missing_checklist_signature", $"Checklist {item.Item} requiere firma asociada."));
+            }
         }
 
         foreach (var item in spareParts.Where(item => item.Estado == WorkOrderSparePartStatus.Entregado))
@@ -1055,7 +1212,13 @@ public sealed class WorkOrderService : IWorkOrderService
             ParseDecimal(row.GetValue("Horas")),
             row.GetValue("Descripcion") ?? string.Empty,
             ParseDate(row.GetValue("FechaTrabajo")) ?? DateTimeOffset.MinValue,
-            row.GetValue("RegistradoPor") ?? string.Empty);
+            row.GetValue("RegistradoPor") ?? string.Empty,
+            ParseDate(row.GetValue("HoraInicio")),
+            ParseDate(row.GetValue("HoraTermino")),
+            EmptyToNull(row.GetValue("Comentario")),
+            ParseBool(row.GetValue("ValidadoSupervisor")),
+            EmptyToNull(row.GetValue("ValidadoPor")),
+            ParseDate(row.GetValue("ValidadoEnUtc")));
     }
 
     private static WorkOrderEvidenceResponse ToEvidence(DataRow row)
@@ -1070,7 +1233,14 @@ public sealed class WorkOrderService : IWorkOrderService
             ParseBool(row.GetValue("CubreEvidenciaObligatoria"), true),
             ParseDate(row.GetValue("CreadoEnUtc")) ?? DateTimeOffset.MinValue,
             row.GetValue("CreadoPor") ?? string.Empty,
-            EmptyToNull(row.GetValue("Observaciones")));
+            EmptyToNull(row.GetValue("Observaciones")),
+            ParseEnum(row.GetValue("TipoEvidencia"), WorkOrderEvidenceType.Archivo),
+            ParseBool(row.GetValue("EsFoto")),
+            ParseBool(row.GetValue("EsObligatoria")),
+            EmptyToNull(row.GetValue("StorageProvider")),
+            EmptyToNull(row.GetValue("LocalPath")),
+            EmptyToNull(row.GetValue("OfflineId")),
+            EmptyToNull(row.GetValue("SyncStatus")));
     }
 
     private static WorkOrderSparePartResponse ToSparePart(DataRow row)
@@ -1099,7 +1269,17 @@ public sealed class WorkOrderService : IWorkOrderService
             ParseBool(row.GetValue("Obligatorio"), true),
             ParseBool(row.GetValue("Completado")),
             ParseDate(row.GetValue("CompletadoEnUtc")),
-            EmptyToNull(row.GetValue("CompletadoPor")));
+            EmptyToNull(row.GetValue("CompletadoPor")),
+            EmptyToNull(row.GetValue("TemplateCode")),
+            ParseEnum(row.GetValue("TipoRespuesta"), WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica),
+            EmptyToNull(row.GetValue("Respuesta")),
+            ParseNullableDecimal(row.GetValue("ValorNumerico")),
+            EmptyToNull(row.GetValue("Texto")),
+            EmptyToNull(row.GetValue("EvidenciaId")),
+            ParseBool(row.GetValue("RequiereFoto")),
+            ParseBool(row.GetValue("RequiereArchivo")),
+            ParseBool(row.GetValue("RequiereFirma")),
+            EmptyToNull(row.GetValue("FirmaId")));
     }
 
     private static WorkOrderSignatureResponse ToSignature(DataRow row)
@@ -1108,9 +1288,12 @@ public sealed class WorkOrderService : IWorkOrderService
             row.GetValue("FirmaId") ?? string.Empty,
             row.GetValue("NumeroOT") ?? string.Empty,
             row.GetValue("UsuarioId") ?? string.Empty,
-            row.GetValue("SignatureFileKey") ?? string.Empty,
+            EmptyToNull(row.GetValue("SignatureFileKey")),
             ParseDate(row.GetValue("FirmadoEnUtc")) ?? DateTimeOffset.MinValue,
-            EmptyToNull(row.GetValue("Comentario")));
+            EmptyToNull(row.GetValue("Comentario")),
+            EmptyToNull(row.GetValue("CodigoTarea")),
+            EmptyToNull(row.GetValue("Scope")) ?? "OT",
+            EmptyToNull(row.GetValue("SignatureImageDataUrl")));
     }
 
     private static WorkOrderStatusHistoryResponse ToHistory(DataRow row)
@@ -1234,6 +1417,11 @@ public sealed class WorkOrderService : IWorkOrderService
         return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
     }
 
+    private static decimal? ParseNullableDecimal(string? value)
+    {
+        return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+    }
+
     private static bool ParseBool(string? value, bool fallback = false)
     {
         return bool.TryParse(value, out var parsed) ? parsed : fallback;
@@ -1248,6 +1436,132 @@ public sealed class WorkOrderService : IWorkOrderService
 
     private static string Serialize(DataRow row) => JsonSerializer.Serialize(row.Values);
 
+    private static decimal CalculateLaborHours(decimal? requestedHours, DateTimeOffset? start, DateTimeOffset? end)
+    {
+        if (start.HasValue || end.HasValue)
+        {
+            if (!start.HasValue || !end.HasValue)
+            {
+                throw new DomainException("Debe indicar hora inicio y hora termino para calcular HH.");
+            }
+
+            if (end.Value <= start.Value)
+            {
+                throw new DomainException("La hora termino debe ser posterior a la hora inicio.");
+            }
+
+            return Math.Round((decimal)(end.Value - start.Value).TotalHours, 2);
+        }
+
+        return requestedHours ?? 0;
+    }
+
+    private static string InferStorageProvider(RegisterEvidenceRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.SharePointUrl))
+        {
+            return "SharePoint";
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.LocalPath))
+        {
+            return "LocalSimulation";
+        }
+
+        return "ManualLink";
+    }
+
+    private static string? DefaultChecklistResponse(WorkOrderChecklistResponseType responseType)
+    {
+        return responseType switch
+        {
+            WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica => "Cumple",
+            WorkOrderChecklistResponseType.BuenoRegularMalo => "Bueno",
+            WorkOrderChecklistResponseType.SiNo => "Si",
+            _ => null
+        };
+    }
+
+    private static void ValidateChecklistCompletion(Dictionary<string, string?> values, UpdateChecklistItemRequest request)
+    {
+        if (!request.Completado)
+        {
+            return;
+        }
+
+        var responseType = ParseEnum(values.GetValueOrDefault("TipoRespuesta"), WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica);
+        var response = NormalizeText(request.Respuesta) ?? NormalizeText(values.GetValueOrDefault("Respuesta")) ?? DefaultChecklistResponse(responseType);
+        var text = NormalizeText(request.Texto) ?? NormalizeText(values.GetValueOrDefault("Texto"));
+        var evidenceId = NormalizeText(request.EvidenciaId) ?? NormalizeText(values.GetValueOrDefault("EvidenciaId"));
+        var signatureId = NormalizeText(request.FirmaId) ?? NormalizeText(values.GetValueOrDefault("FirmaId"));
+
+        if (responseType is WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica or WorkOrderChecklistResponseType.BuenoRegularMalo or WorkOrderChecklistResponseType.SiNo &&
+            string.IsNullOrWhiteSpace(response))
+        {
+            throw new DomainException("Debe registrar una respuesta de checklist.");
+        }
+
+        if (responseType == WorkOrderChecklistResponseType.Numerico &&
+            !request.ValorNumerico.HasValue &&
+            string.IsNullOrWhiteSpace(values.GetValueOrDefault("ValorNumerico")))
+        {
+            throw new DomainException("Debe registrar un valor numerico en el checklist.");
+        }
+
+        if (responseType == WorkOrderChecklistResponseType.Texto && string.IsNullOrWhiteSpace(text))
+        {
+            throw new DomainException("Debe registrar texto en el checklist.");
+        }
+
+        if ((responseType == WorkOrderChecklistResponseType.FotoObligatoria || ParseBool(values.GetValueOrDefault("RequiereFoto"))) &&
+            string.IsNullOrWhiteSpace(evidenceId))
+        {
+            throw new DomainException("Debe asociar evidencia fotografica al checklist.");
+        }
+
+        if ((responseType == WorkOrderChecklistResponseType.Archivo || ParseBool(values.GetValueOrDefault("RequiereArchivo"))) &&
+            string.IsNullOrWhiteSpace(evidenceId))
+        {
+            throw new DomainException("Debe asociar archivo al checklist.");
+        }
+
+        if ((responseType == WorkOrderChecklistResponseType.Firma || ParseBool(values.GetValueOrDefault("RequiereFirma"))) &&
+            string.IsNullOrWhiteSpace(signatureId))
+        {
+            throw new DomainException("Debe asociar firma al checklist.");
+        }
+    }
+
+    private static IReadOnlyCollection<ChecklistTemplateItem> ParseTemplateItems(string? rawItems)
+    {
+        if (string.IsNullOrWhiteSpace(rawItems))
+        {
+            return [];
+        }
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<List<ChecklistTemplateItem>>(rawItems, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (parsed is not null && parsed.Count > 0)
+            {
+                return parsed.Where(item => !string.IsNullOrWhiteSpace(item.Item)).ToArray();
+            }
+        }
+        catch (JsonException)
+        {
+            // Non-JSON templates are supported as one item per line or semicolon.
+        }
+
+        return rawItems
+            .Split(["\r\n", "\n", ";"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(item => new ChecklistTemplateItem { Item = item })
+            .ToArray();
+    }
+
     private sealed record WorkOrderData(
         IReadOnlyList<DataRow> Orders,
         IReadOnlyList<DataRow> Tasks,
@@ -1259,6 +1573,21 @@ public sealed class WorkOrderService : IWorkOrderService
         IReadOnlyList<DataRow> Signatures,
         IReadOnlyList<DataRow> History,
         IReadOnlyList<DataRow> Assets);
+
+    private sealed class ChecklistTemplateItem
+    {
+        public string Item { get; init; } = string.Empty;
+
+        public WorkOrderChecklistResponseType TipoRespuesta { get; init; } = WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica;
+
+        public bool Obligatorio { get; init; } = true;
+
+        public bool RequiereFoto { get; init; }
+
+        public bool RequiereArchivo { get; init; }
+
+        public bool RequiereFirma { get; init; }
+    }
 
     private static readonly string[] WorkOrderColumns =
     [
@@ -1330,7 +1659,13 @@ public sealed class WorkOrderService : IWorkOrderService
         "Horas",
         "Descripcion",
         "FechaTrabajo",
-        "RegistradoPor"
+        "HoraInicio",
+        "HoraTermino",
+        "RegistradoPor",
+        "Comentario",
+        "ValidadoSupervisor",
+        "ValidadoPor",
+        "ValidadoEnUtc"
     ];
 
     private static readonly string[] EvidenceColumns =
@@ -1342,6 +1677,13 @@ public sealed class WorkOrderService : IWorkOrderService
         "ArchivoKey",
         "SharePointUrl",
         "CubreEvidenciaObligatoria",
+        "TipoEvidencia",
+        "EsFoto",
+        "EsObligatoria",
+        "StorageProvider",
+        "LocalPath",
+        "OfflineId",
+        "SyncStatus",
         "CreadoEnUtc",
         "CreadoPor",
         "Observaciones"
@@ -1371,15 +1713,28 @@ public sealed class WorkOrderService : IWorkOrderService
         "Obligatorio",
         "Completado",
         "CompletadoEnUtc",
-        "CompletadoPor"
+        "CompletadoPor",
+        "TemplateCode",
+        "TipoRespuesta",
+        "Respuesta",
+        "ValorNumerico",
+        "Texto",
+        "EvidenciaId",
+        "RequiereFoto",
+        "RequiereArchivo",
+        "RequiereFirma",
+        "FirmaId"
     ];
 
     private static readonly string[] SignatureColumns =
     [
         "FirmaId",
         "NumeroOT",
+        "CodigoTarea",
+        "Scope",
         "UsuarioId",
         "SignatureFileKey",
+        "SignatureImageDataUrl",
         "FirmadoEnUtc",
         "Comentario"
     ];

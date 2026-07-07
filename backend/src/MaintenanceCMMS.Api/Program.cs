@@ -1568,6 +1568,30 @@ workOrdersApi.MapPost("/{numeroOt}/tasks/{codigoTarea}/labor", async (
     })
     .WithName("RegisterWorkOrderLabor");
 
+workOrdersApi.MapPost("/{numeroOt}/labor/{hhId}/validate", async (
+        string numeroOt,
+        string hhId,
+        ValidateLaborRequest request,
+        ClaimsPrincipal user,
+        IWorkOrderService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var result = await service.ValidateLaborAsync(numeroOt, hhId, request, UserAccessContext.FromClaims(user), cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ValidateWorkOrderLabor");
+
 workOrdersApi.MapPost("/{numeroOt}/evidences", async (
         string numeroOt,
         RegisterEvidenceRequest request,
@@ -1684,6 +1708,29 @@ workOrdersApi.MapPut("/{numeroOt}/checklist/{itemId}", async (
         }
     })
     .WithName("UpdateWorkOrderChecklistItem");
+
+workOrdersApi.MapPost("/{numeroOt}/checklist/apply-template", async (
+        string numeroOt,
+        ApplyChecklistTemplateRequest request,
+        ClaimsPrincipal user,
+        IWorkOrderService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var result = await service.ApplyChecklistTemplateAsync(numeroOt, request, UserAccessContext.FromClaims(user), cancellationToken);
+            return Results.Ok(result);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ApplyWorkOrderChecklistTemplate");
 
 workOrdersApi.MapPost("/{numeroOt}/signatures", async (
         string numeroOt,

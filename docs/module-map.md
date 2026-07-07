@@ -70,6 +70,7 @@
 - Las evidencias pertenecen a tarea u OT y sus archivos viven en almacenamiento documental.
 - El prompt 17 agrega flujo OT completo en `/api/work-orders` y pagina `/ot` con listado, Kanban, detalle, tareas, tecnicos, HH, evidencias, repuestos, checklist y firmas.
 - El cierre tecnico queda bloqueado si faltan evidencias obligatorias, HH requeridas, checklist obligatorio, repuestos entregados sin usar/devolver o firma requerida.
+- El prompt 18 agrega ejecucion tecnica: HH calculadas por hora inicio/termino y validadas por supervisor, evidencias antes/despues con storage local/SharePoint/offline, checklist tipado desde plantillas y firma dibujada por OT o tarea.
 
 **Dependencias:** activos, identidad, auditoria, SharePoint adapter, PDF adapter.
 

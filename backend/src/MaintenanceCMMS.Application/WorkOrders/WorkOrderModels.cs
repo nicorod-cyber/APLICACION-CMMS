@@ -26,6 +26,27 @@ public enum WorkOrderSparePartStatus
     Cancelado = 5
 }
 
+public enum WorkOrderEvidenceType
+{
+    FotoAntes = 0,
+    FotoDespues = 1,
+    Archivo = 2,
+    Comentario = 3,
+    Otro = 4
+}
+
+public enum WorkOrderChecklistResponseType
+{
+    CumpleNoCumpleNoAplica = 0,
+    BuenoRegularMalo = 1,
+    SiNo = 2,
+    Numerico = 3,
+    Texto = 4,
+    FotoObligatoria = 5,
+    Archivo = 6,
+    Firma = 7
+}
+
 public sealed record WorkOrderQuery(
     WorkOrderLifecycleStatus? Status = null,
     string? FaenaCodigo = null,
@@ -78,9 +99,16 @@ public sealed record AssignTaskTechnicianRequest(
 
 public sealed record RegisterLaborRequest(
     string TecnicoUserId,
-    decimal Horas,
+    decimal? Horas,
     string Descripcion,
-    DateTimeOffset? FechaTrabajo = null);
+    DateTimeOffset? FechaTrabajo = null,
+    DateTimeOffset? HoraInicio = null,
+    DateTimeOffset? HoraTermino = null,
+    string? Comentario = null);
+
+public sealed record ValidateLaborRequest(
+    bool Validado,
+    string Reason);
 
 public sealed record RegisterEvidenceRequest(
     string Nombre,
@@ -88,7 +116,14 @@ public sealed record RegisterEvidenceRequest(
     string? ArchivoKey = null,
     string? SharePointUrl = null,
     bool CubreEvidenciaObligatoria = true,
-    string? Observaciones = null);
+    string? Observaciones = null,
+    WorkOrderEvidenceType TipoEvidencia = WorkOrderEvidenceType.Archivo,
+    bool EsFoto = false,
+    bool EsObligatoria = false,
+    string? StorageProvider = null,
+    string? LocalPath = null,
+    string? OfflineId = null,
+    string? SyncStatus = null);
 
 public sealed record AddWorkOrderSparePartRequest(
     string CodigoTarea,
@@ -109,16 +144,33 @@ public sealed record AddWorkOrderChecklistItemRequest(
     string CodigoTarea,
     string Item,
     bool Obligatorio = true,
-    bool Completado = false);
+    bool Completado = false,
+    string? TemplateCode = null,
+    WorkOrderChecklistResponseType TipoRespuesta = WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica,
+    bool RequiereFoto = false,
+    bool RequiereArchivo = false,
+    bool RequiereFirma = false);
 
 public sealed record UpdateChecklistItemRequest(
     bool Completado,
-    string Reason);
+    string Reason,
+    string? Respuesta = null,
+    decimal? ValorNumerico = null,
+    string? Texto = null,
+    string? EvidenciaId = null,
+    string? FirmaId = null);
+
+public sealed record ApplyChecklistTemplateRequest(
+    string CodigoTarea,
+    string TemplateCode);
 
 public sealed record RegisterWorkOrderSignatureRequest(
-    string SignatureFileKey,
+    string? SignatureFileKey = null,
     string? UsuarioId = null,
-    string? Comentario = null);
+    string? Comentario = null,
+    string? CodigoTarea = null,
+    string Scope = "OT",
+    string? SignatureImageDataUrl = null);
 
 public sealed record ScheduleWorkOrderRequest(
     DateTimeOffset FechaInicioProgramada,
@@ -191,7 +243,13 @@ public sealed record WorkOrderLaborResponse(
     decimal Horas,
     string Descripcion,
     DateTimeOffset FechaTrabajo,
-    string RegistradoPor);
+    string RegistradoPor,
+    DateTimeOffset? HoraInicio,
+    DateTimeOffset? HoraTermino,
+    string? Comentario,
+    bool ValidadoSupervisor,
+    string? ValidadoPor,
+    DateTimeOffset? ValidadoEnUtc);
 
 public sealed record WorkOrderEvidenceResponse(
     string EvidenciaId,
@@ -203,7 +261,14 @@ public sealed record WorkOrderEvidenceResponse(
     bool CubreEvidenciaObligatoria,
     DateTimeOffset CreadoEnUtc,
     string CreadoPor,
-    string? Observaciones);
+    string? Observaciones,
+    WorkOrderEvidenceType TipoEvidencia,
+    bool EsFoto,
+    bool EsObligatoria,
+    string? StorageProvider,
+    string? LocalPath,
+    string? OfflineId,
+    string? SyncStatus);
 
 public sealed record WorkOrderSparePartResponse(
     string ItemId,
@@ -226,15 +291,28 @@ public sealed record WorkOrderChecklistItemResponse(
     bool Obligatorio,
     bool Completado,
     DateTimeOffset? CompletadoEnUtc,
-    string? CompletadoPor);
+    string? CompletadoPor,
+    string? TemplateCode,
+    WorkOrderChecklistResponseType TipoRespuesta,
+    string? Respuesta,
+    decimal? ValorNumerico,
+    string? Texto,
+    string? EvidenciaId,
+    bool RequiereFoto,
+    bool RequiereArchivo,
+    bool RequiereFirma,
+    string? FirmaId);
 
 public sealed record WorkOrderSignatureResponse(
     string FirmaId,
     string NumeroOT,
     string UsuarioId,
-    string SignatureFileKey,
+    string? SignatureFileKey,
     DateTimeOffset FirmadoEnUtc,
-    string? Comentario);
+    string? Comentario,
+    string? CodigoTarea,
+    string Scope,
+    string? SignatureImageDataUrl);
 
 public sealed record WorkOrderStatusHistoryResponse(
     string HistorialId,

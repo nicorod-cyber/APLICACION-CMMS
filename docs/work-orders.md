@@ -13,6 +13,7 @@ El modulo de OT implementa el flujo operativo completo:
 - Checklist obligatorio o informativo.
 - Firma digital registrada contra usuario autenticado.
 - Historial auditable de cambios de estado.
+- Ejecucion tecnica con HH calculadas por inicio/termino, evidencia antes/despues, checklist tipado y firma dibujada en pantalla.
 
 ## Estados
 
@@ -37,7 +38,9 @@ El cierre tecnico por supervisor queda bloqueado cuando existe cualquiera de est
 
 - Una tarea marcada con `RequiereEvidencia` no tiene evidencia obligatoria.
 - Una tarea marcada con `RequiereHH` no tiene horas registradas.
+- Las HH de una tarea requerida no fueron validadas por supervisor.
 - Un checklist obligatorio no esta completado.
+- Un checklist completado requiere foto, archivo o firma y no tiene evidencia/firma asociada.
 - Un repuesto en estado `Entregado` no fue marcado como `Utilizado` o `Devuelto`.
 - La OT requiere firma y no tiene firma registrada.
 
@@ -62,11 +65,13 @@ Base: `/api/work-orders`
 - `POST /api/work-orders/{numeroOt}/tasks`
 - `POST /api/work-orders/{numeroOt}/tasks/{codigoTarea}/technicians`
 - `POST /api/work-orders/{numeroOt}/tasks/{codigoTarea}/labor`
+- `POST /api/work-orders/{numeroOt}/labor/{hhId}/validate`
 - `POST /api/work-orders/{numeroOt}/evidences`
 - `POST /api/work-orders/{numeroOt}/spare-parts`
 - `PUT /api/work-orders/{numeroOt}/spare-parts/{itemId}`
 - `POST /api/work-orders/{numeroOt}/checklist`
 - `PUT /api/work-orders/{numeroOt}/checklist/{itemId}`
+- `POST /api/work-orders/{numeroOt}/checklist/apply-template`
 - `POST /api/work-orders/{numeroOt}/signatures`
 - `POST /api/work-orders/{numeroOt}/schedule`
 - `POST /api/work-orders/{numeroOt}/start`
@@ -81,11 +86,11 @@ Base: `/api/work-orders`
 - `ordenes_trabajo.xlsx`: cabecera de OT.
 - `tareas_ot.xlsx`: tareas internas y requisitos operativos.
 - `ot_tecnicos_tarea.xlsx`: tecnicos asignados por tarea.
-- `ot_hh.xlsx`: HH por tarea y tecnico.
-- `ot_evidencias.xlsx`: evidencias y links documentales.
+- `ot_hh.xlsx`: HH por tarea y tecnico, fecha, inicio, termino, calculo y validacion supervisor.
+- `ot_evidencias.xlsx`: evidencias, fotos antes/despues, comentarios, links documentales, ruta local y metadata offline.
 - `ot_repuestos.xlsx`: repuestos solicitados, entregados, usados o devueltos por tarea.
-- `ot_checklists.xlsx`: checklist por tarea.
-- `ot_firmas.xlsx`: firmas digitales de la OT.
+- `ot_checklists.xlsx`: checklist por tarea con tipo de respuesta, valor, texto, evidencia, firma y requisitos de foto/archivo/firma.
+- `ot_firmas.xlsx`: firmas digitales de la OT o tarea, con archivo o imagen dibujada.
 - `ot_estado_historial.xlsx`: trazabilidad de estados.
 
 ## Frontend
@@ -97,3 +102,13 @@ La pagina `/ot` expone:
 - Listado tabular.
 - Kanban por estados operativos.
 - Detalle con acciones por rol, programacion, tareas, asignaciones, HH, evidencias, repuestos, checklist y firma.
+- Pantalla de ejecucion tecnica en el detalle de OT para registrar HH, validar HH, subir evidencia, solicitar/asociar repuestos, completar checklist y firmar.
+
+## Prompt 18
+
+El prompt 18 profundiza la ejecucion tecnica:
+
+- HH: registro por tecnico, tarea y dia; hora inicio/termino; HH calculadas; comentario; validacion supervisor.
+- Evidencias: foto antes/despues, archivo, comentario, ruta SharePoint/local y metadata offline futura.
+- Checklists: plantillas desde `checklists.xlsx`, items tipados y bloqueo por respuesta/evidencia/firma faltante.
+- Firmas: firma por OT o tarea, validada por usuario autenticado, con archivo o dibujo en pantalla.

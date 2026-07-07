@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState, type ReactNode } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
   CalendarClock,
@@ -34,6 +34,8 @@ type WorkOrderStatus =
   | "Anulada";
 
 type SparePartStatus = "Solicitado" | "Reservado" | "Entregado" | "Utilizado" | "Devuelto" | "Cancelado";
+type EvidenceType = "FotoAntes" | "FotoDespues" | "Archivo" | "Comentario" | "Otro";
+type ChecklistResponseType = "CumpleNoCumpleNoAplica" | "BuenoRegularMalo" | "SiNo" | "Numerico" | "Texto" | "FotoObligatoria" | "Archivo" | "Firma";
 
 type WorkOrderSummary = {
   numeroOT: string;
@@ -86,6 +88,13 @@ type WorkOrderLabor = {
   tecnicoUserId: string;
   horas: number;
   descripcion: string;
+  fechaTrabajo: string;
+  horaInicio?: string | null;
+  horaTermino?: string | null;
+  comentario?: string | null;
+  validadoSupervisor: boolean;
+  validadoPor?: string | null;
+  validadoEnUtc?: string | null;
 };
 
 type WorkOrderEvidence = {
@@ -94,6 +103,13 @@ type WorkOrderEvidence = {
   nombre: string;
   archivoKey?: string | null;
   sharePointUrl?: string | null;
+  tipoEvidencia: EvidenceType;
+  esFoto: boolean;
+  esObligatoria: boolean;
+  storageProvider?: string | null;
+  localPath?: string | null;
+  offlineId?: string | null;
+  syncStatus?: string | null;
 };
 
 type WorkOrderSparePart = {
@@ -114,12 +130,24 @@ type WorkOrderChecklist = {
   item: string;
   obligatorio: boolean;
   completado: boolean;
+  tipoRespuesta: ChecklistResponseType;
+  respuesta?: string | null;
+  valorNumerico?: number | null;
+  texto?: string | null;
+  evidenciaId?: string | null;
+  requiereFoto: boolean;
+  requiereArchivo: boolean;
+  requiereFirma: boolean;
+  firmaId?: string | null;
 };
 
 type WorkOrderSignature = {
   firmaId: string;
   usuarioId: string;
-  signatureFileKey: string;
+  signatureFileKey?: string | null;
+  codigoTarea?: string | null;
+  scope: string;
+  signatureImageDataUrl?: string | null;
 };
 
 type ClosureBlocker = {
@@ -203,11 +231,12 @@ export function WorkOrdersPage() {
   const [orderForm, setOrderForm] = useState(emptyOrderForm);
   const [taskForm, setTaskForm] = useState(emptyTaskForm);
   const [technicianForm, setTechnicianForm] = useState({ codigoTarea: "", tecnicoUserId: currentUser?.id ?? "", tecnicoNombre: "" });
-  const [laborForm, setLaborForm] = useState({ codigoTarea: "", tecnicoUserId: currentUser?.id ?? "", horas: "1", descripcion: "" });
-  const [evidenceForm, setEvidenceForm] = useState({ codigoTarea: "", nombre: "", archivoKey: "", sharePointUrl: "" });
+  const [laborForm, setLaborForm] = useState({ codigoTarea: "", tecnicoUserId: currentUser?.id ?? "", fechaTrabajo: "", horaInicio: "", horaTermino: "", horas: "1", descripcion: "", comentario: "" });
+  const [evidenceForm, setEvidenceForm] = useState({ codigoTarea: "", nombre: "", tipoEvidencia: "FotoDespues" as EvidenceType, archivoKey: "", sharePointUrl: "", localPath: "", storageProvider: "", offlineId: "", esObligatoria: false });
   const [spareForm, setSpareForm] = useState({ codigoTarea: "", repuestoCodigo: "", cantidad: "1", unidad: "UN", estado: "Solicitado" as SparePartStatus });
-  const [checklistForm, setChecklistForm] = useState({ codigoTarea: "", item: "" });
-  const [signatureForm, setSignatureForm] = useState({ signatureFileKey: "", comentario: "" });
+  const [checklistForm, setChecklistForm] = useState({ codigoTarea: "", item: "", tipoRespuesta: "CumpleNoCumpleNoAplica" as ChecklistResponseType, requiereFoto: false, requiereArchivo: false, requiereFirma: false });
+  const [templateForm, setTemplateForm] = useState({ codigoTarea: "", templateCode: "" });
+  const [signatureForm, setSignatureForm] = useState({ codigoTarea: "", scope: "OT", signatureFileKey: "", signatureImageDataUrl: "", comentario: "" });
   const [scheduleForm, setScheduleForm] = useState({ fechaInicioProgramada: "", fechaFinProgramada: "", reason: "" });
   const [actionReason, setActionReason] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -277,6 +306,8 @@ export function WorkOrdersPage() {
       setEvidenceForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
       setSpareForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
       setChecklistForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
+      setTemplateForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
+      setSignatureForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
     } catch (detailError) {
       setError(detailError instanceof Error ? detailError.message : "No fue posible cargar la ficha OT.");
     }
@@ -338,10 +369,29 @@ export function WorkOrdersPage() {
     await saveAction(async () => {
       await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/tasks/${encodeURIComponent(laborForm.codigoTarea)}/labor`, {
         method: "POST",
-        body: JSON.stringify({ tecnicoUserId: laborForm.tecnicoUserId, horas: Number(laborForm.horas), descripcion: laborForm.descripcion })
+        body: JSON.stringify({
+          tecnicoUserId: laborForm.tecnicoUserId,
+          horas: laborForm.horaInicio && laborForm.horaTermino ? null : Number(laborForm.horas),
+          descripcion: laborForm.descripcion,
+          fechaTrabajo: toIsoOrNull(laborForm.fechaTrabajo),
+          horaInicio: toIsoDateTimeOrNull(laborForm.fechaTrabajo, laborForm.horaInicio),
+          horaTermino: toIsoDateTimeOrNull(laborForm.fechaTrabajo, laborForm.horaTermino),
+          comentario: emptyToNull(laborForm.comentario)
+        })
       });
-      setLaborForm({ ...laborForm, horas: "1", descripcion: "" });
+      setLaborForm({ ...laborForm, horas: "1", descripcion: "", comentario: "" });
       setMessage("HH registradas.");
+    });
+  }
+
+  async function validateLabor(item: WorkOrderLabor, validado: boolean) {
+    if (!selected) return;
+    await saveAction(async () => {
+      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/labor/${encodeURIComponent(item.hhId)}/validate`, {
+        method: "POST",
+        body: JSON.stringify({ validado, reason: validado ? "HH validada por supervisor" : "HH observada por supervisor" })
+      });
+      setMessage(validado ? "HH validada." : "Validacion HH retirada.");
     });
   }
 
@@ -355,10 +405,17 @@ export function WorkOrdersPage() {
           codigoTarea: emptyToNull(evidenceForm.codigoTarea),
           nombre: evidenceForm.nombre,
           archivoKey: emptyToNull(evidenceForm.archivoKey),
-          sharePointUrl: emptyToNull(evidenceForm.sharePointUrl)
+          sharePointUrl: emptyToNull(evidenceForm.sharePointUrl),
+          localPath: emptyToNull(evidenceForm.localPath),
+          storageProvider: emptyToNull(evidenceForm.storageProvider),
+          offlineId: emptyToNull(evidenceForm.offlineId),
+          tipoEvidencia: evidenceForm.tipoEvidencia,
+          esFoto: evidenceForm.tipoEvidencia === "FotoAntes" || evidenceForm.tipoEvidencia === "FotoDespues",
+          esObligatoria: evidenceForm.esObligatoria,
+          cubreEvidenciaObligatoria: evidenceForm.esObligatoria || evidenceForm.tipoEvidencia === "FotoDespues"
         })
       });
-      setEvidenceForm({ ...evidenceForm, nombre: "", archivoKey: "", sharePointUrl: "" });
+      setEvidenceForm({ ...evidenceForm, nombre: "", archivoKey: "", sharePointUrl: "", localPath: "", offlineId: "" });
       setMessage("Evidencia registrada.");
     });
   }
@@ -397,10 +454,30 @@ export function WorkOrdersPage() {
     await saveAction(async () => {
       await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/checklist`, {
         method: "POST",
-        body: JSON.stringify({ codigoTarea: checklistForm.codigoTarea, item: checklistForm.item, obligatorio: true })
+        body: JSON.stringify({
+          codigoTarea: checklistForm.codigoTarea,
+          item: checklistForm.item,
+          obligatorio: true,
+          tipoRespuesta: checklistForm.tipoRespuesta,
+          requiereFoto: checklistForm.requiereFoto,
+          requiereArchivo: checklistForm.requiereArchivo,
+          requiereFirma: checklistForm.requiereFirma
+        })
       });
       setChecklistForm({ ...checklistForm, item: "" });
       setMessage("Checklist agregado.");
+    });
+  }
+
+  async function applyChecklistTemplate() {
+    if (!selected) return;
+    await saveAction(async () => {
+      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/checklist/apply-template`, {
+        method: "POST",
+        body: JSON.stringify(templateForm)
+      });
+      setTemplateForm({ ...templateForm, templateCode: "" });
+      setMessage("Plantilla aplicada.");
     });
   }
 
@@ -409,7 +486,15 @@ export function WorkOrdersPage() {
     await saveAction(async () => {
       await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/checklist/${encodeURIComponent(item.itemId)}`, {
         method: "PUT",
-        body: JSON.stringify({ completado: !item.completado, reason: "Actualizacion checklist" })
+        body: JSON.stringify({
+          completado: !item.completado,
+          reason: "Actualizacion checklist",
+          respuesta: item.respuesta ?? defaultChecklistResponse(item.tipoRespuesta),
+          valorNumerico: item.valorNumerico,
+          texto: item.texto,
+          evidenciaId: item.evidenciaId,
+          firmaId: item.firmaId
+        })
       });
       setMessage("Checklist actualizado.");
     });
@@ -420,9 +505,16 @@ export function WorkOrdersPage() {
     await saveAction(async () => {
       await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/signatures`, {
         method: "POST",
-        body: JSON.stringify({ signatureFileKey: signatureForm.signatureFileKey, usuarioId: currentUser?.id, comentario: emptyToNull(signatureForm.comentario) })
+        body: JSON.stringify({
+          signatureFileKey: emptyToNull(signatureForm.signatureFileKey),
+          signatureImageDataUrl: emptyToNull(signatureForm.signatureImageDataUrl),
+          usuarioId: currentUser?.id,
+          codigoTarea: emptyToNull(signatureForm.codigoTarea),
+          scope: signatureForm.scope,
+          comentario: emptyToNull(signatureForm.comentario)
+        })
       });
-      setSignatureForm({ signatureFileKey: "", comentario: "" });
+      setSignatureForm({ ...signatureForm, signatureFileKey: "", signatureImageDataUrl: "", comentario: "" });
       setMessage("Firma registrada.");
     });
   }
@@ -742,11 +834,20 @@ export function WorkOrdersPage() {
               <TaskSelect tasks={detail.tasks} value={laborForm.codigoTarea} onChange={(value) => setLaborForm({ ...laborForm, codigoTarea: value })} />
               <div className="form-grid">
                 <label>Tecnico<input value={laborForm.tecnicoUserId} onChange={(event) => setLaborForm({ ...laborForm, tecnicoUserId: event.target.value })} required /></label>
-                <label>Horas<input type="number" min="0.1" step="0.1" value={laborForm.horas} onChange={(event) => setLaborForm({ ...laborForm, horas: event.target.value })} required /></label>
+                <label>Fecha<input type="date" value={laborForm.fechaTrabajo} onChange={(event) => setLaborForm({ ...laborForm, fechaTrabajo: event.target.value })} /></label>
+                <label>Inicio<input type="time" value={laborForm.horaInicio} onChange={(event) => setLaborForm({ ...laborForm, horaInicio: event.target.value })} /></label>
+                <label>Termino<input type="time" value={laborForm.horaTermino} onChange={(event) => setLaborForm({ ...laborForm, horaTermino: event.target.value })} /></label>
+                <label>HH manual<input type="number" min="0.1" step="0.1" value={laborForm.horas} onChange={(event) => setLaborForm({ ...laborForm, horas: event.target.value })} required={!laborForm.horaInicio || !laborForm.horaTermino} /></label>
                 <label className="span-2">Trabajo<input value={laborForm.descripcion} onChange={(event) => setLaborForm({ ...laborForm, descripcion: event.target.value })} required /></label>
+                <label className="span-2">Comentario<input value={laborForm.comentario} onChange={(event) => setLaborForm({ ...laborForm, comentario: event.target.value })} /></label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving}><Clock size={18} /> Registrar HH</button>
-              <MiniTable rows={detail.labor.map((item) => [item.codigoTarea, item.tecnicoUserId, `${item.horas} h`])} />
+              <MiniTable rows={detail.labor.map((item) => [
+                item.codigoTarea,
+                item.tecnicoUserId,
+                `${item.horas} h`,
+                item.validadoSupervisor ? "Validada" : <button key={item.hhId} type="button" className="text-teal-700" onClick={() => void validateLabor(item, true)}>validar</button>
+              ])} />
             </form>
 
             <form className="panel-muted stack" onSubmit={registerEvidence}>
@@ -754,11 +855,15 @@ export function WorkOrdersPage() {
               <TaskSelect tasks={detail.tasks} value={evidenceForm.codigoTarea} onChange={(value) => setEvidenceForm({ ...evidenceForm, codigoTarea: value })} allowEmpty />
               <div className="form-grid">
                 <label>Nombre<input value={evidenceForm.nombre} onChange={(event) => setEvidenceForm({ ...evidenceForm, nombre: event.target.value })} required /></label>
+                <label>Tipo<select value={evidenceForm.tipoEvidencia} onChange={(event) => setEvidenceForm({ ...evidenceForm, tipoEvidencia: event.target.value as EvidenceType })}><option value="FotoAntes">Foto antes</option><option value="FotoDespues">Foto despues</option><option value="Archivo">Archivo</option><option value="Comentario">Comentario</option><option value="Otro">Otro</option></select></label>
                 <label>ArchivoKey<input value={evidenceForm.archivoKey} onChange={(event) => setEvidenceForm({ ...evidenceForm, archivoKey: event.target.value })} /></label>
-                <label className="span-2">SharePoint URL<input value={evidenceForm.sharePointUrl} onChange={(event) => setEvidenceForm({ ...evidenceForm, sharePointUrl: event.target.value })} /></label>
+                <label>SharePoint URL<input value={evidenceForm.sharePointUrl} onChange={(event) => setEvidenceForm({ ...evidenceForm, sharePointUrl: event.target.value })} /></label>
+                <label>Ruta local<input value={evidenceForm.localPath} onChange={(event) => setEvidenceForm({ ...evidenceForm, localPath: event.target.value })} /></label>
+                <label>Offline ID<input value={evidenceForm.offlineId} onChange={(event) => setEvidenceForm({ ...evidenceForm, offlineId: event.target.value })} /></label>
+                <label className="check-row"><input type="checkbox" checked={evidenceForm.esObligatoria} onChange={(event) => setEvidenceForm({ ...evidenceForm, esObligatoria: event.target.checked })} />Obligatoria</label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Registrar evidencia</button>
-              <MiniTable rows={detail.evidences.map((item) => [item.codigoTarea ?? "OT", item.nombre, item.sharePointUrl ?? item.archivoKey ?? "-"])} />
+              <MiniTable rows={detail.evidences.map((item) => [item.codigoTarea ?? "OT", item.tipoEvidencia, item.nombre, item.sharePointUrl ?? item.localPath ?? item.archivoKey ?? "-"])} />
             </form>
 
             <form className="panel-muted stack" onSubmit={addSparePart}>
@@ -792,15 +897,26 @@ export function WorkOrdersPage() {
               <TaskSelect tasks={detail.tasks} value={checklistForm.codigoTarea} onChange={(value) => setChecklistForm({ ...checklistForm, codigoTarea: value })} />
               <div className="form-grid">
                 <label className="span-2">Item<input value={checklistForm.item} onChange={(event) => setChecklistForm({ ...checklistForm, item: event.target.value })} required /></label>
+                <label>Respuesta<select value={checklistForm.tipoRespuesta} onChange={(event) => setChecklistForm({ ...checklistForm, tipoRespuesta: event.target.value as ChecklistResponseType })}><option value="CumpleNoCumpleNoAplica">Cumple / No cumple / NA</option><option value="BuenoRegularMalo">Bueno / Regular / Malo</option><option value="SiNo">Si / No</option><option value="Numerico">Numerico</option><option value="Texto">Texto</option><option value="FotoObligatoria">Foto obligatoria</option><option value="Archivo">Archivo</option><option value="Firma">Firma</option></select></label>
+                <label className="check-row"><input type="checkbox" checked={checklistForm.requiereFoto} onChange={(event) => setChecklistForm({ ...checklistForm, requiereFoto: event.target.checked })} />Foto</label>
+                <label className="check-row"><input type="checkbox" checked={checklistForm.requiereArchivo} onChange={(event) => setChecklistForm({ ...checklistForm, requiereArchivo: event.target.checked })} />Archivo</label>
+                <label className="check-row"><input type="checkbox" checked={checklistForm.requiereFirma} onChange={(event) => setChecklistForm({ ...checklistForm, requiereFirma: event.target.checked })} />Firma</label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving || !canPlan}><Plus size={18} /> Agregar checklist</button>
-              <MiniTable rows={detail.checklist.map((item) => [item.codigoTarea, item.item, <button key={item.itemId} type="button" className={item.completado ? "text-emerald-700" : "text-amber-700"} onClick={() => void toggleChecklist(item)}>{item.completado ? "Completo" : "Pendiente"}</button>])} />
               <div className="form-grid">
-                <label>Firma<input value={signatureForm.signatureFileKey} onChange={(event) => setSignatureForm({ ...signatureForm, signatureFileKey: event.target.value })} placeholder="firma/usuario.svg" /></label>
+                <TaskSelect tasks={detail.tasks} value={templateForm.codigoTarea} onChange={(value) => setTemplateForm({ ...templateForm, codigoTarea: value })} />
+                <label>Plantilla<input value={templateForm.templateCode} onChange={(event) => setTemplateForm({ ...templateForm, templateCode: event.target.value })} placeholder="CHK-PREV-01" required /></label>
+                <button className="secondary-button" type="button" disabled={isSaving || !canPlan || !templateForm.templateCode} onClick={() => void applyChecklistTemplate()}><ClipboardCheck size={18} /> Aplicar</button>
+              </div>
+              <MiniTable rows={detail.checklist.map((item) => [item.codigoTarea, item.item, item.tipoRespuesta, <button key={item.itemId} type="button" className={item.completado ? "text-emerald-700" : "text-amber-700"} onClick={() => void toggleChecklist(item)}>{item.completado ? "Completo" : "Pendiente"}</button>])} />
+              <div className="form-grid">
+                <TaskSelect tasks={detail.tasks} value={signatureForm.codigoTarea} onChange={(value) => setSignatureForm({ ...signatureForm, codigoTarea: value, scope: value ? "Tarea" : "OT" })} allowEmpty />
+                <label>Firma archivo<input value={signatureForm.signatureFileKey} onChange={(event) => setSignatureForm({ ...signatureForm, signatureFileKey: event.target.value })} placeholder="firma/usuario.svg" /></label>
                 <label>Comentario<input value={signatureForm.comentario} onChange={(event) => setSignatureForm({ ...signatureForm, comentario: event.target.value })} /></label>
               </div>
-              <button className="secondary-button" type="button" disabled={isSaving || !signatureForm.signatureFileKey} onClick={() => void registerSignature()}><PenLine size={18} /> Registrar firma</button>
-              <MiniTable rows={detail.signatures.map((item) => [item.usuarioId, item.signatureFileKey, item.firmaId])} />
+              <SignaturePad value={signatureForm.signatureImageDataUrl} onChange={(value) => setSignatureForm({ ...signatureForm, signatureImageDataUrl: value })} />
+              <button className="secondary-button" type="button" disabled={isSaving || (!signatureForm.signatureFileKey && !signatureForm.signatureImageDataUrl)} onClick={() => void registerSignature()}><PenLine size={18} /> Registrar firma</button>
+              <MiniTable rows={detail.signatures.map((item) => [item.usuarioId, item.codigoTarea ?? "OT", item.signatureFileKey ?? "firma dibujada", item.firmaId])} />
             </form>
           </section>
         </section>
@@ -866,6 +982,81 @@ function TaskSelect({ tasks, value, onChange, allowEmpty = false }: { tasks: Wor
   );
 }
 
+function SignaturePad({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const isDrawingRef = useRef(false);
+
+  function getPoint(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * event.currentTarget.width,
+      y: ((event.clientY - rect.top) / rect.height) * event.currentTarget.height
+    };
+  }
+
+  function startDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    const point = getPoint(event);
+    isDrawingRef.current = true;
+    context.lineWidth = 2.5;
+    context.lineCap = "round";
+    context.strokeStyle = "#0f766e";
+    context.beginPath();
+    context.moveTo(point.x, point.y);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function draw(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!isDrawingRef.current) return;
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    const point = getPoint(event);
+    context.lineTo(point.x, point.y);
+    context.stroke();
+  }
+
+  function stopDrawing() {
+    const canvas = canvasRef.current;
+    if (!canvas || !isDrawingRef.current) return;
+    isDrawingRef.current = false;
+    onChange(canvas.toDataURL("image/png"));
+  }
+
+  function clearSignature() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    onChange("");
+  }
+
+  return (
+    <div className="stack">
+      <div className="rounded-md border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+        <canvas
+          ref={canvasRef}
+          className="h-28 w-full touch-none rounded bg-white"
+          height={160}
+          onPointerDown={startDrawing}
+          onPointerLeave={stopDrawing}
+          onPointerMove={draw}
+          onPointerUp={stopDrawing}
+          width={640}
+        />
+      </div>
+      <div className="toolbar">
+        <button className="secondary-button" type="button" onClick={clearSignature}>
+          Limpiar firma
+        </button>
+        {value ? <span className="text-sm font-semibold text-emerald-700">Firma capturada</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function emptyToNull(value: string) {
   return value.trim() ? value.trim() : null;
 }
@@ -876,6 +1067,22 @@ function toIsoOrNull(value: string) {
 
 function toIsoDate(value: string) {
   return new Date(`${value}T00:00:00Z`).toISOString();
+}
+
+function toIsoDateTimeOrNull(date: string, time: string) {
+  if (!time) {
+    return null;
+  }
+
+  const effectiveDate = date || new Date().toISOString().slice(0, 10);
+  return new Date(`${effectiveDate}T${time}:00`).toISOString();
+}
+
+function defaultChecklistResponse(type: ChecklistResponseType) {
+  if (type === "BuenoRegularMalo") return "Bueno";
+  if (type === "SiNo") return "Si";
+  if (type === "CumpleNoCumpleNoAplica") return "Cumple";
+  return null;
 }
 
 function formatDate(value?: string | null) {

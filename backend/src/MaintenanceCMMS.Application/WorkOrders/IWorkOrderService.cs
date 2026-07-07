@@ -44,6 +44,13 @@ public interface IWorkOrderService
         UserAccessContext user,
         CancellationToken cancellationToken);
 
+    Task<WorkOrderLaborResponse?> ValidateLaborAsync(
+        string numeroOt,
+        string hhId,
+        ValidateLaborRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
     Task<WorkOrderEvidenceResponse?> RegisterEvidenceAsync(
         string numeroOt,
         RegisterEvidenceRequest request,
@@ -73,6 +80,12 @@ public interface IWorkOrderService
         string numeroOt,
         string itemId,
         UpdateChecklistItemRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyCollection<WorkOrderChecklistItemResponse>> ApplyChecklistTemplateAsync(
+        string numeroOt,
+        ApplyChecklistTemplateRequest request,
         UserAccessContext user,
         CancellationToken cancellationToken);
 

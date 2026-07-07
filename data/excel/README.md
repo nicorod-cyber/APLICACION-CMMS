@@ -37,11 +37,11 @@ Este directorio esta reservado para los archivos Excel operativos iniciales del 
 - `ordenes_trabajo.xlsx` contiene OT operativas; cuando nacen de un aviso conservan `AvisoId`, prioridad, criticidad, clasificacion de falla, faena y auditoria de creacion.
 - `tareas_ot.xlsx` contiene tareas internas de cada OT, requisitos de evidencia, HH, checklist y fechas programadas.
 - `ot_tecnicos_tarea.xlsx` contiene asignaciones de varios tecnicos por tarea.
-- `ot_hh.xlsx` contiene horas hombre por OT, tarea y tecnico.
-- `ot_evidencias.xlsx` contiene evidencias por OT o tarea; los archivos reales se guardan en SharePoint o simulador local.
+- `ot_hh.xlsx` contiene horas hombre por OT, tarea y tecnico, con fecha, hora inicio, hora termino, HH calculadas, comentario y validacion supervisor.
+- `ot_evidencias.xlsx` contiene evidencias por OT o tarea; soporta foto antes/despues, archivo, comentario, carga offline futura, ruta SharePoint y ruta local simulada.
 - `ot_repuestos.xlsx` contiene repuestos asociados por tarea, estado de entrega/uso/devolucion y cantidades.
-- `ot_checklists.xlsx` contiene checklist obligatorio o informativo por tarea.
-- `ot_firmas.xlsx` contiene firmas digitales por OT y usuario autenticado.
+- `ot_checklists.xlsx` contiene checklist obligatorio o informativo por tarea, tipo de respuesta, valor, texto, evidencia asociada, firma asociada y requisitos de foto/archivo/firma.
+- `ot_firmas.xlsx` contiene firmas digitales por OT o tarea, usuario autenticado, fecha/hora, archivo o imagen dibujada en pantalla.
 - `ot_estado_historial.xlsx` contiene el historial auditable de cambios de estado de cada OT.
 - `sistemas_componentes.xlsx` contiene sistemas, subsistemas, componentes y subcomponentes; sus codigos son maestros cerrados y los duplicados se fusionan con auditoria.
 - `document_types.xlsx` contiene tipos documentales configurables: obligatoriedad, criticidad, bloqueo de disponibilidad, dias de alerta, roles responsables y plantilla.
