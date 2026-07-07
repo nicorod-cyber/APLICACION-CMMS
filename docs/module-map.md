@@ -81,6 +81,7 @@
 **Reglas clave:**
 
 - Preventivos se generan por jobs programados.
+- El prompt 19 agrega `/api/preventive` y pagina `/preventivos` con planes por activo/familia, lecturas de horometro/km, tolerancias, vencimientos, calendario preventivo, OT automáticas, alertas y bitacora.
 - La programacion debe respetar tecnico, faena, activo, prioridad y ventanas operacionales.
 - Calendario, Gantt y Kanban comparten fuente de verdad de programacion.
 - El prompt 20 agrega `/api/scheduling` y pagina `/programacion` con talleres, capacidad diaria HH/equipos, calendario, Kanban, Gantt, dependencias, reprogramacion auditada y alertas por sobrecarga o atraso.

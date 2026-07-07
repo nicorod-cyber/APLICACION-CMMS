@@ -387,12 +387,16 @@ public sealed class AlertService : IAlertService
     private async Task<IReadOnlyCollection<DataRow>> EnsureRulesAsync(CancellationToken cancellationToken)
     {
         var rows = (await _dataProvider.ReadRowsAsync(AlertRulesSchema, cancellationToken)).ToList();
-        if (rows.Count > 0)
+        var defaultRules = DefaultRules();
+        var missingRules = defaultRules
+            .Where(defaultRule => rows.All(row => !SameCode(row.GetValue("Code"), defaultRule.GetValue("Code"))))
+            .ToArray();
+        if (rows.Count > 0 && missingRules.Length == 0)
         {
             return rows;
         }
 
-        rows.AddRange(DefaultRules());
+        rows.AddRange(rows.Count == 0 ? defaultRules : missingRules);
         await _dataProvider.SaveRowsAsync(AlertRulesSchema, rows, cancellationToken);
         await _templateService.ListAsync(cancellationToken);
         return rows;
@@ -408,6 +412,7 @@ public sealed class AlertService : IAlertService
             RuleRow("critical-spare-no-stock", "Repuesto critico sin stock", "RepuestoCriticoSinStock", true, AlertSeverityLevel.Critical, true, true, true, "alert-default", "bodega@example.local", null),
             RuleRow("work-order-overdue", "OT vencida", "OTVencida", true, AlertSeverityLevel.Critical, true, true, true, "alert-default", "planificacion@example.local", null),
             RuleRow("preventive-created", "Preventivo creado automaticamente", "PreventivoCreado", true, AlertSeverityLevel.Info, false, true, false, "alert-default", "planificacion@example.local", null),
+            RuleRow("preventive-overdue", "Preventivo vencido", "PreventivoVencido", true, AlertSeverityLevel.Critical, true, true, true, "alert-default", "planificacion@example.local;supervisores@example.local;jefatura.mantenimiento@example.local", null),
             RuleRow("request-pending-approval", "Solicitud pendiente aprobacion", "SolicitudPendienteAprobacion", true, AlertSeverityLevel.Warning, false, true, false, "alert-default", "abastecimiento@example.local", null),
             RuleRow("spare-pending-delivery", "Repuesto pendiente entrega", "RepuestoPendienteEntrega", true, AlertSeverityLevel.Warning, false, true, false, "alert-default", "bodega@example.local", null),
             RuleRow("reserved-stock-without-pickup", "Stock reservado sin retiro", "StockReservadoSinRetiro", true, AlertSeverityLevel.Warning, false, true, false, "alert-default", "bodega@example.local", null),

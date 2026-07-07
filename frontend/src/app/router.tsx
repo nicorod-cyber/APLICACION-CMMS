@@ -10,6 +10,7 @@ import { DocumentsPage } from "../features/documents/DocumentsPage";
 import { ImportsPage } from "../features/imports/ImportsPage";
 import { InventoryPage } from "../features/inventory/InventoryPage";
 import { MaterialRequestsPage } from "../features/material-requests/MaterialRequestsPage";
+import { PreventiveMaintenancePage } from "../features/preventive/PreventiveMaintenancePage";
 import { ProcurementPage } from "../features/procurement/ProcurementPage";
 import { SchedulingPage } from "../features/scheduling/SchedulingPage";
 import { SparePartsPage } from "../features/inventory/SparePartsPage";
@@ -97,6 +98,10 @@ export const router = createBrowserRouter([
             ) : item.path === "/ot" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <WorkOrdersPage />
+              </ProtectedRoute>
+            ) : item.path === "/preventivos" ? (
+              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
+                <PreventiveMaintenancePage />
               </ProtectedRoute>
             ) : item.path === "/programacion" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>

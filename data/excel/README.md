@@ -43,6 +43,10 @@ Este directorio esta reservado para los archivos Excel operativos iniciales del 
 - `ot_checklists.xlsx` contiene checklist obligatorio o informativo por tarea, tipo de respuesta, valor, texto, evidencia asociada, firma asociada y requisitos de foto/archivo/firma.
 - `ot_firmas.xlsx` contiene firmas digitales por OT o tarea, usuario autenticado, fecha/hora, archivo o imagen dibujada en pantalla.
 - `ot_estado_historial.xlsx` contiene el historial auditable de cambios de estado de cada OT.
+- `planes_preventivos.xlsx` contiene planes por activo o familia, frecuencias por horas/km/calendario, tolerancias, checklist, repuestos sugeridos, HH estimadas y estado.
+- `preventivo_lecturas.xlsx` contiene lecturas de horometro y kilometraje con fecha, usuario, evidencia, correcciones autorizadas y saltos anomalos.
+- `preventivo_evaluaciones.xlsx` contiene resultados historicos de evaluacion por plan y activo, estado, remanentes y OT asociada.
+- `preventivo_historial.xlsx` contiene cambios de estado, reprogramaciones y OT preventivas generadas.
 - `programacion_talleres.xlsx` contiene talleres por faena, capacidad diaria HH, capacidad de equipos, horario, especialidad y estado.
 - `programacion_ot.xlsx` contiene la programacion de OT por taller, fecha inicio/fin, HH estimadas, tecnico, prioridad, criticidad y motivo.
 - `programacion_dependencias.xlsx` contiene dependencias Gantt entre OT.

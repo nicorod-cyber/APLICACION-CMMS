@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
+using MaintenanceCMMS.Api.Jobs;
 using MaintenanceCMMS.Api.Security;
 using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Application;
@@ -13,6 +14,7 @@ using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Application.MaterialRequests;
+using MaintenanceCMMS.Application.PreventiveMaintenance;
 using MaintenanceCMMS.Application.Procurement;
 using MaintenanceCMMS.Application.Scheduling;
 using MaintenanceCMMS.Application.Storage;
@@ -29,6 +31,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Quartz;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -45,6 +48,19 @@ builder.Host.UseSerilog((context, services, loggerConfiguration) =>
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddHealthChecks();
+if (builder.Configuration.GetValue("PreventiveMaintenance:JobsEnabled", true))
+{
+    builder.Services.AddQuartz(options =>
+    {
+        var jobKey = new JobKey("preventive-maintenance-engine");
+        options.AddJob<PreventiveMaintenanceJob>(job => job.WithIdentity(jobKey));
+        options.AddTrigger(trigger => trigger
+            .ForJob(jobKey)
+            .WithIdentity("preventive-maintenance-engine-trigger")
+            .WithCronSchedule(builder.Configuration["PreventiveMaintenance:JobCron"] ?? "0 0/30 * * * ?"));
+    });
+    builder.Services.AddQuartzHostedService(options => options.WaitForJobsToComplete = true);
+}
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
@@ -1916,6 +1932,190 @@ workOrdersApi.MapPost("/{numeroOt}/annul", async (
         }
     })
     .WithName("AnnulWorkOrder");
+
+var preventiveApi = api.MapGroup("/preventive")
+    .RequireAuthorization();
+
+preventiveApi.MapGet("/plans", async (
+        string? faenaCodigo,
+        string? activoCodigo,
+        string? familiaEquipo,
+        PreventiveStatus? estado,
+        bool? includeInactive,
+        ClaimsPrincipal user,
+        IPreventiveMaintenanceService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.ListPlansAsync(
+                new PreventivePlanQuery(faenaCodigo, activoCodigo, familiaEquipo, estado, includeInactive ?? false),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ListPreventivePlans");
+
+preventiveApi.MapPost("/plans", async (
+        UpsertPreventivePlanRequest request,
+        ClaimsPrincipal user,
+        IPreventiveMaintenanceService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.UpsertPlanAsync(request, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("UpsertPreventivePlan");
+
+preventiveApi.MapPost("/plans/{planCode}/generate-ot", async (
+        string planCode,
+        GeneratePreventiveWorkOrderRequest request,
+        ClaimsPrincipal user,
+        IPreventiveMaintenanceService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.GenerateWorkOrderAsync(planCode, request, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("GeneratePreventiveWorkOrder");
+
+preventiveApi.MapPost("/plans/{planCode}/reprogram", async (
+        string planCode,
+        ReprogramPreventivePlanRequest request,
+        ClaimsPrincipal user,
+        IPreventiveMaintenanceService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var result = await service.ReprogramAsync(planCode, request, UserAccessContext.FromClaims(user), cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ReprogramPreventivePlan");
+
+preventiveApi.MapGet("/readings", async (
+        string? faenaCodigo,
+        string? activoCodigo,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        ClaimsPrincipal user,
+        IPreventiveMaintenanceService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.ListReadingsAsync(
+                new PreventiveReadingQuery(faenaCodigo, activoCodigo, from, to),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ListPreventiveReadings");
+
+preventiveApi.MapPost("/readings", async (
+        RegisterPreventiveReadingRequest request,
+        ClaimsPrincipal user,
+        IPreventiveMaintenanceService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.RegisterReadingAsync(request, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("RegisterPreventiveReading");
+
+preventiveApi.MapGet("/dashboard", async (
+        string? faenaCodigo,
+        string? activoCodigo,
+        DateTimeOffset? evaluationDate,
+        bool? generateWorkOrders,
+        ClaimsPrincipal user,
+        IPreventiveMaintenanceService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.EvaluateAsync(
+                new PreventiveEvaluationQuery(faenaCodigo, activoCodigo, evaluationDate, generateWorkOrders ?? false),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("GetPreventiveDashboard");
+
+preventiveApi.MapPost("/run", async (
+        ClaimsPrincipal user,
+        IPreventiveMaintenanceService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.RunAutomaticEvaluationAsync(UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("RunPreventiveEngine");
 
 var schedulingApi = api.MapGroup("/scheduling")
     .RequireAuthorization();

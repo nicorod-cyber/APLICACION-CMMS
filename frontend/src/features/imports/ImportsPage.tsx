@@ -79,6 +79,9 @@ const importEntities = [
   ["programacion_alertas", "Alertas programacion"],
   ["sistemas_componentes", "Sistemas / componentes"],
   ["planes_preventivos", "Planes preventivos"],
+  ["preventivo_lecturas", "Lecturas preventivas"],
+  ["preventivo_evaluaciones", "Evaluaciones preventivas"],
+  ["preventivo_historial", "Historial preventivo"],
   ["checklists", "Checklists"],
   ["ot_historicas", "OT historicas"]
 ];
@@ -538,6 +541,15 @@ function inferEntityFromFileName(fileName: string) {
     return "checklists";
   }
   if (value.includes("preventivo")) {
+    if (value.includes("lectura")) {
+      return "preventivo_lecturas";
+    }
+    if (value.includes("evaluacion") || value.includes("evaluaci")) {
+      return "preventivo_evaluaciones";
+    }
+    if (value.includes("historial")) {
+      return "preventivo_historial";
+    }
     return "planes_preventivos";
   }
   return null;
