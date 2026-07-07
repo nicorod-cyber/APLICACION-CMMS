@@ -83,6 +83,7 @@
 - Preventivos se generan por jobs programados.
 - La programacion debe respetar tecnico, faena, activo, prioridad y ventanas operacionales.
 - Calendario, Gantt y Kanban comparten fuente de verdad de programacion.
+- El prompt 20 agrega `/api/scheduling` y pagina `/programacion` con talleres, capacidad diaria HH/equipos, calendario, Kanban, Gantt, dependencias, reprogramacion auditada y alertas por sobrecarga o atraso.
 
 **Dependencias:** OT, activos, jobs, permisos, frontend.
 

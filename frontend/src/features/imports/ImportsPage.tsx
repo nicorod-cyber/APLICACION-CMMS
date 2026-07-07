@@ -73,6 +73,10 @@ const importEntities = [
   ["ot_checklists", "Checklist de OT"],
   ["ot_firmas", "Firmas de OT"],
   ["ot_estado_historial", "Historial estado OT"],
+  ["programacion_talleres", "Talleres programacion"],
+  ["programacion_ot", "Programacion OT"],
+  ["programacion_dependencias", "Dependencias programacion"],
+  ["programacion_alertas", "Alertas programacion"],
   ["sistemas_componentes", "Sistemas / componentes"],
   ["planes_preventivos", "Planes preventivos"],
   ["checklists", "Checklists"],
@@ -481,6 +485,18 @@ function inferEntityFromFileName(fileName: string) {
   }
   if (value.includes("aviso")) {
     return "avisos_trabajo";
+  }
+  if (value.includes("programacion") || value.includes("programación") || value.includes("calendario") || value.includes("gantt")) {
+    if (value.includes("taller")) {
+      return "programacion_talleres";
+    }
+    if (value.includes("dependencia")) {
+      return "programacion_dependencias";
+    }
+    if (value.includes("alerta")) {
+      return "programacion_alertas";
+    }
+    return "programacion_ot";
   }
   if (value.includes("ot") || value.includes("orden")) {
     if (value.includes("tecnico") || value.includes("asignacion")) {

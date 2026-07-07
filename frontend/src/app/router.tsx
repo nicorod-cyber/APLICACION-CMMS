@@ -11,6 +11,7 @@ import { ImportsPage } from "../features/imports/ImportsPage";
 import { InventoryPage } from "../features/inventory/InventoryPage";
 import { MaterialRequestsPage } from "../features/material-requests/MaterialRequestsPage";
 import { ProcurementPage } from "../features/procurement/ProcurementPage";
+import { SchedulingPage } from "../features/scheduling/SchedulingPage";
 import { SparePartsPage } from "../features/inventory/SparePartsPage";
 import { TechnicalHierarchyPage } from "../features/technical-hierarchy/TechnicalHierarchyPage";
 import { WorkNotificationsPage } from "../features/work-notifications/WorkNotificationsPage";
@@ -96,6 +97,10 @@ export const router = createBrowserRouter([
             ) : item.path === "/ot" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <WorkOrdersPage />
+              </ProtectedRoute>
+            ) : item.path === "/programacion" ? (
+              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
+                <SchedulingPage />
               </ProtectedRoute>
             ) : (
               <ModulePage title={item.label} accent={item.accent} Icon={item.icon} />

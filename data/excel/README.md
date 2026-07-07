@@ -43,6 +43,10 @@ Este directorio esta reservado para los archivos Excel operativos iniciales del 
 - `ot_checklists.xlsx` contiene checklist obligatorio o informativo por tarea, tipo de respuesta, valor, texto, evidencia asociada, firma asociada y requisitos de foto/archivo/firma.
 - `ot_firmas.xlsx` contiene firmas digitales por OT o tarea, usuario autenticado, fecha/hora, archivo o imagen dibujada en pantalla.
 - `ot_estado_historial.xlsx` contiene el historial auditable de cambios de estado de cada OT.
+- `programacion_talleres.xlsx` contiene talleres por faena, capacidad diaria HH, capacidad de equipos, horario, especialidad y estado.
+- `programacion_ot.xlsx` contiene la programacion de OT por taller, fecha inicio/fin, HH estimadas, tecnico, prioridad, criticidad y motivo.
+- `programacion_dependencias.xlsx` contiene dependencias Gantt entre OT.
+- `programacion_alertas.xlsx` contiene alertas operativas de programacion: taller sobrecargado, OT vencida, capacidad excedida, equipo esperando cupo y trabajo critico atrasado.
 - `sistemas_componentes.xlsx` contiene sistemas, subsistemas, componentes y subcomponentes; sus codigos son maestros cerrados y los duplicados se fusionan con auditoria.
 - `document_types.xlsx` contiene tipos documentales configurables: obligatoriedad, criticidad, bloqueo de disponibilidad, dias de alerta, roles responsables y plantilla.
 - `documentos.xlsx` contiene solo metadatos y links de documentos por activo, OT o faena; los archivos se guardan en SharePoint o simulador local.

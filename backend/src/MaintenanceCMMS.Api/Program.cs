@@ -14,6 +14,7 @@ using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Application.MaterialRequests;
 using MaintenanceCMMS.Application.Procurement;
+using MaintenanceCMMS.Application.Scheduling;
 using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Application.System;
 using MaintenanceCMMS.Application.TechnicalHierarchy;
@@ -1915,6 +1916,138 @@ workOrdersApi.MapPost("/{numeroOt}/annul", async (
         }
     })
     .WithName("AnnulWorkOrder");
+
+var schedulingApi = api.MapGroup("/scheduling")
+    .RequireAuthorization();
+
+schedulingApi.MapGet("/board", async (
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        string? faenaCodigo,
+        string? tallerCodigo,
+        ScheduleViewMode? view,
+        bool? includeClosed,
+        ClaimsPrincipal user,
+        ISchedulingService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.GetBoardAsync(
+                new ScheduleBoardQuery(from, to, faenaCodigo, tallerCodigo, view ?? ScheduleViewMode.Semanal, includeClosed ?? false),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("GetSchedulingBoard");
+
+schedulingApi.MapGet("/workshops", async (
+        ClaimsPrincipal user,
+        ISchedulingService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.ListWorkshopsAsync(UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ListSchedulingWorkshops");
+
+schedulingApi.MapPost("/workshops", async (
+        UpsertWorkshopRequest request,
+        ClaimsPrincipal user,
+        ISchedulingService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.UpsertWorkshopAsync(request, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("UpsertSchedulingWorkshop");
+
+schedulingApi.MapPost("/work-orders/{numeroOt}", async (
+        string numeroOt,
+        ScheduleWorkOrderPlanningRequest request,
+        ClaimsPrincipal user,
+        ISchedulingService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.ScheduleWorkOrderAsync(numeroOt, request, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ScheduleWorkOrderPlanning");
+
+schedulingApi.MapPost("/dependencies", async (
+        AddScheduleDependencyRequest request,
+        ClaimsPrincipal user,
+        ISchedulingService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.AddDependencyAsync(request, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("AddSchedulingDependency");
+
+schedulingApi.MapGet("/alerts", async (
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        string? faenaCodigo,
+        string? tallerCodigo,
+        ScheduleViewMode? view,
+        ClaimsPrincipal user,
+        ISchedulingService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.ListAlertsAsync(
+                new ScheduleBoardQuery(from, to, faenaCodigo, tallerCodigo, view ?? ScheduleViewMode.Semanal),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ListSchedulingAlerts");
 
 var procurementApi = api.MapGroup("/procurement")
     .RequireAuthorization();
