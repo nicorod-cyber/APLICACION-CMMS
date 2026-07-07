@@ -1,4 +1,5 @@
 import {
+  Activity,
   BarChart3,
   Bell,
   Boxes,
@@ -106,6 +107,19 @@ export const navigationItems: NavigationItem[] = [
     icon: Wrench,
     accent: "bg-lime-600",
     roles: [AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor]
+  },
+  {
+    label: "Disponibilidad",
+    path: "/disponibilidad",
+    icon: Activity,
+    accent: "bg-emerald-600",
+    roles: [
+      AUTH_ROLES.admin,
+      AUTH_ROLES.planner,
+      AUTH_ROLES.maintenanceSupervisor,
+      AUTH_ROLES.management,
+      AUTH_ROLES.faenaViewer
+    ]
   },
   {
     label: "Programacion",

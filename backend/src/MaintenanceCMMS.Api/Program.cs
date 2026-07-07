@@ -9,6 +9,7 @@ using MaintenanceCMMS.Application.Alerts;
 using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.Availability;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Application.Imports;
@@ -554,6 +555,153 @@ assetsApi.MapGet("/{id}/availability", async (
         }
     })
     .WithName("GetAssetAvailability");
+
+var availabilityApi = api.MapGroup("/availability")
+    .RequireAuthorization();
+
+availabilityApi.MapGet("/dashboard", async (
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        string? faenaCodigo,
+        string? contractCode,
+        string? cliente,
+        AvailabilityPeriod? period,
+        ClaimsPrincipal user,
+        IAvailabilityService availabilityService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await availabilityService.GetDashboardAsync(
+                new AvailabilityQuery(from, to, faenaCodigo, contractCode, cliente, period ?? AvailabilityPeriod.Mes),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("GetAvailabilityDashboard");
+
+availabilityApi.MapGet("/contracts", async (
+        string? faenaCodigo,
+        string? cliente,
+        bool? includeInactive,
+        ClaimsPrincipal user,
+        IAvailabilityService availabilityService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await availabilityService.ListContractsAsync(
+                new AvailabilityContractQuery(faenaCodigo, cliente, includeInactive ?? false),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ListAvailabilityContracts");
+
+availabilityApi.MapPost("/contracts", async (
+        UpsertAvailabilityContractRequest request,
+        ClaimsPrincipal user,
+        IAvailabilityService availabilityService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var result = await availabilityService.UpsertContractAsync(request, UserAccessContext.FromClaims(user), cancellationToken);
+            return Results.Ok(result);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("UpsertAvailabilityContract");
+
+availabilityApi.MapPost("/contracts/{contractCode}/assets", async (
+        string contractCode,
+        AssignContractAssetRequest request,
+        ClaimsPrincipal user,
+        IAvailabilityService availabilityService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await availabilityService.AssignAssetAsync(
+                request with { ContractCode = contractCode },
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("AssignAvailabilityContractAsset");
+
+availabilityApi.MapGet("/events", async (
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        string? faenaCodigo,
+        string? contractCode,
+        string? activoCodigo,
+        AvailabilityCause? cause,
+        ClaimsPrincipal user,
+        IAvailabilityService availabilityService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await availabilityService.ListEventsAsync(
+                new AvailabilityEventQuery(from, to, faenaCodigo, contractCode, activoCodigo, cause),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ListAvailabilityEvents");
+
+availabilityApi.MapPost("/events", async (
+        RegisterAvailabilityEventRequest request,
+        ClaimsPrincipal user,
+        IAvailabilityService availabilityService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await availabilityService.RegisterEventAsync(request, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("RegisterAvailabilityEvent");
 
 var inventoryApi = api.MapGroup("/inventory")
     .RequireAuthorization();

@@ -39,6 +39,63 @@ public sealed class ExcelSchemaRegistry : IExcelSchemaRegistry
             RequiredText("Motivo"),
             RequiredText("UsuarioId")),
 
+        Schema("disponibilidad_contratos", "disponibilidad_contratos.xlsx", ["ContractCode"], true, true,
+            RequiredText("ContractCode"),
+            RequiredText("Nombre"),
+            RequiredText("Cliente"),
+            RequiredText("FaenaCodigo"),
+            RequiredNumber("HorasComprometidasDia"),
+            RequiredNumber("DisponibilidadObjetivo"),
+            OptionalDate("FechaInicio"),
+            OptionalDate("FechaFin"),
+            OptionalText("ReglasCliente"),
+            OptionalBoolean("Activo"),
+            OptionalDate("ActualizadoEnUtc"),
+            OptionalText("ActualizadoPor")),
+
+        Schema("disponibilidad_activos_contrato", "disponibilidad_activos_contrato.xlsx", ["AssignmentId"], true, true,
+            RequiredText("AssignmentId"),
+            RequiredText("ContractCode"),
+            RequiredText("ActivoCodigo"),
+            RequiredText("Rol"),
+            OptionalDate("FechaInicio"),
+            OptionalDate("FechaFin"),
+            OptionalBoolean("Activo"),
+            OptionalDate("ActualizadoEnUtc"),
+            OptionalText("ActualizadoPor")),
+
+        Schema("disponibilidad_eventos", "disponibilidad_eventos.xlsx", ["EventId"], true, false,
+            RequiredText("EventId"),
+            RequiredText("ContractCode"),
+            RequiredText("ActivoCodigo"),
+            RequiredText("FaenaCodigo"),
+            RequiredText("Causa"),
+            RequiredDate("InicioUtc"),
+            OptionalDate("FinUtc"),
+            RequiredBoolean("PuedeUtilizarse"),
+            RequiredBoolean("AtribuibleMantenimiento"),
+            RequiredBoolean("PenalizaDisponibilidad"),
+            OptionalText("NumeroOT"),
+            OptionalText("Comentario"),
+            RequiredText("UsuarioId"),
+            RequiredDate("CreatedAtUtc")),
+
+        Schema("disponibilidad_snapshots", "disponibilidad_snapshots.xlsx", ["SnapshotId"], true, false,
+            RequiredText("SnapshotId"),
+            RequiredText("ContractCode"),
+            RequiredText("FaenaCodigo"),
+            RequiredText("Cliente"),
+            RequiredText("Periodo"),
+            RequiredDate("DesdeUtc"),
+            RequiredDate("HastaUtc"),
+            RequiredNumber("EquiposComprometidos"),
+            RequiredNumber("EquiposCubiertos"),
+            RequiredNumber("HorasComprometidas"),
+            RequiredNumber("HorasDisponibles"),
+            RequiredNumber("DisponibilidadCantidad"),
+            RequiredNumber("DisponibilidadHoras"),
+            RequiredDate("CalculadoEnUtc")),
+
         Schema("faenas", "faenas.xlsx", ["Codigo"], true, false,
             RequiredText("Codigo"),
             RequiredText("Nombre"),
@@ -792,6 +849,8 @@ public sealed class ExcelSchemaRegistry : IExcelSchemaRegistry
     private static ExcelColumnSchema RequiredDate(string name) => new(name, ExcelColumnType.Date, true);
 
     private static ExcelColumnSchema OptionalDate(string name) => new(name, ExcelColumnType.Date, false);
+
+    private static ExcelColumnSchema RequiredBoolean(string name) => new(name, ExcelColumnType.Boolean, true);
 
     private static ExcelColumnSchema OptionalBoolean(string name) => new(name, ExcelColumnType.Boolean, false);
 }

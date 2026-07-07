@@ -475,6 +475,10 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
 
             await ValidateCodeAsync(row, rowNumber, "RepuestoCodigo", "repuestos", "Codigo");
             await ValidateCodeAsync(row, rowNumber, "ActivoCodigo", "activos", "Codigo");
+            if (schema.SchemaName != "disponibilidad_contratos")
+            {
+                await ValidateCodeAsync(row, rowNumber, "ContractCode", "disponibilidad_contratos", "ContractCode");
+            }
 
             var family = row.GetValue("Familia");
             if (!string.IsNullOrWhiteSpace(family))

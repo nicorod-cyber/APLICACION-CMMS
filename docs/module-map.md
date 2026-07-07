@@ -97,8 +97,13 @@
 - Las causas de indisponibilidad deben estar catalogadas y ser configurables.
 - Los calculos deben conservar trazabilidad hacia OT, activo, fecha y causa.
 - Los indicadores deben exponerse para dashboards y Power BI.
+- El prompt 21 agrega `/api/availability` y pagina `/disponibilidad` con filtros por faena, contrato, cliente y periodo.
+- La disponibilidad se calcula por cantidad de equipos comprometidos y por horas disponibles versus horas comprometidas.
+- Backups, arriendos y activos asignados pueden cubrir indisponibilidades de equipos comprometidos segun reglas del contrato.
+- Eventos por factores operacionales externos no atribuibles y equipos que pueden usarse no penalizan disponibilidad de mantenimiento.
+- Documentos criticos vencidos, OT activas bloqueantes y eventos atribuibles a mantenimiento si penalizan disponibilidad.
 
-**Dependencias:** OT, activos, reportes, auditoria.
+**Dependencias:** OT, activos, documentos, importadores Excel, reportes, auditoria.
 
 ## 7. Bodega e inventario
 

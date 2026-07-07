@@ -82,6 +82,10 @@ const importEntities = [
   ["preventivo_lecturas", "Lecturas preventivas"],
   ["preventivo_evaluaciones", "Evaluaciones preventivas"],
   ["preventivo_historial", "Historial preventivo"],
+  ["disponibilidad_contratos", "Contratos disponibilidad"],
+  ["disponibilidad_activos_contrato", "Activos por contrato"],
+  ["disponibilidad_eventos", "Eventos disponibilidad"],
+  ["disponibilidad_snapshots", "Snapshots disponibilidad"],
   ["checklists", "Checklists"],
   ["ot_historicas", "OT historicas"]
 ];

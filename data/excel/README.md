@@ -47,6 +47,10 @@ Este directorio esta reservado para los archivos Excel operativos iniciales del 
 - `preventivo_lecturas.xlsx` contiene lecturas de horometro y kilometraje con fecha, usuario, evidencia, correcciones autorizadas y saltos anomalos.
 - `preventivo_evaluaciones.xlsx` contiene resultados historicos de evaluacion por plan y activo, estado, remanentes y OT asociada.
 - `preventivo_historial.xlsx` contiene cambios de estado, reprogramaciones y OT preventivas generadas.
+- `disponibilidad_contratos.xlsx` contiene contratos con cliente, faena, horas comprometidas por dia, objetivo y reglas cliente.
+- `disponibilidad_activos_contrato.xlsx` contiene activos comprometidos, backups, arriendos o asignados por contrato.
+- `disponibilidad_eventos.xlsx` contiene eventos manuales de indisponibilidad, causa, periodo, OT asociada y si penaliza disponibilidad.
+- `disponibilidad_snapshots.xlsx` contiene resultados calculados para reportabilidad historica y Power BI.
 - `programacion_talleres.xlsx` contiene talleres por faena, capacidad diaria HH, capacidad de equipos, horario, especialidad y estado.
 - `programacion_ot.xlsx` contiene la programacion de OT por taller, fecha inicio/fin, HH estimadas, tecnico, prioridad, criticidad y motivo.
 - `programacion_dependencias.xlsx` contiene dependencias Gantt entre OT.
@@ -66,3 +70,11 @@ Este directorio esta reservado para los archivos Excel operativos iniciales del 
 - Si `FechaVencimientoValidada` esta en `true`, el cambio de vencimiento debe pasar por la aplicacion con motivo y permiso.
 - Los documentos vencidos con `Critico=true` o `BloqueaDisponibilidad=true` bloquean disponibilidad documental del activo.
 - Para carga masiva, usa el flujo `/importaciones` con entidad `document_types` o `documentos`.
+
+## Disponibilidad contractual
+
+- Carga primero `disponibilidad_contratos.xlsx`, luego `disponibilidad_activos_contrato.xlsx` y finalmente `disponibilidad_eventos.xlsx`.
+- En `disponibilidad_activos_contrato.xlsx`, usa `Rol=Comprometido` para equipos exigidos por contrato y `Rol=Backup` o `Rol=Arriendo` para equipos que pueden cubrir indisponibilidad.
+- En `disponibilidad_eventos.xlsx`, usa causas del catalogo: `MantenimientoCorrectivo`, `MantenimientoPreventivo`, `Repuestos`, `DocumentacionVencida`, `TrasladoMantenimiento`, `ServicioExterno`, `PruebaLiberacionTecnica`, `PendienteDiagnostico`, `FallaRepetitiva`, `OperacionalExternaNoAtribuible`.
+- Si el equipo puede operar, registra `PuedeUtilizarse=true`; si la causa es externa y no atribuible a mantenimiento, registra `AtribuibleMantenimiento=false` o usa `OperacionalExternaNoAtribuible`.
+- Los documentos vencidos con bloqueo y las OT activas en ejecucion, pendientes de repuestos o documentacion tambien se consideran en el calculo.
