@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
@@ -340,7 +340,7 @@ public sealed class AssetService : IAssetService
             .Select(item => new AssetDocumentResponse(
                 "Activo",
                 asset.Code,
-                item.Document.DocumentTypeCode,
+                item.Document.DocumentType.Code,
                 item.Document.Status,
                 null,
                 item.Document.Versions
@@ -713,3 +713,4 @@ public sealed class AssetService : IAssetService
         });
     }
 }
+

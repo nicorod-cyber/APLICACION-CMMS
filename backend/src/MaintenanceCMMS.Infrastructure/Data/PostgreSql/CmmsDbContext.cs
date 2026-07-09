@@ -21,10 +21,12 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<EquipmentFamilyEntity> EquipmentFamilies => Set<EquipmentFamilyEntity>();
     public DbSet<AssetEntity> Assets => Set<AssetEntity>();
     public DbSet<AssetStateEventEntity> AssetStateEvents => Set<AssetStateEventEntity>();
+    public DbSet<DocumentTypeEntity> DocumentTypes => Set<DocumentTypeEntity>();
     public DbSet<DocumentEntity> Documents => Set<DocumentEntity>();
     public DbSet<DocumentVersionEntity> DocumentVersions => Set<DocumentVersionEntity>();
     public DbSet<FileMetadataEntity> Files => Set<FileMetadataEntity>();
     public DbSet<DocumentAssetEntity> DocumentAssets => Set<DocumentAssetEntity>();
+    public DbSet<DocumentFaenaEntity> DocumentFaenas => Set<DocumentFaenaEntity>();
     public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

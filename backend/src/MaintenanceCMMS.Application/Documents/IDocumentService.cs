@@ -56,6 +56,24 @@ public interface IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyCollection<DocumentVersionResponse>> ListVersionsAsync(
+        string id,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
+    Task<DocumentResponse?> AssignAssetsAsync(
+        string id,
+        AssignDocumentAssetsRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
+    Task<DocumentResponse?> UnassignAssetAsync(
+        string id,
+        string assetCode,
+        UnassignDocumentAssetRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
     Task<DocumentResponse?> AnnulAsync(
         string id,
         AnnulDocumentRequest request,

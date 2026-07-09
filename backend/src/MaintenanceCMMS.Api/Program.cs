@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
 using MaintenanceCMMS.Api.Jobs;
@@ -2908,6 +2908,70 @@ documentsApi.MapPost("/{id}/replace", async (
     })
     .WithName("ReplaceDocument");
 
+
+documentsApi.MapGet("/{id}/versions", async (
+        string id,
+        ClaimsPrincipal user,
+        IDocumentService documentService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await documentService.ListVersionsAsync(id, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ListDocumentVersions");
+
+documentsApi.MapPost("/{id}/assets", async (
+        string id,
+        AssignDocumentAssetsRequest request,
+        ClaimsPrincipal user,
+        IDocumentService documentService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var result = await documentService.AssignAssetsAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("AssignDocumentAssets");
+
+documentsApi.MapPost("/{id}/assets/{assetCode}/unassign", async (
+        string id,
+        string assetCode,
+        UnassignDocumentAssetRequest request,
+        ClaimsPrincipal user,
+        IDocumentService documentService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var result = await documentService.UnassignAssetAsync(id, assetCode, request, UserAccessContext.FromClaims(user), cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("UnassignDocumentAsset");
 documentsApi.MapPost("/{id}/annul", async (
         string id,
         AnnulDocumentRequest request,
@@ -3858,3 +3922,4 @@ public sealed record SharePointManualLinkApiRequest(
 public partial class Program
 {
 }
+

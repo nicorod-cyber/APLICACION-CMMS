@@ -1,4 +1,4 @@
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+﻿using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -207,6 +207,31 @@ public sealed class AssetStateEventConfiguration : IEntityTypeConfiguration<Asse
     }
 }
 
+public sealed class DocumentTypeConfiguration : IEntityTypeConfiguration<DocumentTypeEntity>
+{
+    public void Configure(EntityTypeBuilder<DocumentTypeEntity> builder)
+    {
+        builder.ToTable("tipos_documentales");
+        builder.ConfigureBase();
+        builder.Property(entity => entity.Code).HasColumnName("codigo").HasMaxLength(120).IsRequired();
+        builder.Property(entity => entity.Name).HasColumnName("nombre").HasMaxLength(240).IsRequired();
+        builder.Property(entity => entity.Description).HasColumnName("descripcion").HasMaxLength(1000);
+        builder.Property(entity => entity.AppliesTo).HasColumnName("aplica_a").HasMaxLength(40);
+        builder.Property(entity => entity.IsMandatory).HasColumnName("obligatorio");
+        builder.Property(entity => entity.IsCritical).HasColumnName("critico");
+        builder.Property(entity => entity.BlocksAvailability).HasColumnName("bloquea_disponibilidad");
+        builder.Property(entity => entity.AlertDays).HasColumnName("dias_alerta");
+        builder.Property(entity => entity.ResponsibleRoles).HasColumnName("roles_responsables").HasMaxLength(1000);
+        builder.Property(entity => entity.RequiresAlertPdf).HasColumnName("requiere_pdf_alerta");
+        builder.Property(entity => entity.HtmlTemplateCode).HasColumnName("plantilla_html_codigo").HasMaxLength(120);
+        builder.Property(entity => entity.IsActive).HasColumnName("activo");
+        builder.Property(entity => entity.CreatedByUserId).HasColumnName("created_by_user_id").HasMaxLength(120);
+        builder.Property(entity => entity.UpdatedByUserId).HasColumnName("updated_by_user_id").HasMaxLength(120);
+        builder.HasIndex(entity => entity.Code).IsUnique();
+        builder.ToTable(table => table.HasCheckConstraint("ck_tipos_documentales_dias_alerta", "dias_alerta >= 0"));
+    }
+}
+
 public sealed class DocumentConfiguration : IEntityTypeConfiguration<DocumentEntity>
 {
     public void Configure(EntityTypeBuilder<DocumentEntity> builder)
@@ -215,9 +240,37 @@ public sealed class DocumentConfiguration : IEntityTypeConfiguration<DocumentEnt
         builder.ConfigureBase();
         builder.Property(entity => entity.Code).HasColumnName("codigo").HasMaxLength(120).IsRequired();
         builder.Property(entity => entity.Title).HasColumnName("titulo").HasMaxLength(300).IsRequired();
-        builder.Property(entity => entity.DocumentTypeCode).HasColumnName("tipo_documento_codigo").HasMaxLength(120).IsRequired();
+        builder.Property(entity => entity.Description).HasColumnName("descripcion").HasMaxLength(1000);
+        builder.Property(entity => entity.DocumentTypeId).HasColumnName("tipo_documental_id");
         builder.Property(entity => entity.Status).HasColumnName("estado").HasMaxLength(40).IsRequired();
+        builder.Property(entity => entity.IssueDate).HasColumnName("fecha_emision");
+        builder.Property(entity => entity.ExpiresOn).HasColumnName("fecha_vencimiento");
+        builder.Property(entity => entity.IsCurrent).HasColumnName("vigente");
+        builder.Property(entity => entity.IsAnnulled).HasColumnName("anulado");
+        builder.Property(entity => entity.AnnulledByUserId).HasColumnName("anulado_por_usuario_id").HasMaxLength(120);
+        builder.Property(entity => entity.AnnulledAtUtc).HasColumnName("anulado_at_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.AnnulReason).HasColumnName("motivo_anulacion").HasMaxLength(500);
+        builder.Property(entity => entity.CreatedByUserId).HasColumnName("created_by_user_id").HasMaxLength(120).IsRequired();
+        builder.Property(entity => entity.UpdatedByUserId).HasColumnName("updated_by_user_id").HasMaxLength(120);
+        builder.Property(entity => entity.ValidatedByUserId).HasColumnName("validado_por_usuario_id").HasMaxLength(120);
+        builder.Property(entity => entity.ValidatedAtUtc).HasColumnName("validado_at_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.RejectedByUserId).HasColumnName("rechazado_por_usuario_id").HasMaxLength(120);
+        builder.Property(entity => entity.RejectedAtUtc).HasColumnName("rechazado_at_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.RejectReason).HasColumnName("motivo_rechazo").HasMaxLength(500);
+        builder.Property(entity => entity.ExpiryDateValidated).HasColumnName("fecha_vencimiento_validada");
+        builder.Property(entity => entity.ReplacesDocumentId).HasColumnName("reemplaza_documento_id");
+        builder.Property(entity => entity.ReplacedByDocumentId).HasColumnName("reemplazado_por_documento_id");
+        builder.Property(entity => entity.IsHistorical).HasColumnName("historico");
+        builder.Property(entity => entity.IsCritical).HasColumnName("critico");
+        builder.Property(entity => entity.IsMandatory).HasColumnName("obligatorio");
+        builder.Property(entity => entity.BlocksAvailability).HasColumnName("bloquea_disponibilidad");
+        builder.Property(entity => entity.ChangeReason).HasColumnName("motivo_cambio").HasMaxLength(500);
         builder.HasIndex(entity => entity.Code).IsUnique();
+        builder.HasIndex(entity => entity.DocumentTypeId);
+        builder.HasIndex(entity => entity.Status);
+        builder.HasOne(entity => entity.DocumentType).WithMany(type => type.Documents).HasForeignKey(entity => entity.DocumentTypeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.ReplacesDocument).WithMany().HasForeignKey(entity => entity.ReplacesDocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.ReplacedByDocument).WithMany().HasForeignKey(entity => entity.ReplacedByDocumentId).OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -229,11 +282,19 @@ public sealed class DocumentVersionConfiguration : IEntityTypeConfiguration<Docu
         builder.ConfigureBase();
         builder.Property(entity => entity.DocumentId).HasColumnName("documento_id");
         builder.Property(entity => entity.VersionNumber).HasColumnName("numero_version");
+        builder.Property(entity => entity.VersionCode).HasColumnName("codigo_version").HasMaxLength(80).IsRequired();
         builder.Property(entity => entity.FileId).HasColumnName("archivo_id");
+        builder.Property(entity => entity.UploadedAtUtc).HasColumnName("fecha_carga_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.UploadedByUserId).HasColumnName("cargado_por_usuario_id").HasMaxLength(120).IsRequired();
+        builder.Property(entity => entity.Observations).HasColumnName("observaciones").HasMaxLength(1000);
+        builder.Property(entity => entity.IsCurrent).HasColumnName("vigente");
         builder.Property(entity => entity.Status).HasColumnName("estado").HasMaxLength(40).IsRequired();
         builder.HasOne(entity => entity.Document).WithMany(document => document.Versions).HasForeignKey(entity => entity.DocumentId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.File).WithMany().HasForeignKey(entity => entity.FileId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(entity => new { entity.DocumentId, entity.VersionNumber }).IsUnique();
+        builder.HasIndex(entity => new { entity.DocumentId, entity.IsCurrent })
+            .IsUnique()
+            .HasFilter("vigente");
     }
 }
 
@@ -247,6 +308,7 @@ public sealed class FileMetadataConfiguration : IEntityTypeConfiguration<FileMet
         builder.Property(entity => entity.FileName).HasColumnName("nombre").HasMaxLength(300).IsRequired();
         builder.Property(entity => entity.Provider).HasColumnName("proveedor").HasMaxLength(80).IsRequired();
         builder.Property(entity => entity.LogicalUri).HasColumnName("uri_logica").HasMaxLength(1000).IsRequired();
+        builder.Property(entity => entity.LogicalPath).HasColumnName("ruta_logica").HasMaxLength(1000);
         builder.Property(entity => entity.MimeType).HasColumnName("tipo_mime").HasMaxLength(160);
         builder.Property(entity => entity.SizeBytes).HasColumnName("tamano_bytes");
         builder.Property(entity => entity.Checksum).HasColumnName("checksum").HasMaxLength(200);
@@ -273,7 +335,32 @@ public sealed class DocumentAssetConfiguration : IEntityTypeConfiguration<Docume
         builder.Property(entity => entity.UnassignedReason).HasColumnName("motivo_desasignacion").HasMaxLength(500);
         builder.HasOne(entity => entity.Document).WithMany(document => document.Assets).HasForeignKey(entity => entity.DocumentId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.Asset).WithMany().HasForeignKey(entity => entity.AssetId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(entity => new { entity.DocumentId, entity.AssetId, entity.IsActive }).IsUnique();
+        builder.HasIndex(entity => new { entity.DocumentId, entity.AssetId, entity.IsActive })
+            .IsUnique()
+            .HasFilter("vigente");
+    }
+}
+
+public sealed class DocumentFaenaConfiguration : IEntityTypeConfiguration<DocumentFaenaEntity>
+{
+    public void Configure(EntityTypeBuilder<DocumentFaenaEntity> builder)
+    {
+        builder.ToTable("documento_faenas");
+        builder.ConfigureBase();
+        builder.Property(entity => entity.DocumentId).HasColumnName("documento_id");
+        builder.Property(entity => entity.FaenaId).HasColumnName("faena_id");
+        builder.Property(entity => entity.IsActive).HasColumnName("vigente");
+        builder.Property(entity => entity.AssignedAtUtc).HasColumnName("asignado_at_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.AssignedByUserId).HasColumnName("asignado_por_usuario_id").HasMaxLength(120);
+        builder.Property(entity => entity.UnassignedAtUtc).HasColumnName("desasignado_at_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.UnassignedByUserId).HasColumnName("desasignado_por_usuario_id").HasMaxLength(120);
+        builder.Property(entity => entity.UnassignedReason).HasColumnName("motivo_desasignacion").HasMaxLength(500);
+        builder.HasOne(entity => entity.Document).WithMany(document => document.Faenas).HasForeignKey(entity => entity.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.Faena).WithMany().HasForeignKey(entity => entity.FaenaId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(entity => entity.FaenaId);
+        builder.HasIndex(entity => new { entity.DocumentId, entity.FaenaId, entity.IsActive })
+            .IsUnique()
+            .HasFilter("vigente");
     }
 }
 
@@ -304,3 +391,4 @@ public sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLogEnt
         builder.HasIndex(entity => entity.FaenaCode);
     }
 }
+

@@ -130,14 +130,60 @@ public sealed class AssetStateEventEntity : PostgreSqlEntity
     public string Reason { get; set; } = string.Empty;
 }
 
+public sealed class DocumentTypeEntity : PostgreSqlEntity
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string? AppliesTo { get; set; }
+    public bool IsMandatory { get; set; }
+    public bool IsCritical { get; set; }
+    public bool BlocksAvailability { get; set; }
+    public int AlertDays { get; set; } = 30;
+    public string? ResponsibleRoles { get; set; }
+    public bool RequiresAlertPdf { get; set; }
+    public string? HtmlTemplateCode { get; set; }
+    public bool IsActive { get; set; } = true;
+    public string? CreatedByUserId { get; set; }
+    public string? UpdatedByUserId { get; set; }
+    public List<DocumentEntity> Documents { get; set; } = [];
+}
+
 public sealed class DocumentEntity : PostgreSqlEntity
 {
     public string Code { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
-    public string DocumentTypeCode { get; set; } = string.Empty;
-    public string Status { get; set; } = "vigente";
+    public string? Description { get; set; }
+    public Guid DocumentTypeId { get; set; }
+    public DocumentTypeEntity DocumentType { get; set; } = null!;
+    public string Status { get; set; } = "PendienteCarga";
+    public DateOnly? IssueDate { get; set; }
+    public DateOnly? ExpiresOn { get; set; }
+    public bool IsCurrent { get; set; } = true;
+    public bool IsAnnulled { get; set; }
+    public string? AnnulledByUserId { get; set; }
+    public DateTimeOffset? AnnulledAtUtc { get; set; }
+    public string? AnnulReason { get; set; }
+    public string CreatedByUserId { get; set; } = string.Empty;
+    public string? UpdatedByUserId { get; set; }
+    public string? ValidatedByUserId { get; set; }
+    public DateTimeOffset? ValidatedAtUtc { get; set; }
+    public string? RejectedByUserId { get; set; }
+    public DateTimeOffset? RejectedAtUtc { get; set; }
+    public string? RejectReason { get; set; }
+    public bool ExpiryDateValidated { get; set; }
+    public Guid? ReplacesDocumentId { get; set; }
+    public DocumentEntity? ReplacesDocument { get; set; }
+    public Guid? ReplacedByDocumentId { get; set; }
+    public DocumentEntity? ReplacedByDocument { get; set; }
+    public bool IsHistorical { get; set; }
+    public bool IsCritical { get; set; }
+    public bool IsMandatory { get; set; }
+    public bool BlocksAvailability { get; set; }
+    public string? ChangeReason { get; set; }
     public List<DocumentVersionEntity> Versions { get; set; } = [];
     public List<DocumentAssetEntity> Assets { get; set; } = [];
+    public List<DocumentFaenaEntity> Faenas { get; set; } = [];
 }
 
 public sealed class DocumentVersionEntity : PostgreSqlEntity
@@ -145,8 +191,13 @@ public sealed class DocumentVersionEntity : PostgreSqlEntity
     public Guid DocumentId { get; set; }
     public DocumentEntity Document { get; set; } = null!;
     public int VersionNumber { get; set; }
+    public string VersionCode { get; set; } = string.Empty;
     public Guid FileId { get; set; }
     public FileMetadataEntity File { get; set; } = null!;
+    public DateTimeOffset UploadedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string UploadedByUserId { get; set; } = string.Empty;
+    public string? Observations { get; set; }
+    public bool IsCurrent { get; set; } = true;
     public string Status { get; set; } = "vigente";
 }
 
@@ -156,6 +207,7 @@ public sealed class FileMetadataEntity : PostgreSqlEntity
     public string FileName { get; set; } = string.Empty;
     public string Provider { get; set; } = string.Empty;
     public string LogicalUri { get; set; } = string.Empty;
+    public string? LogicalPath { get; set; }
     public string? MimeType { get; set; }
     public long? SizeBytes { get; set; }
     public string? Checksum { get; set; }
@@ -170,6 +222,20 @@ public sealed class DocumentAssetEntity : PostgreSqlEntity
     public DocumentEntity Document { get; set; } = null!;
     public Guid AssetId { get; set; }
     public AssetEntity Asset { get; set; } = null!;
+    public bool IsActive { get; set; } = true;
+    public DateTimeOffset AssignedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string? AssignedByUserId { get; set; }
+    public DateTimeOffset? UnassignedAtUtc { get; set; }
+    public string? UnassignedByUserId { get; set; }
+    public string? UnassignedReason { get; set; }
+}
+
+public sealed class DocumentFaenaEntity : PostgreSqlEntity
+{
+    public Guid DocumentId { get; set; }
+    public DocumentEntity Document { get; set; } = null!;
+    public Guid FaenaId { get; set; }
+    public FaenaEntity Faena { get; set; } = null!;
     public bool IsActive { get; set; } = true;
     public DateTimeOffset AssignedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public string? AssignedByUserId { get; set; }

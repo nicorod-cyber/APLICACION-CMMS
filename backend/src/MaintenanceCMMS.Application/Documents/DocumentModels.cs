@@ -77,7 +77,12 @@ public sealed record CreateDocumentRequest(
     bool? Critico = null,
     bool? Obligatorio = null,
     bool? BloqueaDisponibilidad = null,
-    string? Reason = null);
+    string? Reason = null,
+    IReadOnlyCollection<string>? EntidadCodigos = null,
+    string? NombreOriginal = null,
+    string? TipoMime = null,
+    long? TamanoBytes = null,
+    string? Checksum = null);
 
 public sealed record UpdateDocumentRequest(
     DateOnly? FechaEmision,
@@ -130,7 +135,29 @@ public sealed record DocumentResponse(
     DateTimeOffset FechaCargaUtc,
     string CargadoPor,
     int? DiasParaVencer,
-    bool BloqueaDisponibilidadActual);
+    bool BloqueaDisponibilidadActual,
+    IReadOnlyCollection<string>? EntidadCodigos = null,
+    int? VersionVigente = null,
+    string? ArchivoId = null);
+
+public sealed record DocumentVersionResponse(
+    string VersionId,
+    string DocumentoId,
+    int NumeroVersion,
+    string CodigoVersion,
+    string ArchivoId,
+    string ArchivoKey,
+    string? SharePointUrl,
+    DateTimeOffset FechaCargaUtc,
+    string CargadoPor,
+    string? Observaciones,
+    bool Vigente);
+
+public sealed record AssignDocumentAssetsRequest(
+    IReadOnlyCollection<string> ActivoCodigos,
+    string? Reason = null);
+
+public sealed record UnassignDocumentAssetRequest(string Reason);
 
 public sealed record DocumentMatrixRow(
     DocumentEntityType EntidadTipo,

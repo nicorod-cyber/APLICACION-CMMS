@@ -1,4 +1,5 @@
-using MaintenanceCMMS.Application.Auth;
+﻿using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -32,6 +33,10 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         await UpsertFamilyAsync("GRUA_HORQUILLA", "Grua horquilla", cancellationToken);
 
         await UpsertPermissionAsync(AuthPermissions.ManageEquipmentFamilies, "Gestionar familias de equipo", cancellationToken);
+        await UpsertDocumentTypeAsync("REV-TEC", "Revision tecnica", DocumentEntityType.Activo, true, true, true, 30, cancellationToken);
+        await UpsertDocumentTypeAsync("PERMISO", "Permiso operacional", DocumentEntityType.Activo, true, false, false, 30, cancellationToken);
+        await UpsertDocumentTypeAsync("CERT", "Certificado", DocumentEntityType.Activo, false, false, false, 45, cancellationToken);
+        await UpsertDocumentTypeAsync("FAENA-GRAL", "Documento general de faena", DocumentEntityType.Faena, false, false, false, 30, cancellationToken);
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
@@ -115,6 +120,48 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         {
             entity.Name = name;
             entity.IsActive = true;
+            entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+    }
+    private async Task UpsertDocumentTypeAsync(
+        string code,
+        string name,
+        DocumentEntityType appliesTo,
+        bool mandatory,
+        bool critical,
+        bool blocksAvailability,
+        int alertDays,
+        CancellationToken cancellationToken)
+    {
+        var normalized = code.Trim().ToUpperInvariant();
+        var entity = await _dbContext.DocumentTypes.FirstOrDefaultAsync(item => item.Code == normalized, cancellationToken);
+        if (entity is null)
+        {
+            _dbContext.DocumentTypes.Add(new DocumentTypeEntity
+            {
+                Code = normalized,
+                Name = name,
+                AppliesTo = appliesTo.ToString(),
+                IsMandatory = mandatory,
+                IsCritical = critical,
+                BlocksAvailability = blocksAvailability,
+                AlertDays = alertDays,
+                ResponsibleRoles = AuthRoles.Planner,
+                IsActive = true,
+                CreatedByUserId = "seed"
+            });
+        }
+        else
+        {
+            entity.Name = name;
+            entity.AppliesTo = appliesTo.ToString();
+            entity.IsMandatory = mandatory;
+            entity.IsCritical = critical;
+            entity.BlocksAvailability = blocksAvailability;
+            entity.AlertDays = alertDays;
+            entity.ResponsibleRoles = AuthRoles.Planner;
+            entity.IsActive = true;
+            entity.UpdatedByUserId = "seed";
             entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
         }
     }

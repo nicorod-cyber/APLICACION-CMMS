@@ -1,43 +1,38 @@
 using System.Globalization;
 using System.Text.Json;
-using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Domain.Common;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Documents;
 
 public sealed class DocumentService : IDocumentService
 {
-    private const string DocumentTypesSchema = "document_types";
-    private const string DocumentsSchema = "documentos";
-    private const string AssetsSchema = "activos";
-    private const string FaenasSchema = "faenas";
-    private const string WorkOrdersSchema = "ordenes_trabajo";
-
-    private readonly IDataProvider _dataProvider;
+    private readonly CmmsDbContext _dbContext;
     private readonly IAuditService _auditService;
     private readonly IAuthorizationPolicyService _authorizationPolicyService;
 
     public DocumentService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IAuditService auditService,
         IAuthorizationPolicyService authorizationPolicyService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _auditService = auditService;
         _authorizationPolicyService = authorizationPolicyService;
     }
 
     public async Task<IReadOnlyCollection<DocumentTypeResponse>> ListTypesAsync(CancellationToken cancellationToken)
     {
-        var rows = await _dataProvider.ReadRowsAsync(DocumentTypesSchema, cancellationToken);
-        return rows
-            .Select(ToTypeResponse)
-            .Where(type => !string.IsNullOrWhiteSpace(type.Codigo))
-            .OrderBy(type => type.Nombre, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var types = await _dbContext.DocumentTypes
+            .AsNoTracking()
+            .OrderBy(type => type.Name)
+            .ToArrayAsync(cancellationToken);
+        return types.Select(ToTypeResponse).ToArray();
     }
 
     public async Task<DocumentTypeResponse> CreateTypeAsync(
@@ -49,30 +44,34 @@ public sealed class DocumentService : IDocumentService
         ValidateRequired(request.Codigo, nameof(request.Codigo));
         ValidateRequired(request.Nombre, nameof(request.Nombre));
 
-        var rows = (await _dataProvider.ReadRowsAsync(DocumentTypesSchema, cancellationToken)).ToList();
-        if (rows.Any(row => SameCode(row.GetValue("Codigo"), request.Codigo)))
+        var code = NormalizeCode(request.Codigo);
+        if (await _dbContext.DocumentTypes.AnyAsync(type => type.Code == code, cancellationToken))
         {
             throw new DomainException($"Ya existe el tipo documental '{request.Codigo}'.");
         }
 
-        var rowToCreate = TypeRow(
-            request.Codigo,
-            request.Nombre,
-            request.AplicaA,
-            request.Obligatorio,
-            request.Critico,
-            request.BloqueaDisponibilidad,
-            request.PlazoAlertaDias,
-            request.RolesResponsables ?? [],
-            request.RequierePdfAlerta,
-            request.PlantillaHtmlCodigo,
-            request.Activo);
+        var entity = new DocumentTypeEntity
+        {
+            Id = Guid.NewGuid(),
+            Code = code,
+            Name = request.Nombre.Trim(),
+            AppliesTo = request.AplicaA?.ToString(),
+            IsMandatory = request.Obligatorio,
+            IsCritical = request.Critico,
+            BlocksAvailability = request.BloqueaDisponibilidad,
+            AlertDays = Math.Max(0, request.PlazoAlertaDias),
+            ResponsibleRoles = JoinList(request.RolesResponsables ?? []),
+            RequiresAlertPdf = request.RequierePdfAlerta,
+            HtmlTemplateCode = EmptyToNull(request.PlantillaHtmlCodigo),
+            IsActive = request.Activo,
+            CreatedByUserId = user.UserId
+        };
 
-        rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(DocumentTypesSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "document_type.created", request.Codigo, null, Serialize(rowToCreate), "Tipo documental creado", cancellationToken);
+        _dbContext.DocumentTypes.Add(entity);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await RecordAuditAsync(user, "document_type.created", entity.Code, null, Serialize(entity), "Tipo documental creado", cancellationToken);
 
-        return ToTypeResponse(rowToCreate);
+        return ToTypeResponse(entity);
     }
 
     public async Task<DocumentTypeResponse?> UpdateTypeAsync(
@@ -85,32 +84,31 @@ public sealed class DocumentService : IDocumentService
         ValidateRequired(request.Nombre, nameof(request.Nombre));
         DomainGuard.AgainstEmpty(request.Reason ?? string.Empty, "reason");
 
-        var rows = (await _dataProvider.ReadRowsAsync(DocumentTypesSchema, cancellationToken)).ToList();
-        var index = FindIndex(rows, "Codigo", code);
-        if (index < 0)
+        var normalized = NormalizeCode(code);
+        var entity = await _dbContext.DocumentTypes.FirstOrDefaultAsync(type => type.Code == normalized, cancellationToken);
+        if (entity is null)
         {
             return null;
         }
 
-        var existing = rows[index];
-        var updated = TypeRow(
-            existing.GetValue("Codigo") ?? code,
-            request.Nombre,
-            request.AplicaA,
-            request.Obligatorio,
-            request.Critico,
-            request.BloqueaDisponibilidad,
-            request.PlazoAlertaDias,
-            request.RolesResponsables ?? [],
-            request.RequierePdfAlerta,
-            request.PlantillaHtmlCodigo,
-            request.Activo);
+        var previous = Serialize(entity);
+        entity.Name = request.Nombre.Trim();
+        entity.AppliesTo = request.AplicaA?.ToString();
+        entity.IsMandatory = request.Obligatorio;
+        entity.IsCritical = request.Critico;
+        entity.BlocksAvailability = request.BloqueaDisponibilidad;
+        entity.AlertDays = Math.Max(0, request.PlazoAlertaDias);
+        entity.ResponsibleRoles = JoinList(request.RolesResponsables ?? []);
+        entity.RequiresAlertPdf = request.RequierePdfAlerta;
+        entity.HtmlTemplateCode = EmptyToNull(request.PlantillaHtmlCodigo);
+        entity.IsActive = request.Activo;
+        entity.UpdatedByUserId = user.UserId;
+        entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
 
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(DocumentTypesSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "document_type.updated", code, Serialize(existing), Serialize(updated), request.Reason, cancellationToken);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await RecordAuditAsync(user, "document_type.updated", entity.Code, previous, Serialize(entity), request.Reason, cancellationToken);
 
-        return ToTypeResponse(updated);
+        return ToTypeResponse(entity);
     }
 
     public async Task<IReadOnlyCollection<DocumentResponse>> ListAsync(
@@ -118,12 +116,12 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        var context = await LoadContextAsync(cancellationToken);
         EnsureCanViewFaenaFilter(query.FaenaCodigo, user);
-
-        return context.DocumentRows
-            .Select(row => ToDocumentResponse(row, context.TypesByCode))
-            .Where(document => Matches(document, query, context, user))
+        var documents = await BaseDocumentsQuery().ToArrayAsync(cancellationToken);
+        return documents
+            .Where(document => MatchesEntity(document, query, user))
+            .Select(ToDocumentResponse)
+            .Where(document => MatchesResponse(document, query))
             .OrderBy(document => document.EntidadTipo)
             .ThenBy(document => document.EntidadCodigo, StringComparer.OrdinalIgnoreCase)
             .ThenBy(document => document.TipoDocumento, StringComparer.OrdinalIgnoreCase)
@@ -135,16 +133,15 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        var context = await LoadContextAsync(cancellationToken);
-        var row = FindDocumentById(context.DocumentRows, id);
-        if (row is null)
+        var document = await FindDocumentAsync(id, tracking: false, cancellationToken);
+        if (document is null)
         {
             return null;
         }
 
-        var document = ToDocumentResponse(row, context.TypesByCode);
-        EnsureCanViewDocument(document, context, user);
-        return document;
+        var response = ToDocumentResponse(document);
+        EnsureCanViewDocument(document, user);
+        return response;
     }
 
     public async Task<DocumentResponse> CreateAsync(
@@ -156,46 +153,60 @@ public sealed class DocumentService : IDocumentService
         ValidateRequired(request.EntidadCodigo, nameof(request.EntidadCodigo));
         ValidateRequired(request.TipoDocumento, nameof(request.TipoDocumento));
 
-        var context = await LoadContextAsync(cancellationToken);
-        await ValidateEntityAsync(request.EntidadTipo, request.EntidadCodigo, user, context, cancellationToken);
+        var type = await ResolveActiveTypeAsync(request.TipoDocumento, cancellationToken);
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
-        var type = ResolveType(context.TypesByCode, request.TipoDocumento);
-        var id = Guid.NewGuid().ToString("D");
-        var row = DocumentRow(
-            id,
-            request.EntidadTipo,
-            request.EntidadCodigo,
-            request.TipoDocumento,
-            HasFile(request.ArchivoKey, request.SharePointUrl) ? DocumentLifecycleStatus.PendienteValidacion : DocumentLifecycleStatus.PendienteCarga,
-            request.FechaEmision,
-            request.FechaVencimiento,
-            request.ArchivoKey,
-            request.SharePointUrl,
-            request.Critico ?? type?.Critico ?? false,
-            request.Obligatorio ?? type?.Obligatorio ?? false,
-            request.BloqueaDisponibilidad ?? type?.BloqueaDisponibilidad ?? false,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            false,
-            null,
-            null,
-            null,
-            DateTimeOffset.UtcNow,
-            user.UserId,
-            request.Reason,
-            false);
+        var now = DateTimeOffset.UtcNow;
+        var document = new DocumentEntity
+        {
+            Id = Guid.NewGuid(),
+            Code = $"DOC-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}"[..31],
+            Title = $"{type.Name} {request.EntidadCodigo}".Trim(),
+            DocumentTypeId = type.Id,
+            DocumentType = type,
+            Status = HasFile(request.ArchivoKey, request.SharePointUrl)
+                ? DocumentLifecycleStatus.PendienteValidacion.ToString()
+                : DocumentLifecycleStatus.PendienteCarga.ToString(),
+            IssueDate = request.FechaEmision,
+            ExpiresOn = request.FechaVencimiento,
+            IsCurrent = true,
+            IsAnnulled = false,
+            CreatedByUserId = user.UserId,
+            IsCritical = request.Critico ?? type.IsCritical,
+            IsMandatory = request.Obligatorio ?? type.IsMandatory,
+            BlocksAvailability = request.BloqueaDisponibilidad ?? type.BlocksAvailability,
+            ChangeReason = request.Reason
+        };
 
-        var rows = context.DocumentRows.ToList();
-        rows.Add(row);
-        await _dataProvider.SaveRowsAsync(DocumentsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "document.created", id, null, Serialize(row), request.Reason ?? "Documento cargado", cancellationToken);
+        _dbContext.Documents.Add(document);
+        await AssignInitialEntityAsync(document, request, user, now, cancellationToken);
 
-        return ToDocumentResponse(row, context.TypesByCode);
+        if (HasFile(request.ArchivoKey, request.SharePointUrl))
+        {
+            var file = CreateFile(request.ArchivoKey, request.SharePointUrl, request.NombreOriginal, request.TipoMime, request.TamanoBytes, request.Checksum, user);
+            _dbContext.Files.Add(file);
+            _dbContext.DocumentVersions.Add(new DocumentVersionEntity
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = document.Id,
+                Document = document,
+                VersionNumber = 1,
+                VersionCode = "1",
+                FileId = file.Id,
+                File = file,
+                UploadedAtUtc = now,
+                UploadedByUserId = user.UserId,
+                Observations = request.Reason,
+                IsCurrent = true,
+                Status = "vigente"
+            });
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        await RecordAuditAsync(user, "document.created", document.Id.ToString("D"), null, Serialize(document), request.Reason ?? "Documento cargado", cancellationToken);
+
+        return ToDocumentResponse((await FindDocumentAsync(document.Id.ToString("D"), tracking: false, cancellationToken))!);
     }
 
     public async Task<DocumentResponse?> UpdateAsync(
@@ -207,54 +218,48 @@ public sealed class DocumentService : IDocumentService
         EnsureCanManage(user);
         DomainGuard.AgainstEmpty(request.Reason ?? string.Empty, "reason");
 
-        var context = await LoadContextAsync(cancellationToken);
-        var rows = context.DocumentRows.ToList();
-        var index = FindDocumentIndex(rows, id);
-        if (index < 0)
+        var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
+        if (document is null)
         {
             return null;
         }
 
-        var existing = rows[index];
-        var existingDocument = ToDocumentResponse(existing, context.TypesByCode);
-        EnsureCanViewDocument(existingDocument, context, user);
-        EnsureCanChangeDocument(existingDocument);
-        EnsureExpiryCanChange(existingDocument, request.FechaVencimiento, user);
+        var previous = Serialize(document);
+        var existingResponse = ToDocumentResponse(document);
+        EnsureCanViewDocument(document, user);
+        EnsureCanChangeDocument(existingResponse);
+        EnsureExpiryCanChange(existingResponse, request.FechaVencimiento, user);
 
-        var updated = DocumentRow(
-            existingDocument.DocumentoId,
-            existingDocument.EntidadTipo,
-            existingDocument.EntidadCodigo,
-            existingDocument.TipoDocumento,
-            HasFile(request.ArchivoKey, request.SharePointUrl) ? DocumentLifecycleStatus.PendienteValidacion : DocumentLifecycleStatus.PendienteCarga,
-            request.FechaEmision,
-            request.FechaVencimiento,
-            request.ArchivoKey,
-            request.SharePointUrl,
-            request.Critico ?? existingDocument.Critico,
-            request.Obligatorio ?? existingDocument.Obligatorio,
-            request.BloqueaDisponibilidad ?? existingDocument.BloqueaDisponibilidad,
-            null,
-            null,
-            null,
-            null,
-            null,
-            existingDocument.ReemplazaDocumentoId,
-            existingDocument.ReemplazadoPorDocumentoId,
-            existingDocument.EsHistorico,
-            existingDocument.AnuladoPor,
-            existingDocument.AnuladoEnUtc,
-            existingDocument.MotivoAnulacion,
-            existingDocument.FechaCargaUtc,
-            existingDocument.CargadoPor,
-            request.Reason,
-            false);
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        document.IssueDate = request.FechaEmision;
+        document.ExpiresOn = request.FechaVencimiento;
+        document.IsCritical = request.Critico ?? document.IsCritical;
+        document.IsMandatory = request.Obligatorio ?? document.IsMandatory;
+        document.BlocksAvailability = request.BloqueaDisponibilidad ?? document.BlocksAvailability;
+        document.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        document.UpdatedByUserId = user.UserId;
+        document.ChangeReason = request.Reason;
 
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(DocumentsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "document.updated", id, Serialize(existing), Serialize(updated), request.Reason, cancellationToken);
+        if (HasFile(request.ArchivoKey, request.SharePointUrl))
+        {
+            await AddNewVersionAsync(document, request.ArchivoKey, request.SharePointUrl, null, null, null, null, request.Reason, user, cancellationToken);
+            document.Status = DocumentLifecycleStatus.PendienteValidacion.ToString();
+            document.ValidatedAtUtc = null;
+            document.ValidatedByUserId = null;
+            document.RejectedAtUtc = null;
+            document.RejectedByUserId = null;
+            document.RejectReason = null;
+        }
+        else if (document.Versions.Count == 0)
+        {
+            document.Status = DocumentLifecycleStatus.PendienteCarga.ToString();
+        }
 
-        return ToDocumentResponse(updated, context.TypesByCode);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        await RecordAuditAsync(user, "document.updated", id, previous, Serialize(document), request.Reason, cancellationToken);
+
+        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
     }
 
     public async Task<DocumentResponse?> ValidateAsync(
@@ -264,39 +269,35 @@ public sealed class DocumentService : IDocumentService
         CancellationToken cancellationToken)
     {
         EnsureCanValidate(user);
-        var context = await LoadContextAsync(cancellationToken);
-        var rows = context.DocumentRows.ToList();
-        var index = FindDocumentIndex(rows, id);
-        if (index < 0)
+        var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
+        if (document is null)
         {
             return null;
         }
 
-        var existing = rows[index];
-        var document = ToDocumentResponse(existing, context.TypesByCode);
-        EnsureCanViewDocument(document, context, user);
-        if (!HasFile(document.ArchivoKey, document.SharePointUrl))
+        var response = ToDocumentResponse(document);
+        EnsureCanViewDocument(document, user);
+        if (document.Versions.All(version => !version.IsCurrent))
         {
             throw new DomainException("No se puede validar un documento sin archivo o enlace.");
         }
 
-        var updated = WithValues(existing, new Dictionary<string, string?>
-        {
-            ["Estado"] = DocumentLifecycleStatus.Vigente.ToString(),
-            ["ValidadoPor"] = user.UserId,
-            ["ValidadoEnUtc"] = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
-            ["RechazadoPor"] = null,
-            ["RechazadoEnUtc"] = null,
-            ["MotivoRechazo"] = null,
-            ["FechaVencimientoValidada"] = "true",
-            ["MotivoCambio"] = request.Comments
-        });
+        var previous = Serialize(document);
+        document.Status = DocumentLifecycleStatus.Vigente.ToString();
+        document.ValidatedByUserId = user.UserId;
+        document.ValidatedAtUtc = DateTimeOffset.UtcNow;
+        document.RejectedByUserId = null;
+        document.RejectedAtUtc = null;
+        document.RejectReason = null;
+        document.ExpiryDateValidated = true;
+        document.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        document.UpdatedByUserId = user.UserId;
+        document.ChangeReason = request.Comments;
 
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(DocumentsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "document.validated", id, Serialize(existing), Serialize(updated), request.Comments ?? "Documento validado", cancellationToken);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await RecordAuditAsync(user, "document.validated", id, previous, Serialize(document), request.Comments ?? "Documento validado", cancellationToken);
 
-        return ToDocumentResponse(updated, context.TypesByCode);
+        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
     }
 
     public async Task<DocumentResponse?> RejectAsync(
@@ -307,32 +308,27 @@ public sealed class DocumentService : IDocumentService
     {
         EnsureCanValidate(user);
         DomainGuard.AgainstEmpty(request.Reason, nameof(request.Reason));
-        var context = await LoadContextAsync(cancellationToken);
-        var rows = context.DocumentRows.ToList();
-        var index = FindDocumentIndex(rows, id);
-        if (index < 0)
+        var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
+        if (document is null)
         {
             return null;
         }
 
-        var existing = rows[index];
-        var document = ToDocumentResponse(existing, context.TypesByCode);
-        EnsureCanViewDocument(document, context, user);
+        var response = ToDocumentResponse(document);
+        EnsureCanViewDocument(document, user);
+        var previous = Serialize(document);
+        document.Status = DocumentLifecycleStatus.Rechazado.ToString();
+        document.RejectedByUserId = user.UserId;
+        document.RejectedAtUtc = DateTimeOffset.UtcNow;
+        document.RejectReason = request.Reason;
+        document.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        document.UpdatedByUserId = user.UserId;
+        document.ChangeReason = request.Reason;
 
-        var updated = WithValues(existing, new Dictionary<string, string?>
-        {
-            ["Estado"] = DocumentLifecycleStatus.Rechazado.ToString(),
-            ["RechazadoPor"] = user.UserId,
-            ["RechazadoEnUtc"] = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
-            ["MotivoRechazo"] = request.Reason,
-            ["MotivoCambio"] = request.Reason
-        });
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await RecordAuditAsync(user, "document.rejected", id, previous, Serialize(document), request.Reason, cancellationToken);
 
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(DocumentsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "document.rejected", id, Serialize(existing), Serialize(updated), request.Reason, cancellationToken);
-
-        return ToDocumentResponse(updated, context.TypesByCode);
+        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
     }
 
     public async Task<DocumentResponse?> ReplaceAsync(
@@ -343,62 +339,143 @@ public sealed class DocumentService : IDocumentService
     {
         EnsureCanManage(user);
         DomainGuard.AgainstEmpty(request.Reason, nameof(request.Reason));
-        var context = await LoadContextAsync(cancellationToken);
-        var rows = context.DocumentRows.ToList();
-        var index = FindDocumentIndex(rows, id);
-        if (index < 0)
+        var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
+        if (document is null)
         {
             return null;
         }
 
-        var existing = rows[index];
-        var document = ToDocumentResponse(existing, context.TypesByCode);
-        EnsureCanViewDocument(document, context, user);
+        var response = ToDocumentResponse(document);
+        EnsureCanViewDocument(document, user);
+        var previous = Serialize(document);
 
-        var replacementId = Guid.NewGuid().ToString("D");
-        var old = WithValues(existing, new Dictionary<string, string?>
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        document.IssueDate = request.FechaEmision;
+        document.ExpiresOn = request.FechaVencimiento;
+        document.Status = HasFile(request.ArchivoKey, request.SharePointUrl)
+            ? DocumentLifecycleStatus.PendienteValidacion.ToString()
+            : DocumentLifecycleStatus.PendienteCarga.ToString();
+        document.ValidatedAtUtc = null;
+        document.ValidatedByUserId = null;
+        document.ExpiryDateValidated = false;
+        document.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        document.UpdatedByUserId = user.UserId;
+        document.ChangeReason = request.Reason;
+
+        if (HasFile(request.ArchivoKey, request.SharePointUrl))
         {
-            ["Estado"] = DocumentLifecycleStatus.Reemplazado.ToString(),
-            ["ReemplazadoPorDocumentoId"] = replacementId,
-            ["EsHistorico"] = "true",
-            ["MotivoCambio"] = request.Reason
-        });
+            await AddNewVersionAsync(document, request.ArchivoKey, request.SharePointUrl, null, null, null, null, request.Reason, user, cancellationToken);
+        }
 
-        var replacement = DocumentRow(
-            replacementId,
-            document.EntidadTipo,
-            document.EntidadCodigo,
-            document.TipoDocumento,
-            HasFile(request.ArchivoKey, request.SharePointUrl) ? DocumentLifecycleStatus.PendienteValidacion : DocumentLifecycleStatus.PendienteCarga,
-            request.FechaEmision,
-            request.FechaVencimiento,
-            request.ArchivoKey,
-            request.SharePointUrl,
-            document.Critico,
-            document.Obligatorio,
-            document.BloqueaDisponibilidad,
-            null,
-            null,
-            null,
-            null,
-            null,
-            document.DocumentoId,
-            null,
-            false,
-            null,
-            null,
-            null,
-            DateTimeOffset.UtcNow,
-            user.UserId,
-            request.Reason,
-            false);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        await RecordAuditAsync(user, "document.replaced", id, previous, Serialize(document), request.Reason, cancellationToken);
 
-        rows[index] = old;
-        rows.Add(replacement);
-        await _dataProvider.SaveRowsAsync(DocumentsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "document.replaced", id, Serialize(existing), Serialize(replacement), request.Reason, cancellationToken);
+        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+    }
 
-        return ToDocumentResponse(replacement, context.TypesByCode);
+    public async Task<IReadOnlyCollection<DocumentVersionResponse>> ListVersionsAsync(
+        string id,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
+    {
+        var document = await FindDocumentAsync(id, tracking: false, cancellationToken);
+        if (document is null)
+        {
+            return [];
+        }
+
+        EnsureCanViewDocument(document, user);
+        return document.Versions
+            .OrderBy(version => version.VersionNumber)
+            .Select(version => new DocumentVersionResponse(
+                version.Id.ToString("D"),
+                document.Id.ToString("D"),
+                version.VersionNumber,
+                version.VersionCode,
+                version.FileId.ToString("D"),
+                version.File.FileKey,
+                version.File.LogicalUri,
+                version.UploadedAtUtc,
+                version.UploadedByUserId,
+                version.Observations,
+                version.IsCurrent))
+            .ToArray();
+    }
+
+    public async Task<DocumentResponse?> AssignAssetsAsync(
+        string id,
+        AssignDocumentAssetsRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
+    {
+        EnsureCanManage(user);
+        var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
+        if (document is null)
+        {
+            return null;
+        }
+
+        EnsureCanViewDocument(document, user);
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        foreach (var assetCode in request.ActivoCodigos.Where(code => !string.IsNullOrWhiteSpace(code)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var asset = await ResolveAssetAsync(assetCode, user, cancellationToken);
+            if (document.Assets.Any(link => link.AssetId == asset.Id && link.IsActive))
+            {
+                continue;
+            }
+
+            _dbContext.DocumentAssets.Add(new DocumentAssetEntity
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = document.Id,
+                AssetId = asset.Id,
+                IsActive = true,
+                AssignedAtUtc = DateTimeOffset.UtcNow,
+                AssignedByUserId = user.UserId
+            });
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        await RecordAuditAsync(user, "document.asset.assigned", id, null, JsonSerializer.Serialize(request.ActivoCodigos), request.Reason ?? "Asociacion de activos", cancellationToken);
+
+        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+    }
+
+    public async Task<DocumentResponse?> UnassignAssetAsync(
+        string id,
+        string assetCode,
+        UnassignDocumentAssetRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
+    {
+        EnsureCanManage(user);
+        DomainGuard.AgainstEmpty(request.Reason, nameof(request.Reason));
+        var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
+        if (document is null)
+        {
+            return null;
+        }
+
+        EnsureCanViewDocument(document, user);
+        var link = document.Assets.FirstOrDefault(item => item.IsActive && SameCode(item.Asset.Code, assetCode));
+        if (link is null)
+        {
+            return ToDocumentResponse(document);
+        }
+
+        link.IsActive = false;
+        link.UnassignedAtUtc = DateTimeOffset.UtcNow;
+        link.UnassignedByUserId = user.UserId;
+        link.UnassignedReason = request.Reason;
+        link.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await RecordAuditAsync(user, "document.asset.unassigned", id, assetCode, null, request.Reason, cancellationToken);
+
+        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
     }
 
     public async Task<DocumentResponse?> AnnulAsync(
@@ -409,33 +486,29 @@ public sealed class DocumentService : IDocumentService
     {
         EnsureCanManage(user);
         DomainGuard.AgainstEmpty(request.Reason, nameof(request.Reason));
-        var context = await LoadContextAsync(cancellationToken);
-        var rows = context.DocumentRows.ToList();
-        var index = FindDocumentIndex(rows, id);
-        if (index < 0)
+        var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
+        if (document is null)
         {
             return null;
         }
 
-        var existing = rows[index];
-        var document = ToDocumentResponse(existing, context.TypesByCode);
-        EnsureCanViewDocument(document, context, user);
+        EnsureCanViewDocument(document, user);
+        var previous = Serialize(document);
+        document.Status = DocumentLifecycleStatus.Anulado.ToString();
+        document.IsAnnulled = true;
+        document.IsCurrent = false;
+        document.IsHistorical = true;
+        document.AnnulledByUserId = user.UserId;
+        document.AnnulledAtUtc = DateTimeOffset.UtcNow;
+        document.AnnulReason = request.Reason;
+        document.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        document.UpdatedByUserId = user.UserId;
+        document.ChangeReason = request.Reason;
 
-        var updated = WithValues(existing, new Dictionary<string, string?>
-        {
-            ["Estado"] = DocumentLifecycleStatus.Anulado.ToString(),
-            ["AnuladoPor"] = user.UserId,
-            ["AnuladoEnUtc"] = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
-            ["MotivoAnulacion"] = request.Reason,
-            ["EsHistorico"] = "true",
-            ["MotivoCambio"] = request.Reason
-        });
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await RecordAuditAsync(user, "document.annulled", id, previous, Serialize(document), request.Reason, cancellationToken);
 
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(DocumentsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "document.annulled", id, Serialize(existing), Serialize(updated), request.Reason, cancellationToken);
-
-        return ToDocumentResponse(updated, context.TypesByCode);
+        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
     }
 
     public async Task<IReadOnlyCollection<DocumentResponse>> GetExpiredAsync(
@@ -460,35 +533,30 @@ public sealed class DocumentService : IDocumentService
         CancellationToken cancellationToken)
     {
         EnsureCanViewFaenaFilter(faenaCodigo, user);
-        var context = await LoadContextAsync(cancellationToken);
-        var documents = context.DocumentRows
-            .Select(row => ToDocumentResponse(row, context.TypesByCode))
-            .Where(document => !document.EsHistorico && document.Estado is not (DocumentLifecycleStatus.Reemplazado or DocumentLifecycleStatus.Anulado))
-            .ToArray();
+        var types = await _dbContext.DocumentTypes.AsNoTracking().Where(type => type.IsActive).ToArrayAsync(cancellationToken);
+        var assets = await _dbContext.Assets.AsNoTracking().Include(asset => asset.Faena).ToArrayAsync(cancellationToken);
+        var documents = await BaseDocumentsQuery().ToArrayAsync(cancellationToken);
+        var responses = documents.Select(ToDocumentResponse).Where(item => !item.EsHistorico).ToArray();
+
         var rows = new List<DocumentMatrixRow>();
-        var activeTypes = context.TypesByCode.Values.Where(type => type.Activo).ToArray();
-
-        foreach (var asset in context.AssetRows)
+        foreach (var asset in assets.Where(asset => CanViewFaena(asset.Faena.Code, user) && (string.IsNullOrWhiteSpace(faenaCodigo) || SameCode(asset.Faena.Code, faenaCodigo))))
         {
-            var assetCode = asset.GetValue("Codigo")?.Trim();
-            var assetFaena = asset.GetValue("FaenaCodigo")?.Trim();
-            if (string.IsNullOrWhiteSpace(assetCode) ||
-                !CanViewFaena(assetFaena, user) ||
-                (!string.IsNullOrWhiteSpace(faenaCodigo) && !string.Equals(assetFaena, faenaCodigo, StringComparison.OrdinalIgnoreCase)))
+            foreach (var type in types.Where(type => AppliesTo(type, DocumentEntityType.Activo)))
             {
-                continue;
-            }
+                var document = responses
+                    .Where(item => item.EntidadTipo == DocumentEntityType.Activo &&
+                                   (item.EntidadCodigos?.Contains(asset.Code, StringComparer.OrdinalIgnoreCase) ?? SameCode(item.EntidadCodigo, asset.Code)) &&
+                                   SameCode(item.TipoDocumento, type.Code))
+                    .OrderByDescending(item => item.FechaCargaUtc)
+                    .FirstOrDefault();
 
-            foreach (var type in activeTypes.Where(type => AppliesTo(type, DocumentEntityType.Activo)))
-            {
-                var document = LatestFor(documents, DocumentEntityType.Activo, assetCode, type.Codigo);
                 rows.Add(new DocumentMatrixRow(
                     DocumentEntityType.Activo,
-                    assetCode,
-                    asset.GetValue("Nombre")?.Trim() ?? assetCode,
-                    type.Codigo,
-                    type.Obligatorio,
-                    type.BloqueaDisponibilidad,
+                    asset.Code,
+                    asset.Name,
+                    type.Code,
+                    type.IsMandatory,
+                    type.BlocksAvailability,
                     document?.Estado ?? DocumentLifecycleStatus.PendienteCarga,
                     document?.DocumentoId,
                     document?.FechaVencimiento,
@@ -496,38 +564,7 @@ public sealed class DocumentService : IDocumentService
             }
         }
 
-        foreach (var faena in context.FaenaRows)
-        {
-            var code = faena.GetValue("Codigo")?.Trim();
-            if (string.IsNullOrWhiteSpace(code) ||
-                !CanViewFaena(code, user) ||
-                (!string.IsNullOrWhiteSpace(faenaCodigo) && !string.Equals(code, faenaCodigo, StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
-
-            foreach (var type in activeTypes.Where(type => AppliesTo(type, DocumentEntityType.Faena)))
-            {
-                var document = LatestFor(documents, DocumentEntityType.Faena, code, type.Codigo);
-                rows.Add(new DocumentMatrixRow(
-                    DocumentEntityType.Faena,
-                    code,
-                    faena.GetValue("Nombre")?.Trim() ?? code,
-                    type.Codigo,
-                    type.Obligatorio,
-                    type.BloqueaDisponibilidad,
-                    document?.Estado ?? DocumentLifecycleStatus.PendienteCarga,
-                    document?.DocumentoId,
-                    document?.FechaVencimiento,
-                    document?.BloqueaDisponibilidadActual ?? false));
-            }
-        }
-
-        return rows
-            .OrderBy(row => row.EntidadTipo)
-            .ThenBy(row => row.EntidadCodigo, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(row => row.TipoDocumento, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        return rows;
     }
 
     public async Task<DocumentDashboardSummary> GetSummaryAsync(
@@ -535,226 +572,297 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        var documents = await ListAsync(new DocumentQuery(FaenaCodigo: faenaCodigo), user, cancellationToken);
+        var documents = await ListAsync(new DocumentQuery(FaenaCodigo: faenaCodigo, IncludeHistorical: true), user, cancellationToken);
         return new DocumentDashboardSummary(
             documents.Count,
-            documents.Count(document => document.Estado == DocumentLifecycleStatus.Vigente),
-            documents.Count(document => document.Estado == DocumentLifecycleStatus.PorVencer),
-            documents.Count(document => document.Estado == DocumentLifecycleStatus.Vencido),
-            documents.Count(document => document.Estado == DocumentLifecycleStatus.PendienteCarga),
-            documents.Count(document => document.Estado == DocumentLifecycleStatus.PendienteValidacion),
-            documents.Count(document => document.Estado == DocumentLifecycleStatus.Rechazado),
-            documents.Count(document => document.Estado == DocumentLifecycleStatus.Reemplazado),
-            documents.Count(document => document.Estado == DocumentLifecycleStatus.Anulado),
-            documents.Count(document => document.BloqueaDisponibilidadActual));
+            documents.Count(item => item.Estado == DocumentLifecycleStatus.Vigente),
+            documents.Count(item => item.Estado == DocumentLifecycleStatus.PorVencer),
+            documents.Count(item => item.Estado == DocumentLifecycleStatus.Vencido),
+            documents.Count(item => item.Estado == DocumentLifecycleStatus.PendienteCarga),
+            documents.Count(item => item.Estado == DocumentLifecycleStatus.PendienteValidacion),
+            documents.Count(item => item.Estado == DocumentLifecycleStatus.Rechazado),
+            documents.Count(item => item.Estado == DocumentLifecycleStatus.Reemplazado),
+            documents.Count(item => item.Estado == DocumentLifecycleStatus.Anulado),
+            documents.Count(item => item.BloqueaDisponibilidadActual));
     }
 
-    private async Task<DocumentContext> LoadContextAsync(CancellationToken cancellationToken)
+    private IQueryable<DocumentEntity> BaseDocumentsQuery()
     {
-        var typeRows = await _dataProvider.ReadRowsAsync(DocumentTypesSchema, cancellationToken);
-        var types = typeRows
-            .Select(ToTypeResponse)
-            .Where(type => !string.IsNullOrWhiteSpace(type.Codigo))
-            .ToDictionary(type => type.Codigo, type => type, StringComparer.OrdinalIgnoreCase);
-
-        return new DocumentContext(
-            types,
-            await _dataProvider.ReadRowsAsync(DocumentsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(FaenasSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken));
+        return _dbContext.Documents
+            .AsSplitQuery()
+            .Include(document => document.DocumentType)
+            .Include(document => document.Versions).ThenInclude(version => version.File)
+            .Include(document => document.Assets).ThenInclude(link => link.Asset).ThenInclude(asset => asset.Faena)
+            .Include(document => document.Faenas).ThenInclude(link => link.Faena);
     }
 
-    private async Task ValidateEntityAsync(
-        DocumentEntityType entityType,
-        string entityCode,
+    private async Task<DocumentEntity?> FindDocumentAsync(string id, bool tracking, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(id, out var documentId))
+        {
+            return null;
+        }
+
+        var query = BaseDocumentsQuery();
+        if (!tracking)
+        {
+            query = query.AsNoTracking();
+        }
+
+        return await query.FirstOrDefaultAsync(document => document.Id == documentId, cancellationToken);
+    }
+
+    private async Task<DocumentTypeEntity> ResolveActiveTypeAsync(string code, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeCode(code);
+        var type = await _dbContext.DocumentTypes.FirstOrDefaultAsync(item => item.Code == normalized, cancellationToken);
+        if (type is null)
+        {
+            throw new DomainException($"No existe el tipo documental '{code}'.");
+        }
+
+        if (!type.IsActive)
+        {
+            throw new DomainException($"El tipo documental '{code}' esta inactivo y no puede asignarse a nuevos documentos.");
+        }
+
+        return type;
+    }
+
+    private async Task AssignInitialEntityAsync(
+        DocumentEntity document,
+        CreateDocumentRequest request,
         UserAccessContext user,
-        DocumentContext context,
+        DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        await Task.CompletedTask;
-        var faena = ResolveEntityFaena(entityType, entityCode, context);
+        if (request.EntidadTipo == DocumentEntityType.OT)
+        {
+            throw new DomainException("La asociacion documental a OT queda preparada, pero requiere la tabla PostgreSQL de ordenes de trabajo para crear una FK real.");
+        }
+
+        var entityCodes = (request.EntidadCodigos is { Count: > 0 } ? request.EntidadCodigos : [request.EntidadCodigo])
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (request.EntidadTipo == DocumentEntityType.Activo)
+        {
+            foreach (var assetCode in entityCodes)
+            {
+                var asset = await ResolveAssetAsync(assetCode, user, cancellationToken);
+                _dbContext.DocumentAssets.Add(new DocumentAssetEntity
+                {
+                    Id = Guid.NewGuid(),
+                    DocumentId = document.Id,
+                    Document = document,
+                    AssetId = asset.Id,
+                    Asset = asset,
+                    IsActive = true,
+                    AssignedAtUtc = now,
+                    AssignedByUserId = user.UserId
+                });
+            }
+
+            return;
+        }
+
+        foreach (var faenaCode in entityCodes)
+        {
+            var faena = await ResolveFaenaAsync(faenaCode, user, cancellationToken);
+            _dbContext.DocumentFaenas.Add(new DocumentFaenaEntity
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = document.Id,
+                Document = document,
+                FaenaId = faena.Id,
+                Faena = faena,
+                IsActive = true,
+                AssignedAtUtc = now,
+                AssignedByUserId = user.UserId
+            });
+        }
+    }
+
+    private async Task<AssetEntity> ResolveAssetAsync(string code, UserAccessContext user, CancellationToken cancellationToken)
+    {
+        var normalized = code.Trim();
+        var asset = await _dbContext.Assets
+            .Include(item => item.Faena)
+            .FirstOrDefaultAsync(item => item.Code == normalized, cancellationToken);
+        if (asset is null)
+        {
+            throw new DomainException($"No existe el activo '{code}'.");
+        }
+
+        if (!CanViewFaena(asset.Faena.Code, user))
+        {
+            throw new UnauthorizedAccessException("El usuario no tiene acceso al activo solicitado.");
+        }
+
+        return asset;
+    }
+
+    private async Task<FaenaEntity> ResolveFaenaAsync(string code, UserAccessContext user, CancellationToken cancellationToken)
+    {
+        var normalized = code.Trim();
+        var faena = await _dbContext.Faenas.FirstOrDefaultAsync(item => item.Code == normalized, cancellationToken);
         if (faena is null)
         {
-            throw new DomainException($"La entidad documental {entityType}/{entityCode} no existe.");
+            throw new DomainException($"No existe la faena '{code}'.");
         }
 
-        if (!CanViewFaena(faena, user))
+        if (!CanViewFaena(faena.Code, user))
         {
-            throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena de la entidad documental.");
+            throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena solicitada.");
         }
+
+        return faena;
     }
 
-    private static DocumentTypeResponse ToTypeResponse(DataRow row)
-    {
-        var alertDays = ParseInt(row.GetValue("PlazoAlertaDias"), 30);
-        return new DocumentTypeResponse(
-            row.GetValue("Codigo")?.Trim() ?? string.Empty,
-            row.GetValue("Nombre")?.Trim() ?? row.GetValue("Codigo")?.Trim() ?? string.Empty,
-            ParseEntityTypeNullable(row.GetValue("AplicaA")),
-            ParseBool(row.GetValue("Obligatorio")),
-            ParseBool(row.GetValue("Critico")),
-            ParseBool(row.GetValue("BloqueaDisponibilidad")),
-            Math.Max(0, alertDays),
-            SplitList(row.GetValue("RolesResponsables")),
-            ParseBool(row.GetValue("RequierePdfAlerta")),
-            EmptyToNull(row.GetValue("PlantillaHtmlCodigo")),
-            ParseBool(row.GetValue("Activo"), defaultValue: true));
-    }
-
-    private static DataRow TypeRow(
-        string code,
-        string name,
-        DocumentEntityType? appliesTo,
-        bool mandatory,
-        bool critical,
-        bool blocksAvailability,
-        int alertDays,
-        IReadOnlyCollection<string> responsibleRoles,
-        bool requiresAlertPdf,
-        string? htmlTemplateCode,
-        bool active)
-    {
-        return new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Codigo"] = code.Trim(),
-            ["Nombre"] = name.Trim(),
-            ["AplicaA"] = appliesTo?.ToString(),
-            ["Obligatorio"] = mandatory ? "true" : "false",
-            ["Critico"] = critical ? "true" : "false",
-            ["BloqueaDisponibilidad"] = blocksAvailability ? "true" : "false",
-            ["PlazoAlertaDias"] = Math.Max(0, alertDays).ToString(CultureInfo.InvariantCulture),
-            ["RolesResponsables"] = JoinList(responsibleRoles),
-            ["RequierePdfAlerta"] = requiresAlertPdf ? "true" : "false",
-            ["PlantillaHtmlCodigo"] = EmptyToNull(htmlTemplateCode),
-            ["Activo"] = active ? "true" : "false"
-        });
-    }
-
-    private static DocumentResponse ToDocumentResponse(
-        DataRow row,
-        IReadOnlyDictionary<string, DocumentTypeResponse> typesByCode)
-    {
-        var typeCode = row.GetValue("TipoDocumento")?.Trim() ?? string.Empty;
-        typesByCode.TryGetValue(typeCode, out var type);
-        var rawStatus = ParseLifecycle(row.GetValue("Estado"));
-        var expiresOn = ParseDate(row.GetValue("FechaVencimiento"));
-        var issueDate = ParseDate(row.GetValue("FechaEmision"));
-        var alertDays = type?.PlazoAlertaDias ?? 30;
-        var critical = ParseBool(row.GetValue("Critico"), type?.Critico ?? false);
-        var mandatory = ParseBool(row.GetValue("Obligatorio"), type?.Obligatorio ?? false);
-        var blocksAvailability = ParseBool(row.GetValue("BloqueaDisponibilidad"), type?.BloqueaDisponibilidad ?? false);
-        var historical = ParseBool(row.GetValue("EsHistorico"));
-        var effectiveStatus = ResolveStatus(rawStatus, expiresOn, alertDays, row);
-        var blocksNow = !historical &&
-                        effectiveStatus == DocumentLifecycleStatus.Vencido &&
-                        (critical || blocksAvailability) &&
-                        rawStatus is not (DocumentLifecycleStatus.Anulado or DocumentLifecycleStatus.Reemplazado);
-
-        return new DocumentResponse(
-            EnsureId(row),
-            ParseEntityType(row.GetValue("EntidadTipo")),
-            row.GetValue("EntidadCodigo")?.Trim() ?? string.Empty,
-            typeCode,
-            effectiveStatus,
-            issueDate,
-            expiresOn,
-            EmptyToNull(row.GetValue("ArchivoKey")),
-            EmptyToNull(row.GetValue("SharePointUrl")),
-            critical,
-            mandatory,
-            blocksAvailability,
-            historical,
-            ParseBool(row.GetValue("FechaVencimientoValidada")),
-            EmptyToNull(row.GetValue("ValidadoPor")),
-            ParseDateTime(row.GetValue("ValidadoEnUtc")),
-            EmptyToNull(row.GetValue("RechazadoPor")),
-            ParseDateTime(row.GetValue("RechazadoEnUtc")),
-            EmptyToNull(row.GetValue("MotivoRechazo")),
-            EmptyToNull(row.GetValue("ReemplazaDocumentoId")),
-            EmptyToNull(row.GetValue("ReemplazadoPorDocumentoId")),
-            EmptyToNull(row.GetValue("AnuladoPor")),
-            ParseDateTime(row.GetValue("AnuladoEnUtc")),
-            EmptyToNull(row.GetValue("MotivoAnulacion")),
-            ParseDateTime(row.GetValue("FechaCargaUtc")) ?? DateTimeOffset.UtcNow,
-            row.GetValue("CargadoPor")?.Trim() ?? "system",
-            CalculateDaysToExpire(expiresOn),
-            blocksNow);
-    }
-
-    private static DataRow DocumentRow(
-        string id,
-        DocumentEntityType entityType,
-        string entityCode,
-        string typeCode,
-        DocumentLifecycleStatus status,
-        DateOnly? issueDate,
-        DateOnly? expiresOn,
+    private async Task AddNewVersionAsync(
+        DocumentEntity document,
         string? fileKey,
         string? sharePointUrl,
-        bool critical,
-        bool mandatory,
-        bool blocksAvailability,
-        string? validatedBy,
-        DateTimeOffset? validatedAt,
-        string? rejectedBy,
-        DateTimeOffset? rejectedAt,
-        string? rejectReason,
-        string? replacesId,
-        string? replacedById,
-        bool historical,
-        string? annulledBy,
-        DateTimeOffset? annulledAt,
-        string? annulReason,
-        DateTimeOffset loadedAt,
-        string loadedBy,
-        string? changeReason,
-        bool expiryValidated)
+        string? originalName,
+        string? mimeType,
+        long? sizeBytes,
+        string? checksum,
+        string? observations,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
     {
-        return new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        foreach (var version in document.Versions.Where(version => version.IsCurrent))
         {
-            ["DocumentoId"] = id,
-            ["EntidadTipo"] = entityType.ToString(),
-            ["EntidadCodigo"] = entityCode.Trim(),
-            ["TipoDocumento"] = typeCode.Trim(),
-            ["Estado"] = status.ToString(),
-            ["FechaEmision"] = FormatDate(issueDate),
-            ["FechaVencimiento"] = FormatDate(expiresOn),
-            ["ArchivoKey"] = EmptyToNull(fileKey),
-            ["SharePointUrl"] = EmptyToNull(sharePointUrl),
-            ["Critico"] = critical ? "true" : "false",
-            ["Obligatorio"] = mandatory ? "true" : "false",
-            ["BloqueaDisponibilidad"] = blocksAvailability ? "true" : "false",
-            ["ValidadoPor"] = EmptyToNull(validatedBy),
-            ["ValidadoEnUtc"] = FormatDateTime(validatedAt),
-            ["RechazadoPor"] = EmptyToNull(rejectedBy),
-            ["RechazadoEnUtc"] = FormatDateTime(rejectedAt),
-            ["MotivoRechazo"] = EmptyToNull(rejectReason),
-            ["ReemplazaDocumentoId"] = EmptyToNull(replacesId),
-            ["ReemplazadoPorDocumentoId"] = EmptyToNull(replacedById),
-            ["EsHistorico"] = historical ? "true" : "false",
-            ["AnuladoPor"] = EmptyToNull(annulledBy),
-            ["AnuladoEnUtc"] = FormatDateTime(annulledAt),
-            ["MotivoAnulacion"] = EmptyToNull(annulReason),
-            ["FechaCargaUtc"] = loadedAt.UtcDateTime.ToString("O"),
-            ["CargadoPor"] = loadedBy,
-            ["MotivoCambio"] = EmptyToNull(changeReason),
-            ["FechaVencimientoValidada"] = expiryValidated ? "true" : "false"
+            version.IsCurrent = false;
+            version.Status = "historico";
+            version.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+
+        var file = CreateFile(fileKey, sharePointUrl, originalName, mimeType, sizeBytes, checksum, user);
+        var nextVersion = document.Versions.Count == 0 ? 1 : document.Versions.Max(version => version.VersionNumber) + 1;
+        _dbContext.Files.Add(file);
+        _dbContext.DocumentVersions.Add(new DocumentVersionEntity
+        {
+            Id = Guid.NewGuid(),
+            DocumentId = document.Id,
+            VersionNumber = nextVersion,
+            VersionCode = nextVersion.ToString(CultureInfo.InvariantCulture),
+            FileId = file.Id,
+            File = file,
+            UploadedAtUtc = DateTimeOffset.UtcNow,
+            UploadedByUserId = user.UserId,
+            Observations = observations,
+            IsCurrent = true,
+            Status = "vigente"
         });
+
+        await RecordAuditAsync(user, "document.version.created", document.Id.ToString("D"), null, Serialize(file), observations ?? "Nueva version documental", cancellationToken);
+    }
+
+    private static FileMetadataEntity CreateFile(
+        string? fileKey,
+        string? sharePointUrl,
+        string? originalName,
+        string? mimeType,
+        long? sizeBytes,
+        string? checksum,
+        UserAccessContext user)
+    {
+        var key = EmptyToNull(fileKey) ?? EmptyToNull(sharePointUrl) ?? Guid.NewGuid().ToString("N");
+        var uri = EmptyToNull(sharePointUrl) ?? key;
+        return new FileMetadataEntity
+        {
+            Id = Guid.NewGuid(),
+            FileKey = key,
+            FileName = EmptyToNull(originalName) ?? Path.GetFileName(key) ?? key,
+            Provider = uri.StartsWith("http", StringComparison.OrdinalIgnoreCase) || uri.StartsWith("sharepoint:", StringComparison.OrdinalIgnoreCase)
+                ? "SharePoint"
+                : "Local",
+            LogicalUri = uri,
+            LogicalPath = key,
+            MimeType = EmptyToNull(mimeType),
+            SizeBytes = sizeBytes,
+            Checksum = EmptyToNull(checksum),
+            Status = "vigente",
+            AuthorUserId = user.UserId,
+            MetadataJson = JsonSerializer.Serialize(new { binaryStoredInPostgreSql = false })
+        };
+    }
+
+    private static DocumentTypeResponse ToTypeResponse(DocumentTypeEntity entity)
+    {
+        return new DocumentTypeResponse(
+            entity.Code,
+            entity.Name,
+            ParseEntityTypeNullable(entity.AppliesTo),
+            entity.IsMandatory,
+            entity.IsCritical,
+            entity.BlocksAvailability,
+            entity.AlertDays,
+            SplitList(entity.ResponsibleRoles),
+            entity.RequiresAlertPdf,
+            entity.HtmlTemplateCode,
+            entity.IsActive);
+    }
+
+    private static DocumentResponse ToDocumentResponse(DocumentEntity entity)
+    {
+        var currentVersion = entity.Versions.OrderByDescending(version => version.IsCurrent).ThenByDescending(version => version.VersionNumber).FirstOrDefault();
+        var activeAssets = entity.Assets.Where(link => link.IsActive).Select(link => link.Asset.Code).OrderBy(code => code, StringComparer.OrdinalIgnoreCase).ToArray();
+        var activeFaenas = entity.Faenas.Where(link => link.IsActive).Select(link => link.Faena.Code).OrderBy(code => code, StringComparer.OrdinalIgnoreCase).ToArray();
+        var entityType = activeAssets.Length > 0 ? DocumentEntityType.Activo : DocumentEntityType.Faena;
+        var entityCodes = activeAssets.Length > 0 ? activeAssets : activeFaenas;
+        var rawStatus = ParseLifecycle(entity.Status);
+        var effectiveStatus = ResolveStatus(rawStatus, entity.ExpiresOn, entity.DocumentType.AlertDays, currentVersion is not null);
+        var blocksNow = entity.BlocksAvailability && effectiveStatus == DocumentLifecycleStatus.Vencido;
+
+        return new DocumentResponse(
+            entity.Id.ToString("D"),
+            entityType,
+            entityCodes.FirstOrDefault() ?? string.Empty,
+            entity.DocumentType.Code,
+            effectiveStatus,
+            entity.IssueDate,
+            entity.ExpiresOn,
+            currentVersion?.File.FileKey,
+            currentVersion?.File.LogicalUri,
+            entity.IsCritical,
+            entity.IsMandatory,
+            entity.BlocksAvailability,
+            entity.IsHistorical,
+            entity.ExpiryDateValidated,
+            entity.ValidatedByUserId,
+            entity.ValidatedAtUtc,
+            entity.RejectedByUserId,
+            entity.RejectedAtUtc,
+            entity.RejectReason,
+            entity.ReplacesDocumentId?.ToString("D"),
+            entity.ReplacedByDocumentId?.ToString("D"),
+            entity.AnnulledByUserId,
+            entity.AnnulledAtUtc,
+            entity.AnnulReason,
+            currentVersion?.UploadedAtUtc ?? entity.CreatedAtUtc,
+            currentVersion?.UploadedByUserId ?? entity.CreatedByUserId,
+            CalculateDaysToExpire(entity.ExpiresOn),
+            blocksNow,
+            entityCodes,
+            currentVersion?.VersionNumber,
+            currentVersion?.FileId.ToString("D"));
     }
 
     private static DocumentLifecycleStatus ResolveStatus(
         DocumentLifecycleStatus rawStatus,
         DateOnly? expiresOn,
         int alertDays,
-        DataRow row)
+        bool hasCurrentFile)
     {
         if (rawStatus is DocumentLifecycleStatus.Rechazado or DocumentLifecycleStatus.Reemplazado or DocumentLifecycleStatus.Anulado)
         {
             return rawStatus;
         }
 
-        if (!HasFile(row.GetValue("ArchivoKey"), row.GetValue("SharePointUrl")))
+        if (!hasCurrentFile)
         {
             return DocumentLifecycleStatus.PendienteCarga;
         }
@@ -783,11 +891,39 @@ public sealed class DocumentService : IDocumentService
         return DocumentLifecycleStatus.Vigente;
     }
 
-    private static bool Matches(
-        DocumentResponse document,
-        DocumentQuery query,
-        DocumentContext context,
-        UserAccessContext user)
+    private static bool MatchesEntity(DocumentEntity document, DocumentQuery query, UserAccessContext user)
+    {
+        var activeAssets = document.Assets.Where(link => link.IsActive).ToArray();
+        var activeFaenas = document.Faenas.Where(link => link.IsActive).ToArray();
+        var faenaCodes = activeAssets
+            .Select(link => link.Asset.Faena.Code)
+            .Concat(activeFaenas.Select(link => link.Faena.Code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (faenaCodes.Length > 0 && !faenaCodes.Any(code => CanViewFaena(code, user)))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.FaenaCodigo) && !faenaCodes.Any(code => SameCode(code, query.FaenaCodigo)))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.EntidadCodigo))
+        {
+            var entityCodes = activeAssets.Select(link => link.Asset.Code).Concat(activeFaenas.Select(link => link.Faena.Code));
+            if (!entityCodes.Any(code => SameCode(code, query.EntidadCodigo)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool MatchesResponse(DocumentResponse document, DocumentQuery query)
     {
         if (!query.IncludeHistorical && document.EsHistorico)
         {
@@ -799,30 +935,18 @@ public sealed class DocumentService : IDocumentService
             return false;
         }
 
-        if (!CanViewDocument(document, context, user))
-        {
-            return false;
-        }
-
         if (query.EntidadTipo.HasValue && document.EntidadTipo != query.EntidadTipo.Value)
         {
             return false;
         }
 
         if (!string.IsNullOrWhiteSpace(query.EntidadCodigo) &&
-            !string.Equals(document.EntidadCodigo, query.EntidadCodigo, StringComparison.OrdinalIgnoreCase))
+            !(document.EntidadCodigos?.Contains(query.EntidadCodigo, StringComparer.OrdinalIgnoreCase) ?? SameCode(document.EntidadCodigo, query.EntidadCodigo)))
         {
             return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(query.TipoDocumento) &&
-            !string.Equals(document.TipoDocumento, query.TipoDocumento, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.FaenaCodigo) &&
-            !string.Equals(ResolveEntityFaena(document.EntidadTipo, document.EntidadCodigo, context), query.FaenaCodigo, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(query.TipoDocumento) && !SameCode(document.TipoDocumento, query.TipoDocumento))
         {
             return false;
         }
@@ -830,50 +954,20 @@ public sealed class DocumentService : IDocumentService
         return !query.Estado.HasValue || document.Estado == query.Estado.Value;
     }
 
-    private static string? ResolveEntityFaena(
-        DocumentEntityType entityType,
-        string entityCode,
-        DocumentContext context)
+    private static bool AppliesTo(DocumentTypeEntity type, DocumentEntityType entityType)
     {
-        if (entityType == DocumentEntityType.Faena)
-        {
-            return context.FaenaRows.Any(row => SameCode(row.GetValue("Codigo"), entityCode)) ? entityCode : null;
-        }
-
-        if (entityType == DocumentEntityType.Activo)
-        {
-            return context.AssetRows.FirstOrDefault(row => SameCode(row.GetValue("Codigo"), entityCode))?.GetValue("FaenaCodigo");
-        }
-
-        var workOrder = context.WorkOrderRows.FirstOrDefault(row => SameCode(row.GetValue("NumeroOT"), entityCode));
-        var assetCode = workOrder?.GetValue("ActivoCodigo");
-        return string.IsNullOrWhiteSpace(assetCode)
-            ? null
-            : context.AssetRows.FirstOrDefault(row => SameCode(row.GetValue("Codigo"), assetCode))?.GetValue("FaenaCodigo");
+        return string.IsNullOrWhiteSpace(type.AppliesTo) || ParseEntityTypeNullable(type.AppliesTo) == entityType;
     }
 
-    private static string ResolveEntityName(
-        DocumentEntityType entityType,
-        string entityCode,
-        DocumentContext context)
+    private static void EnsureCanViewDocument(DocumentEntity document, UserAccessContext user)
     {
-        return entityType switch
-        {
-            DocumentEntityType.Activo => context.AssetRows.FirstOrDefault(row => SameCode(row.GetValue("Codigo"), entityCode))?.GetValue("Nombre") ?? entityCode,
-            DocumentEntityType.Faena => context.FaenaRows.FirstOrDefault(row => SameCode(row.GetValue("Codigo"), entityCode))?.GetValue("Nombre") ?? entityCode,
-            _ => entityCode
-        };
-    }
+        var faenaCodes = document.Assets.Where(link => link.IsActive)
+            .Select(link => link.Asset.Faena.Code)
+            .Concat(document.Faenas.Where(link => link.IsActive).Select(link => link.Faena.Code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
-    private static bool CanViewDocument(DocumentResponse document, DocumentContext context, UserAccessContext user)
-    {
-        var faena = ResolveEntityFaena(document.EntidadTipo, document.EntidadCodigo, context);
-        return CanViewFaena(faena, user);
-    }
-
-    private void EnsureCanViewDocument(DocumentResponse document, DocumentContext context, UserAccessContext user)
-    {
-        if (!CanViewDocument(document, context, user))
+        if (faenaCodes.Length > 0 && !faenaCodes.Any(code => CanViewFaena(code, user)))
         {
             throw new UnauthorizedAccessException("El usuario no tiene acceso al documento solicitado.");
         }
@@ -903,10 +997,15 @@ public sealed class DocumentService : IDocumentService
         }
     }
 
-    private void EnsureExpiryCanChange(
-        DocumentResponse document,
-        DateOnly? nextExpiry,
-        UserAccessContext user)
+    private void EnsureCanViewFaenaFilter(string? faenaCode, UserAccessContext user)
+    {
+        if (!string.IsNullOrWhiteSpace(faenaCode) && !CanViewFaena(faenaCode, user))
+        {
+            throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena solicitada.");
+        }
+    }
+
+    private void EnsureExpiryCanChange(DocumentResponse document, DateOnly? nextExpiry, UserAccessContext user)
     {
         if (!document.FechaVencimientoValidada || document.FechaVencimiento == nextExpiry)
         {
@@ -924,42 +1023,6 @@ public sealed class DocumentService : IDocumentService
         if (document.Estado is DocumentLifecycleStatus.Reemplazado or DocumentLifecycleStatus.Anulado)
         {
             throw new DomainException("No se puede modificar un documento reemplazado o anulado.");
-        }
-    }
-
-    private static DocumentTypeResponse? ResolveType(
-        IReadOnlyDictionary<string, DocumentTypeResponse> types,
-        string typeCode)
-    {
-        return types.TryGetValue(typeCode, out var type) ? type : null;
-    }
-
-    private static DocumentResponse? LatestFor(
-        IReadOnlyCollection<DocumentResponse> documents,
-        DocumentEntityType entityType,
-        string entityCode,
-        string typeCode)
-    {
-        return documents
-            .Where(document =>
-                document.EntidadTipo == entityType &&
-                SameCode(document.EntidadCodigo, entityCode) &&
-                SameCode(document.TipoDocumento, typeCode) &&
-                !document.EsHistorico)
-            .OrderByDescending(document => document.FechaCargaUtc)
-            .FirstOrDefault();
-    }
-
-    private static bool AppliesTo(DocumentTypeResponse type, DocumentEntityType entityType)
-    {
-        return !type.AplicaA.HasValue || type.AplicaA.Value == entityType;
-    }
-
-    private void EnsureCanViewFaenaFilter(string? faenaCode, UserAccessContext user)
-    {
-        if (!string.IsNullOrWhiteSpace(faenaCode) && !CanViewFaena(faenaCode, user))
-        {
-            throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena solicitada.");
         }
     }
 
@@ -997,66 +1060,17 @@ public sealed class DocumentService : IDocumentService
             Detail: reason), cancellationToken);
     }
 
-    private static DataRow WithValues(DataRow row, IReadOnlyDictionary<string, string?> nextValues)
+    private static string Serialize(object entity)
     {
-        var values = new Dictionary<string, string?>(row.Values, StringComparer.OrdinalIgnoreCase);
-        foreach (var item in nextValues)
+        return JsonSerializer.Serialize(entity, new JsonSerializerOptions
         {
-            values[item.Key] = item.Value;
-        }
-
-        return new DataRow(values);
+            ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles
+        });
     }
 
-    private static DataRow? FindDocumentById(IReadOnlyCollection<DataRow> rows, string id)
+    private static string NormalizeCode(string value)
     {
-        return rows.FirstOrDefault(row => SameCode(EnsureId(row), id));
-    }
-
-    private static int FindDocumentIndex(IReadOnlyList<DataRow> rows, string id)
-    {
-        for (var index = 0; index < rows.Count; index++)
-        {
-            if (SameCode(EnsureId(rows[index]), id))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static int FindIndex(IReadOnlyList<DataRow> rows, string columnName, string value)
-    {
-        for (var index = 0; index < rows.Count; index++)
-        {
-            if (SameCode(rows[index].GetValue(columnName), value))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static string EnsureId(DataRow row)
-    {
-        var id = row.GetValue("DocumentoId")?.Trim();
-        if (!string.IsNullOrWhiteSpace(id))
-        {
-            return id;
-        }
-
-        return string.Join(
-            "-",
-            row.GetValue("EntidadTipo"),
-            row.GetValue("EntidadCodigo"),
-            row.GetValue("TipoDocumento")).Trim('-');
-    }
-
-    private static string Serialize(DataRow row)
-    {
-        return JsonSerializer.Serialize(row.Values);
+        return value.Trim().ToUpperInvariant();
     }
 
     private static bool SameCode(string? left, string? right)
@@ -1109,66 +1123,11 @@ public sealed class DocumentService : IDocumentService
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
-    private static string? FormatDate(DateOnly? value)
-    {
-        return value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-    }
-
-    private static string? FormatDateTime(DateTimeOffset? value)
-    {
-        return value?.UtcDateTime.ToString("O");
-    }
-
-    private static DateOnly? ParseDate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        return DateOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var result)
-            ? result
-            : null;
-    }
-
-    private static DateTimeOffset? ParseDateTime(string? value)
-    {
-        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var result)
-            ? result
-            : null;
-    }
-
-    private static bool ParseBool(string? value, bool defaultValue = false)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return defaultValue;
-        }
-
-        return value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) ||
-               value.Trim().Equals("si", StringComparison.OrdinalIgnoreCase) ||
-               value.Trim().Equals("1", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static int ParseInt(string? value, int defaultValue)
-    {
-        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result)
-            ? result
-            : defaultValue;
-    }
-
     private static int? CalculateDaysToExpire(DateOnly? expiresOn)
     {
         return expiresOn.HasValue
             ? expiresOn.Value.DayNumber - DateOnly.FromDateTime(DateTime.UtcNow).DayNumber
             : null;
-    }
-
-    private static DocumentEntityType ParseEntityType(string? value)
-    {
-        return Enum.TryParse<DocumentEntityType>(value, ignoreCase: true, out var result)
-            ? result
-            : DocumentEntityType.Activo;
     }
 
     private static DocumentEntityType? ParseEntityTypeNullable(string? value)
@@ -1180,27 +1139,8 @@ public sealed class DocumentService : IDocumentService
 
     private static DocumentLifecycleStatus ParseLifecycle(string? value)
     {
-        if (Enum.TryParse<DocumentLifecycleStatus>(value, ignoreCase: true, out var result))
-        {
-            return result;
-        }
-
-        return value?.Trim().ToLowerInvariant() switch
-        {
-            "validated" or "validado" or "vigente" => DocumentLifecycleStatus.Vigente,
-            "expired" or "vencido" => DocumentLifecycleStatus.Vencido,
-            "pendingvalidation" or "pending_validation" or "pendiente validacion" or "pendientevalidacion" => DocumentLifecycleStatus.PendienteValidacion,
-            "rejected" or "rechazado" => DocumentLifecycleStatus.Rechazado,
-            "replaced" or "reemplazado" => DocumentLifecycleStatus.Reemplazado,
-            "annulled" or "anulado" => DocumentLifecycleStatus.Anulado,
-            _ => DocumentLifecycleStatus.PendienteCarga
-        };
+        return Enum.TryParse<DocumentLifecycleStatus>(value, ignoreCase: true, out var result)
+            ? result
+            : DocumentLifecycleStatus.PendienteCarga;
     }
-
-    private sealed record DocumentContext(
-        IReadOnlyDictionary<string, DocumentTypeResponse> TypesByCode,
-        IReadOnlyCollection<DataRow> DocumentRows,
-        IReadOnlyCollection<DataRow> AssetRows,
-        IReadOnlyCollection<DataRow> FaenaRows,
-        IReadOnlyCollection<DataRow> WorkOrderRows);
 }
