@@ -110,3 +110,22 @@ La migracion debe concentrarse en `MaintenanceCMMS.Infrastructure`.
 
 Estos endpoints ayudan a verificar proveedor activo, estado de archivos Excel y definiciones de schema antes de migrar.
 
+## Estado actualizado: PostgreSQL 16 local
+
+La migracion del 2026-07-09 agrega PostgreSQL 16 en Docker Compose y EF Core/Npgsql en `MaintenanceCMMS.Infrastructure`.
+
+Implementado:
+
+- `CmmsDbContext`.
+- Migracion inicial versionada para identidad, auditoria, faenas, familias, estados operacionales, activos y documentos compartidos.
+- Seed de desarrollo idempotente.
+- Identidad y auditoria PostgreSQL cuando `DataProvider:Provider=PostgreSql`.
+- Endpoint `GET /api/system/database-health`.
+- `GET /api/system/excel-health` marcado como legacy/no oficial.
+
+Pendiente:
+
+- Migrar todos los servicios que aun llaman `IDataProvider.ReadRowsAsync` y `SaveRowsAsync`.
+- Crear migraciones tipadas de OT, inventario, preventivos, programacion, abastecimiento, avisos, alertas, notificaciones, PDF templates y jerarquia tecnica.
+- Adaptar frontend para familias cerradas, estados operacionales oficiales y documentos multi-activo.
+

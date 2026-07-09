@@ -26,9 +26,11 @@ using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.Excel;
 using MaintenanceCMMS.Infrastructure.Options;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -182,6 +184,16 @@ using (var scope = app.Services.CreateScope())
 {
     var dataProvider = scope.ServiceProvider.GetRequiredService<IDataProvider>();
     await dataProvider.InitializeAsync(CancellationToken.None);
+
+    if (dataProvider.ProviderType == DataProviderType.PostgreSql &&
+        builder.Configuration.GetValue("Database:SeedDevelopment", app.Environment.IsDevelopment()))
+    {
+        var developmentSeeder = scope.ServiceProvider.GetService<IPostgreSqlDevelopmentSeeder>();
+        if (developmentSeeder is not null)
+        {
+            await developmentSeeder.SeedAsync(CancellationToken.None);
+        }
+    }
 
     var identitySeedService = scope.ServiceProvider.GetRequiredService<IIdentitySeedService>();
     await identitySeedService.SeedAsync(CancellationToken.None);
@@ -3744,9 +3756,50 @@ api.MapGet("/system/data-provider", (IDataProvider dataProvider, DataProviderSet
     })
     .WithName("GetDataProviderInfo");
 
+api.MapGet("/system/database-health", async (
+        IDataProvider dataProvider,
+        IServiceProvider serviceProvider,
+        CancellationToken cancellationToken) =>
+    {
+        if (dataProvider.ProviderType != DataProviderType.PostgreSql)
+        {
+            return Results.Ok(new
+            {
+                activeProvider = dataProvider.Name,
+                postgreSqlOfficial = false,
+                healthy = false,
+                message = "PostgreSQL is not the active data provider."
+            });
+        }
+
+        var dbContext = serviceProvider.GetRequiredService<CmmsDbContext>();
+        var canConnect = await dbContext.Database.CanConnectAsync(cancellationToken);
+        var pendingMigrations = (await dbContext.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
+        var appliedMigrations = (await dbContext.Database.GetAppliedMigrationsAsync(cancellationToken)).ToArray();
+
+        return Results.Ok(new
+        {
+            activeProvider = dataProvider.Name,
+            postgreSqlOfficial = true,
+            healthy = canConnect && pendingMigrations.Length == 0,
+            canConnect,
+            appliedMigrations,
+            pendingMigrations,
+            checkedAtUtc = DateTimeOffset.UtcNow
+        });
+    })
+    .WithName("GetDatabaseHealth");
+
 api.MapGet("/system/excel-health", async (ExcelDataProvider excelDataProvider, CancellationToken cancellationToken) =>
     {
-        return Results.Ok(await excelDataProvider.CheckHealthAsync(cancellationToken));
+        var health = await excelDataProvider.CheckHealthAsync(cancellationToken);
+        return Results.Ok(new
+        {
+            legacy = true,
+            officialDataSource = false,
+            purpose = "Excel health is retained only for import/development diagnostics. It is not the official runtime database when PostgreSQL is active.",
+            health
+        });
     })
     .WithName("GetExcelHealth");
 

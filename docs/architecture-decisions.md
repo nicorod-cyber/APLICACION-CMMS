@@ -63,3 +63,18 @@
 | Offline sin control de conflictos | Perdida o duplicacion de trabajo en terreno. | Sincronizacion por lotes, identificadores cliente y reglas de resolucion. |
 | Estados hardcodeados | Dificultad para adaptar procesos reales. | Catalogos de estado configurables por modulo. |
 | Integraciones corporativas prematuras | Bloqueo por credenciales o dependencias externas. | Adaptadores con simuladores locales desde el inicio. |
+
+## Decision 2026-07-09: PostgreSQL como proveedor objetivo
+
+PostgreSQL 16 local pasa a ser el proveedor predeterminado de desarrollo. Excel queda como legacy/importacion y `data/excel` se monta solo lectura en Docker.
+
+Reglas aplicadas:
+
+- No `ON DELETE CASCADE`.
+- No borrado fisico en flujos nuevos.
+- Estados operacionales de activo cerrados por catalogo.
+- Familias de equipo como maestro cerrado.
+- Documentos logicos separados de versiones y metadata de archivo.
+- Binarios fuera de SQL.
+
+Decision transitoria: los modulos que aun dependen de `DataRow` fallan explicitamente con PostgreSQL hasta ser migrados a consultas tipadas. Esto evita simular una migracion con un almacenamiento generico.

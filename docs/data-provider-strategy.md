@@ -136,3 +136,19 @@ Archivo Excel recibido
 | Falta de transacciones reales | Aplicar cambios por lotes auditados y con backups/versionado de archivo cuando se implemente. |
 | Escalabilidad limitada | Mantener Excel como etapa temporal y preparar migracion temprana a SQL. |
 | Duplicidad de reglas en macros/planillas | Prohibir reglas de negocio en Excel; toda regla vive en Application/Domain. |
+
+## Estado actualizado: PostgreSQL por defecto
+
+Desde la migracion del 2026-07-09, `DataProvider:Provider=PostgreSql` es el valor objetivo para desarrollo local. `ExcelDataProvider` queda como compatibilidad legacy y para importaciones, exportaciones, plantillas y seeds explicitos.
+
+Se agregaron:
+
+- `CmmsDbContext`.
+- Configuraciones EF Core con tablas y columnas `snake_case`.
+- Migracion inicial `202607090001_InitialPostgreSqlSchema`.
+- `PostgreSqlIdentityStore`.
+- `PostgreSqlAuditService`.
+- Seed de desarrollo idempotente para faena demo, familias, estados operacionales y activo demo.
+- `GET /api/system/database-health`.
+
+`SqlDataProvider` ya no es un placeholder silencioso: cuando PostgreSQL esta activo, bloquea `ReadRowsAsync` y `SaveRowsAsync` para impedir que los modulos se migren a una tabla universal de filas. Los modulos pendientes deben reemplazar sus accesos `DataRow` por repositorios o consultas EF tipadas.

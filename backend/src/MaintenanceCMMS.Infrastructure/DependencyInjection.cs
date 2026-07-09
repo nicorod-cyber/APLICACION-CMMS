@@ -24,6 +24,7 @@ using MaintenanceCMMS.Infrastructure.Assets;
 using MaintenanceCMMS.Infrastructure.Availability;
 using MaintenanceCMMS.Infrastructure.Data;
 using MaintenanceCMMS.Infrastructure.Data.Excel;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.Sql;
 using MaintenanceCMMS.Infrastructure.Documents;
 using MaintenanceCMMS.Infrastructure.Faenas;
@@ -43,6 +44,7 @@ using MaintenanceCMMS.Infrastructure.WorkOrders;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure;
 
@@ -74,6 +76,15 @@ public static class DependencyInjection
         services.Configure<ImportStorageOptions>(configuration.GetSection("Imports"));
 
         services.AddSingleton<IExcelSchemaRegistry, ExcelSchemaRegistry>();
+        if (ResolveProviderType(dataProviderSettings.Provider) == DataProviderType.PostgreSql)
+        {
+            services.AddDbContext<CmmsDbContext>(options =>
+            {
+                options.UseNpgsql(dataProviderSettings.PostgreSqlConnectionString);
+            });
+            services.AddScoped<IPostgreSqlDevelopmentSeeder, PostgreSqlDevelopmentSeeder>();
+        }
+
         services.AddScoped<ExcelDataProvider>();
         services.AddScoped<SqlDataProvider>();
         services.AddScoped<IDataProvider>(provider =>
@@ -89,13 +100,21 @@ public static class DependencyInjection
         services.AddScoped(typeof(IRepository<>), typeof(ExcelRepository<>));
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IImportService, ImportService>();
-        services.AddScoped<IIdentityStore, ExcelIdentityStore>();
+        if (ResolveProviderType(dataProviderSettings.Provider) == DataProviderType.PostgreSql)
+        {
+            services.AddScoped<IIdentityStore, PostgreSqlIdentityStore>();
+            services.AddScoped<IAuditService, PostgreSqlAuditService>();
+        }
+        else
+        {
+            services.AddScoped<IIdentityStore, ExcelIdentityStore>();
+            services.AddScoped<IAuditService, ExcelAuditService>();
+        }
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IJwtTokenService, JwtTokenService>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IUserManagementService, UserManagementService>();
         services.AddScoped<IIdentitySeedService, IdentitySeedService>();
-        services.AddScoped<IAuditService, ExcelAuditService>();
         services.AddSingleton<IAuditContextAccessor, AuditContextAccessor>();
         services.AddScoped<IDataGovernanceService, DataGovernanceService>();
         services.AddScoped<IExcelImportWorkflowService, ExcelImportWorkflowService>();

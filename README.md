@@ -103,4 +103,26 @@ La configuracion inicial vive en `backend/src/MaintenanceCMMS.Api/appsettings.js
 - `PowerBI`
 - `Offline`
 
-La fuente inicial es Excel bajo `data/excel`. El cambio futuro a SQL debe hacerse mediante configuracion e inyeccion de dependencias, manteniendo los contratos de Application.
+PostgreSQL 16 es el proveedor objetivo para desarrollo local. Excel queda como compatibilidad legacy e importacion; en Docker `data/excel` se monta solo lectura.
+
+Variables principales:
+
+```text
+DataProvider__Provider=PostgreSql
+DataProvider__PostgreSqlConnectionString=Host=postgres;Port=5432;Database=cmms;Username=cmms_app;Password=cmms_app_password
+Database__SeedDevelopment=true
+```
+
+Verificacion:
+
+```powershell
+curl http://localhost:5041/api/system/data-provider
+curl http://localhost:5041/api/system/database-health
+```
+
+Documentacion de migracion:
+
+- `docs/database/matriz-impacto-excel-sql.md`
+- `docs/database/migraciones.md`
+- `docs/database/seed-desarrollo.md`
+- `docs/database/verificacion-post-migracion.md`

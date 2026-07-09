@@ -7,10 +7,11 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
-      DataProvider__Provider: Excel
+      DataProvider__Provider: PostgreSql
       DataProvider__ExcelPath: /app/data/excel
       DataProvider__SqlServerConnectionString: ""
-      DataProvider__PostgreSqlConnectionString: ""
+      DataProvider__PostgreSqlConnectionString: Host=postgres;Port=5432;Database=${POSTGRES_DB:-cmms};Username=${POSTGRES_APP_USER:-cmms_app};Password=${POSTGRES_APP_PASSWORD:-cmms_app_password}
+      Database__SeedDevelopment: "true"
       DataProviders__Excel__BasePath: /app/data/excel
       Jwt__Issuer: MaintenanceCMMS
       Jwt__Audience: MaintenanceCMMS.Clients
@@ -36,14 +37,34 @@ services:
       Pdf__TemplatePath: /app/data/templates
       Imports__StoragePath: /app/data/imports
     volumes:
-      - ./data/excel:/app/data/excel
+      - ./data/excel:/app/data/excel:ro
       - ./data/imports:/app/data/imports
       - ./data/templates:/app/data/templates
       - ./data/sharepoint-simulated:/app/data/sharepoint-simulated
     ports:
       - "5041:8080"
     depends_on:
-      - mailhog
+      postgres:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: maintenance-cmms-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cmms}
+      POSTGRES_USER: ${POSTGRES_APP_USER:-cmms_app}
+      POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD:-cmms_app_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_APP_USER:-cmms_app} -d ${POSTGRES_DB:-cmms}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   frontend:
     build:
@@ -72,3 +93,6 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
+
+volumes:
+  postgres-data:
