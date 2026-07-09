@@ -1,6 +1,6 @@
 # Mantenimiento [Nombre Empresa]
 
-CMMS web industrial con backend ASP.NET Core, frontend React + TypeScript y arquitectura preparada para operar inicialmente con Excel y migrar luego a SQL Server o PostgreSQL.
+CMMS web industrial con backend ASP.NET Core, frontend React + TypeScript y migracion en curso para operar localmente sobre PostgreSQL 16 como fuente oficial de datos.
 
 ## Prerrequisitos
 
@@ -103,7 +103,9 @@ La configuracion inicial vive en `backend/src/MaintenanceCMMS.Api/appsettings.js
 - `PowerBI`
 - `Offline`
 
-PostgreSQL 16 es el proveedor objetivo para desarrollo local. Excel queda como compatibilidad legacy e importacion; en Docker `data/excel` se monta solo lectura.
+PostgreSQL 16 es el proveedor por defecto en `Development`, `.env.example` y `docker-compose.yml`. Excel queda solo como compatibilidad legacy, importacion, exportacion y plantillas; en Docker `data/excel` se monta solo lectura.
+
+El archivo base [appsettings.json](/C:/Users/Thinkpad/Documents/Enaex/sistema/APLICACION-CMMS/backend/src/MaintenanceCMMS.Api/appsettings.json) aun conserva `Provider=Excel` como fallback general, pero el runtime local validado usa [appsettings.Development.json](/C:/Users/Thinkpad/Documents/Enaex/sistema/APLICACION-CMMS/backend/src/MaintenanceCMMS.Api/appsettings.Development.json) y variables de entorno con `Provider=PostgreSql`.
 
 Variables principales:
 
@@ -120,9 +122,23 @@ curl http://localhost:5041/api/system/data-provider
 curl http://localhost:5041/api/system/database-health
 ```
 
+Verificacion ejecutada el 2026-07-09:
+
+- `dotnet restore backend/MaintenanceCMMS.sln`: correcto.
+- `dotnet build backend/MaintenanceCMMS.sln --no-restore`: correcto.
+- `dotnet test backend/MaintenanceCMMS.sln --no-build`: correcto, `84/84` pruebas.
+- `npm.cmd ci`: correcto.
+- `npm.cmd run build`: correcto.
+- `docker compose up --build -d`: correcto.
+- `GET /api/health`: `Healthy`.
+- `GET /api/system/data-provider`: `activeProvider=PostgreSql`.
+- `GET /api/system/database-health`: `healthy=true`, `pendingMigrations=[]`.
+- Inicio verificado incluso retirando temporalmente `data/excel`: el stack levanto con PostgreSQL y Docker recreo un directorio vacio de montaje sin usar Excel como base operacional.
+
 Documentacion de migracion:
 
 - `docs/database/matriz-impacto-excel-sql.md`
 - `docs/database/migraciones.md`
 - `docs/database/seed-desarrollo.md`
 - `docs/database/verificacion-post-migracion.md`
+- `docs/database/excel-runtime-removal-checklist.md`

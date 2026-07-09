@@ -1,21 +1,21 @@
-using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Faenas;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Faenas;
 
 public sealed class FaenaService : IFaenaService
 {
-    private const string FaenasSchema = "faenas";
-
-    private readonly IDataProvider _dataProvider;
+    private readonly CmmsDbContext _dbContext;
     private readonly IAuthorizationPolicyService _authorizationPolicyService;
 
     public FaenaService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IAuthorizationPolicyService authorizationPolicyService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _authorizationPolicyService = authorizationPolicyService;
     }
 
@@ -24,7 +24,11 @@ public sealed class FaenaService : IFaenaService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        return (await _dataProvider.ReadRowsAsync(FaenasSchema, cancellationToken))
+        var faenas = await _dbContext.Faenas
+            .AsNoTracking()
+            .ToArrayAsync(cancellationToken);
+
+        return faenas
             .Select(ToResponse)
             .Where(item => query.IncludeInactive || item.Activa)
             .Where(item => _authorizationPolicyService.CanViewFaena(user, item.Codigo))
@@ -34,30 +38,26 @@ public sealed class FaenaService : IFaenaService
             .ToArray();
     }
 
-    private static FaenaResponse ToResponse(DataRow row)
+    private static FaenaResponse ToResponse(FaenaEntity entity)
     {
-        var estado = FirstNonEmpty(row, "Estado", "Activa") ?? "Activa";
-        var metadata = row.Values
-            .Where(item => !KnownColumns.Contains(item.Key))
-            .ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase);
+        var status = entity.IsActive ? "Activa" : "Inactiva";
 
         return new FaenaResponse(
-            row.GetValue("Codigo")?.Trim() ?? string.Empty,
-            row.GetValue("Nombre")?.Trim() ?? string.Empty,
-            row.GetValue("Empresa")?.Trim() ?? string.Empty,
-            EmptyToNull(row.GetValue("Descripcion")),
-            FirstNonEmpty(row, "UbicacionTecnicaCodigo", "Ubicación Técnica"),
-            FirstNonEmpty(row, "CentroCostos", "centro_costes"),
-            FirstNonEmpty(row, "TipoFaena", "tipo_faena"),
-            FirstNonEmpty(row, "Region", "region"),
-            FirstNonEmpty(row, "Comuna", "comuna"),
-            FirstNonEmpty(row, "Latitud", "latitud"),
-            FirstNonEmpty(row, "Longitud", "longitud"),
-            FirstNonEmpty(row, "Responsable", "responsable"),
-            estado,
-            !estado.Equals("Inactiva", StringComparison.OrdinalIgnoreCase) &&
-            !estado.Equals("Inactivo", StringComparison.OrdinalIgnoreCase),
-            metadata);
+            entity.Code,
+            entity.Name,
+            string.Empty,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            status,
+            entity.IsActive,
+            new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase));
     }
 
     private static bool MatchesSearch(FaenaResponse item, string? search)
@@ -76,52 +76,8 @@ public sealed class FaenaService : IFaenaService
                Contains(item.Responsable, value);
     }
 
-    private static string? FirstNonEmpty(DataRow row, params string[] columns)
-    {
-        foreach (var column in columns)
-        {
-            var value = EmptyToNull(row.GetValue(column));
-            if (value is not null)
-            {
-                return value;
-            }
-        }
-
-        return null;
-    }
-
-    private static string? EmptyToNull(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    }
-
     private static bool Contains(string? value, string search)
     {
         return !string.IsNullOrWhiteSpace(value) && value.Contains(search, StringComparison.OrdinalIgnoreCase);
     }
-
-    private static readonly IReadOnlySet<string> KnownColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        "Codigo",
-        "Nombre",
-        "Empresa",
-        "Descripcion",
-        "UbicacionTecnicaCodigo",
-        "Ubicación Técnica",
-        "CentroCostos",
-        "centro_costes",
-        "TipoFaena",
-        "tipo_faena",
-        "Region",
-        "region",
-        "Comuna",
-        "comuna",
-        "Latitud",
-        "latitud",
-        "Longitud",
-        "longitud",
-        "Responsable",
-        "responsable",
-        "Estado"
-    };
 }

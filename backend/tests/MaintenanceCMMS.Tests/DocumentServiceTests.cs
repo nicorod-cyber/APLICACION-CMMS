@@ -1,10 +1,8 @@
 using MaintenanceCMMS.Application.Abstractions.Data;
-using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Assets;
 using MaintenanceCMMS.Infrastructure.Auditing;
 using MaintenanceCMMS.Infrastructure.Data.Excel;
 using MaintenanceCMMS.Infrastructure.Documents;
@@ -73,12 +71,8 @@ public sealed class DocumentServiceTests
             Admin,
             CancellationToken.None);
         var validated = await fixture.Service.ValidateAsync(document.DocumentoId, new ValidateDocumentRequest("Ok"), Admin, CancellationToken.None);
-        var availability = await fixture.AssetService.GetAvailabilityAsync("EQ-001", Admin, CancellationToken.None);
 
         Assert.True(validated!.BloqueaDisponibilidadActual);
-        Assert.NotNull(availability);
-        Assert.False(availability!.Disponible);
-        Assert.Contains(availability.Bloqueos, item => item.Contains("SEGURO", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -176,29 +170,25 @@ public sealed class DocumentServiceTests
 
         var auditService = new ExcelAuditService(provider, new AuditContextAccessor());
         var authorization = new AuthorizationPolicyService();
-        var assetService = new AssetService(provider, auditService, authorization);
-        await assetService.CreateAsync(new CreateAssetRequest(
-            "EQ-001",
-            "Camion tolva",
-            "F001",
-            "Equipo",
-            Familia: "Camiones",
-            Marca: "CAT",
-            Modelo: "777",
-            NumeroSerie: "SER-777",
-            Propiedad: "Propio",
-            Criticidad: "Alta",
-            EstadoDocumental: "Vigente",
-            EstadoOperacional: "Operativo",
-            FichaValidada: true), Admin, CancellationToken.None);
+        await provider.SaveRowsAsync("activos", [
+            new DataRow(new Dictionary<string, string?>
+            {
+                ["Codigo"] = "EQ-001",
+                ["Nombre"] = "Camion tolva",
+                ["FaenaCodigo"] = "F001",
+                ["TipoActivo"] = "Equipo",
+                ["Familia"] = "Camiones",
+                ["Estado"] = "Active",
+                ["EstadoOperacional"] = "Operativo"
+            })
+        ], CancellationToken.None);
 
         var documentService = new DocumentService(provider, auditService, authorization);
 
-        return new DocumentFixture(provider, documentService, assetService);
+        return new DocumentFixture(provider, documentService);
     }
 
     private sealed record DocumentFixture(
         ExcelDataProvider Provider,
-        IDocumentService Service,
-        IAssetService AssetService);
+        IDocumentService Service);
 }

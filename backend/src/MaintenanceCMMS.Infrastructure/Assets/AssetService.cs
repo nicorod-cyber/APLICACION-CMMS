@@ -1,24 +1,17 @@
-using System.Globalization;
 using System.Text.Json;
-using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Assets;
 
 public sealed class AssetService : IAssetService
 {
-    private const string AssetsSchema = "activos";
-    private const string FaenasSchema = "faenas";
-    private const string LocationsSchema = "ubicaciones_tecnicas";
-    private const string DocumentsSchema = "documentos";
-    private const string WorkOrdersSchema = "ordenes_trabajo";
-    private const string SparePartsSchema = "repuestos";
-    private const string StateEventsSchema = "asset_state_events";
-
     private static readonly string[] RequiredTechnicalFields =
     [
         "Nombre",
@@ -34,16 +27,16 @@ public sealed class AssetService : IAssetService
         "EstadoOperacional"
     ];
 
-    private readonly IDataProvider _dataProvider;
+    private readonly CmmsDbContext _dbContext;
     private readonly IAuditService _auditService;
     private readonly IAuthorizationPolicyService _authorizationPolicyService;
 
     public AssetService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IAuditService auditService,
         IAuthorizationPolicyService authorizationPolicyService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _auditService = auditService;
         _authorizationPolicyService = authorizationPolicyService;
     }
@@ -59,11 +52,13 @@ public sealed class AssetService : IAssetService
             throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena solicitada.");
         }
 
-        var rows = await ReadVisibleAssetRowsAsync(user, cancellationToken);
-        var documents = await ReadDocumentRowsAsync(cancellationToken);
+        var assets = await QueryAssets()
+            .AsNoTracking()
+            .ToArrayAsync(cancellationToken);
 
-        return rows
-            .Select(row => ToSummary(row, documents))
+        return assets
+            .Where(asset => _authorizationPolicyService.CanViewFaena(user, asset.Faena.Code))
+            .Select(ToSummary)
             .Where(asset => Matches(query, asset))
             .OrderBy(asset => asset.Codigo, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -74,20 +69,14 @@ public sealed class AssetService : IAssetService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        var rows = await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken);
-        var row = FindAssetRow(rows, codigo);
-        if (row is null)
+        var asset = await FindAssetAsync(codigo, tracking: false, cancellationToken);
+        if (asset is null)
         {
             return null;
         }
 
-        EnsureCanViewAsset(user, row);
-
-        var documents = await ReadDocumentRowsAsync(cancellationToken);
-        var workOrders = await ReadWorkOrdersAsync(codigo, cancellationToken);
-        var spareParts = await ReadCompatibleSparePartsAsync(row, cancellationToken);
-
-        return ToDetail(row, documents, workOrders, spareParts);
+        EnsureCanViewAsset(user, asset);
+        return ToDetail(asset);
     }
 
     public async Task<AssetDetail> CreateAsync(
@@ -100,54 +89,53 @@ public sealed class AssetService : IAssetService
         ValidateRequired(request.Nombre, nameof(request.Nombre));
         ValidateRequired(request.FaenaCodigo, nameof(request.FaenaCodigo));
         ValidateRequired(request.TipoActivo, nameof(request.TipoActivo));
+        ValidateRequired(request.Familia, nameof(request.Familia));
         EnsureCanUseFaena(user, request.FaenaCodigo);
 
-        await ValidateReferencesAsync(request.FaenaCodigo, request.UbicacionTecnicaCodigo, cancellationToken);
-
-        var rows = (await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken)).ToList();
-        var normalizedCode = NormalizeCode(request.Codigo);
-        if (rows.Any(row => string.Equals(NormalizeCode(row.GetValue("Codigo")), normalizedCode, StringComparison.OrdinalIgnoreCase)))
+        var code = NormalizeCode(request.Codigo);
+        if (await _dbContext.Assets.AnyAsync(asset => asset.Code == code, cancellationToken))
         {
             throw new DomainException($"Ya existe un activo con codigo '{request.Codigo}'.");
         }
 
-        var now = DateTimeOffset.UtcNow;
-        var rowToCreate = BuildAssetRow(
-            request.Codigo,
-            request.Nombre,
-            request.FaenaCodigo,
-            request.TipoActivo,
-            request.Estado,
-            request.UbicacionTecnicaCodigo,
-            request.Familia,
-            request.Marca,
-            request.Modelo,
-            request.Patente,
-            request.NumeroSerie,
-            request.Propiedad,
-            request.Criticidad,
-            request.EstadoDocumental,
-            request.EstadoOperacional,
-            request.TechnicalFields,
-            request.FichaValidada,
-            now,
-            now);
+        var faena = await FindFaenaAsync(request.FaenaCodigo, cancellationToken);
+        var family = await FindActiveFamilyAsync(request.Familia!, cancellationToken);
+        var operationalState = await ResolveOperationalStateAsync(request.EstadoOperacional, request.Estado, cancellationToken);
 
-        rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(AssetsSchema, rows, cancellationToken);
+        var entity = new AssetEntity
+        {
+            Code = code,
+            Name = request.Nombre.Trim(),
+            FaenaId = faena.Id,
+            FamilyId = family.Id,
+            OperationalStateId = operationalState.Id,
+            RecordStatus = ToRecordStatus(request.Estado),
+            AssetType = request.TipoActivo.Trim(),
+            TechnicalLocationCode = EmptyToNull(request.UbicacionTecnicaCodigo),
+            Brand = EmptyToNull(request.Marca),
+            Model = EmptyToNull(request.Modelo),
+            Plate = EmptyToNull(request.Patente),
+            SerialNumber = EmptyToNull(request.NumeroSerie),
+            Ownership = EmptyToNull(request.Propiedad),
+            Criticality = EmptyToNull(request.Criticidad),
+            DocumentStatus = EmptyToNull(request.EstadoDocumental) ?? "Pendiente",
+            TechnicalSheetValidated = request.FichaValidada
+        };
+
+        _dbContext.Assets.Add(entity);
+        await _dbContext.SaveChangesAsync(cancellationToken);
 
         await RecordAssetAuditAsync(
             user,
             "Created",
-            request.Codigo,
-            request.FaenaCodigo,
+            entity.Code,
+            faena.Code,
             null,
-            Serialize(rowToCreate),
+            Serialize(entity),
             "Activo creado",
             cancellationToken);
 
-        var created = await GetByIdAsync(request.Codigo, user, cancellationToken);
-        return created ?? throw new InvalidOperationException("No fue posible leer el activo creado.");
+        return (await GetByIdAsync(entity.Code, user, cancellationToken))!;
     }
 
     public async Task<AssetDetail?> UpdateAsync(
@@ -160,64 +148,58 @@ public sealed class AssetService : IAssetService
         ValidateRequired(request.Nombre, nameof(request.Nombre));
         ValidateRequired(request.FaenaCodigo, nameof(request.FaenaCodigo));
         ValidateRequired(request.TipoActivo, nameof(request.TipoActivo));
+        ValidateRequired(request.Familia, nameof(request.Familia));
 
-        var rows = (await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken)).ToList();
-        var index = FindAssetIndex(rows, codigo);
-        if (index < 0)
+        var asset = await FindAssetAsync(codigo, tracking: true, cancellationToken);
+        if (asset is null)
         {
             return null;
         }
 
-        var existing = rows[index];
-        EnsureCanViewAsset(user, existing);
+        EnsureCanViewAsset(user, asset);
 
-        var previousFaena = existing.GetValue("FaenaCodigo")?.Trim() ?? string.Empty;
-        if (!string.Equals(previousFaena, request.FaenaCodigo.Trim(), StringComparison.OrdinalIgnoreCase) &&
-            !_authorizationPolicyService.CanChangeAssetFaena(user))
+        if (!Same(asset.Faena.Code, request.FaenaCodigo) && !_authorizationPolicyService.CanChangeAssetFaena(user))
         {
             throw new UnauthorizedAccessException("Cambiar la faena del activo requiere permiso especial.");
         }
 
         EnsureCanUseFaena(user, request.FaenaCodigo);
-        await ValidateReferencesAsync(request.FaenaCodigo, request.UbicacionTecnicaCodigo, cancellationToken);
+        var previousValue = Serialize(asset);
 
-        var assetCode = existing.GetValue("Codigo")?.Trim() ?? codigo.Trim();
-        var createdAt = ParseDateTime(existing.GetValue("FechaAlta")) ?? DateTimeOffset.UtcNow;
-        var updated = BuildAssetRow(
-            assetCode,
-            request.Nombre,
-            request.FaenaCodigo,
-            request.TipoActivo,
-            request.Estado,
-            request.UbicacionTecnicaCodigo,
-            request.Familia,
-            request.Marca,
-            request.Modelo,
-            request.Patente,
-            request.NumeroSerie,
-            request.Propiedad,
-            request.Criticidad,
-            request.EstadoDocumental,
-            request.EstadoOperacional,
-            request.TechnicalFields,
-            request.FichaValidada ?? ParseBool(existing.GetValue("FichaValidada")),
-            createdAt,
-            DateTimeOffset.UtcNow);
+        var faena = await FindFaenaAsync(request.FaenaCodigo, cancellationToken);
+        var family = await FindActiveFamilyAsync(request.Familia!, cancellationToken);
+        var operationalState = await ResolveOperationalStateAsync(request.EstadoOperacional, request.Estado, cancellationToken);
 
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(AssetsSchema, rows, cancellationToken);
+        asset.Name = request.Nombre.Trim();
+        asset.FaenaId = faena.Id;
+        asset.FamilyId = family.Id;
+        asset.OperationalStateId = operationalState.Id;
+        asset.RecordStatus = ToRecordStatus(request.Estado);
+        asset.AssetType = request.TipoActivo.Trim();
+        asset.TechnicalLocationCode = EmptyToNull(request.UbicacionTecnicaCodigo);
+        asset.Brand = EmptyToNull(request.Marca);
+        asset.Model = EmptyToNull(request.Modelo);
+        asset.Plate = EmptyToNull(request.Patente);
+        asset.SerialNumber = EmptyToNull(request.NumeroSerie);
+        asset.Ownership = EmptyToNull(request.Propiedad);
+        asset.Criticality = EmptyToNull(request.Criticidad);
+        asset.DocumentStatus = EmptyToNull(request.EstadoDocumental) ?? "Pendiente";
+        asset.TechnicalSheetValidated = request.FichaValidada ?? asset.TechnicalSheetValidated;
+        asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
 
         await RecordAssetAuditAsync(
             user,
             "Updated",
-            assetCode,
-            request.FaenaCodigo,
-            Serialize(existing),
-            Serialize(updated),
+            asset.Code,
+            faena.Code,
+            previousValue,
+            Serialize(asset),
             request.Reason ?? "Activo actualizado",
             cancellationToken);
 
-        return await GetByIdAsync(assetCode, user, cancellationToken);
+        return await GetByIdAsync(asset.Code, user, cancellationToken);
     }
 
     public async Task<AssetStateEventResponse?> AddStateEventAsync(
@@ -229,51 +211,57 @@ public sealed class AssetService : IAssetService
         EnsureCanChangeState(user);
         ValidateRequired(request.Reason, nameof(request.Reason));
 
-        var rows = (await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken)).ToList();
-        var index = FindAssetIndex(rows, codigo);
-        if (index < 0)
+        var asset = await FindAssetAsync(codigo, tracking: true, cancellationToken);
+        if (asset is null)
         {
             return null;
         }
 
-        var existing = rows[index];
-        EnsureCanViewAsset(user, existing);
+        EnsureCanViewAsset(user, asset);
 
-        var previousStatus = ParseStatus(existing.GetValue("Estado"));
-        var next = WithValues(existing, new Dictionary<string, string?>
+        var previousStatus = ParseStatus(asset.RecordStatus);
+        var previousStateId = asset.OperationalStateId;
+        var nextState = await ResolveOperationalStateAsync(null, request.Status, cancellationToken);
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        asset.RecordStatus = ToRecordStatus(request.Status);
+        asset.OperationalStateId = nextState.Id;
+        asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+        var occurredAt = request.OccurredAtUtc ?? DateTimeOffset.UtcNow;
+        var stateEvent = new AssetStateEventEntity
         {
-            ["Estado"] = request.Status.ToString(),
-            ["EstadoOperacional"] = DefaultOperationalState(request.Status),
-            ["FechaActualizacion"] = DateTimeOffset.UtcNow.UtcDateTime.ToString("O")
-        });
+            AssetId = asset.Id,
+            PreviousStateId = previousStateId,
+            NewStateId = nextState.Id,
+            OccurredAtUtc = occurredAt,
+            UserId = user.UserId,
+            Reason = request.Reason.Trim()
+        };
 
-        rows[index] = next;
-        await _dataProvider.SaveRowsAsync(AssetsSchema, rows, cancellationToken);
-
-        var eventResponse = new AssetStateEventResponse(
-            Guid.NewGuid().ToString("D"),
-            existing.GetValue("Codigo")?.Trim() ?? codigo.Trim(),
-            previousStatus,
-            request.Status,
-            request.OccurredAtUtc ?? DateTimeOffset.UtcNow,
-            request.Reason.Trim(),
-            user.UserId);
-
-        var eventRows = (await _dataProvider.ReadRowsAsync(StateEventsSchema, cancellationToken)).ToList();
-        eventRows.Add(ToStateEventRow(eventResponse));
-        await _dataProvider.SaveRowsAsync(StateEventsSchema, eventRows, cancellationToken);
+        _dbContext.AssetStateEvents.Add(stateEvent);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         await RecordAssetAuditAsync(
             user,
             "StateChanged",
-            eventResponse.ActivoCodigo,
-            existing.GetValue("FaenaCodigo"),
+            asset.Code,
+            asset.Faena.Code,
             previousStatus.ToString(),
             request.Status.ToString(),
             request.Reason,
             cancellationToken);
 
-        return eventResponse;
+        return new AssetStateEventResponse(
+            stateEvent.Id.ToString("D"),
+            asset.Code,
+            previousStatus,
+            request.Status,
+            occurredAt,
+            stateEvent.Reason,
+            user.UserId);
     }
 
     public async Task<IReadOnlyCollection<AssetHistoryEntry>> GetHistoryAsync(
@@ -281,31 +269,39 @@ public sealed class AssetService : IAssetService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        var asset = await GetByIdAsync(codigo, user, cancellationToken);
+        var asset = await FindAssetAsync(codigo, tracking: false, cancellationToken);
         if (asset is null)
         {
             return [];
         }
+
+        EnsureCanViewAsset(user, asset);
+
+        var events = await _dbContext.AssetStateEvents
+            .AsNoTracking()
+            .Include(item => item.PreviousState)
+            .Include(item => item.NewState)
+            .Where(item => item.AssetId == asset.Id)
+            .OrderByDescending(item => item.OccurredAtUtc)
+            .ToArrayAsync(cancellationToken);
 
         var audit = await _auditService.QueryAsync(new AuditQuery(
             Module: AuditModules.Assets,
             EntityName: "Asset",
             Take: 500), cancellationToken);
 
-        var stateEvents = (await _dataProvider.ReadRowsAsync(StateEventsSchema, cancellationToken))
-            .Where(row => string.Equals(row.GetValue("ActivoCodigo"), asset.Codigo, StringComparison.OrdinalIgnoreCase))
-            .Select(row => new AssetHistoryEntry(
-                row.GetValue("EventoId")?.Trim() ?? Guid.NewGuid().ToString("D"),
-                ParseDateTime(row.GetValue("FechaEvento")) ?? DateTimeOffset.MinValue,
-                "StateChanged",
-                "EventosEstado",
-                row.GetValue("UsuarioId")?.Trim() ?? string.Empty,
-                row.GetValue("EstadoAnterior"),
-                row.GetValue("Estado"),
-                row.GetValue("Motivo")));
+        var eventEntries = events.Select(item => new AssetHistoryEntry(
+            item.Id.ToString("D"),
+            item.OccurredAtUtc,
+            "StateChanged",
+            "EventosEstado",
+            item.UserId,
+            item.PreviousState?.Code,
+            item.NewState.Code,
+            item.Reason));
 
         var auditEntries = audit.Items
-            .Where(entry => string.Equals(entry.EntityId, asset.Codigo, StringComparison.OrdinalIgnoreCase))
+            .Where(entry => Same(entry.EntityId, asset.Code))
             .Select(entry => new AssetHistoryEntry(
                 entry.AuditId,
                 entry.OccurredAtUtc,
@@ -317,7 +313,7 @@ public sealed class AssetService : IAssetService
                 entry.Detail ?? entry.Reason));
 
         return auditEntries
-            .Concat(stateEvents)
+            .Concat(eventEntries)
             .OrderByDescending(entry => entry.OccurredAtUtc)
             .ToArray();
     }
@@ -327,18 +323,35 @@ public sealed class AssetService : IAssetService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        var asset = await GetByIdAsync(codigo, user, cancellationToken);
+        var asset = await FindAssetAsync(codigo, tracking: false, cancellationToken);
         if (asset is null)
         {
             return [];
         }
 
-        var rows = await ReadDocumentRowsAsync(cancellationToken);
-        return rows
-            .Where(row => IsAssetDocument(row, asset.Codigo))
-            .Select(ToDocumentResponse)
-            .OrderBy(document => document.TipoDocumento, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        EnsureCanViewAsset(user, asset);
+
+        return await _dbContext.DocumentAssets
+            .AsNoTracking()
+            .Include(item => item.Document)
+            .ThenInclude(document => document.Versions)
+            .ThenInclude(version => version.File)
+            .Where(item => item.AssetId == asset.Id && item.IsActive)
+            .Select(item => new AssetDocumentResponse(
+                "Activo",
+                asset.Code,
+                item.Document.DocumentTypeCode,
+                item.Document.Status,
+                null,
+                item.Document.Versions
+                    .OrderByDescending(version => version.VersionNumber)
+                    .Select(version => version.File.FileKey)
+                    .FirstOrDefault(),
+                false,
+                false,
+                false))
+            .OrderBy(item => item.TipoDocumento)
+            .ToArrayAsync(cancellationToken);
     }
 
     public async Task<AssetCostSummary?> GetCostsAsync(
@@ -371,148 +384,98 @@ public sealed class AssetService : IAssetService
             return null;
         }
 
-        var documents = await GetDocumentsAsync(codigo, user, cancellationToken);
-        var blockers = new List<string>();
-        if (!asset.DisponibleDocumentalmente)
-        {
-            blockers.Add("Documento critico vencido");
-        }
-
         var operationallyAvailable = asset.Estado == AssetStatus.Active &&
-                                      !asset.EstadoOperacional.Contains("no disponible", StringComparison.OrdinalIgnoreCase) &&
-                                      !asset.EstadoOperacional.Contains("mantenimiento", StringComparison.OrdinalIgnoreCase) &&
-                                      !asset.EstadoOperacional.Contains("retirado", StringComparison.OrdinalIgnoreCase);
-
-        if (!operationallyAvailable)
-        {
-            blockers.Add($"Estado operacional: {asset.EstadoOperacional}");
-        }
-
-        var expiredDocuments = documents
-            .Where(document => document.BloqueaDisponibilidad)
-            .Select(document => $"Documento vencido: {document.TipoDocumento}")
-            .ToArray();
-        blockers.AddRange(expiredDocuments);
-
-        var available = operationallyAvailable && asset.DisponibleDocumentalmente;
+                                      asset.EstadoOperacional.Equals("OPERATIVO_FAENA", StringComparison.OrdinalIgnoreCase);
+        var blockers = operationallyAvailable
+            ? Array.Empty<string>()
+            : [$"Estado operacional: {asset.EstadoOperacional}"];
 
         return new AssetAvailabilityResponse(
             asset.Codigo,
-            available,
+            operationallyAvailable && asset.DisponibleDocumentalmente,
             operationallyAvailable,
             asset.DisponibleDocumentalmente,
             asset.EstadoOperacional,
             asset.EstadoDocumental,
-            blockers.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            available ? 100 : 0);
+            blockers,
+            operationallyAvailable ? 100 : 0);
     }
 
-    private async Task<IReadOnlyCollection<DataRow>> ReadVisibleAssetRowsAsync(
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    private IQueryable<AssetEntity> QueryAssets()
     {
-        var rows = await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken);
-        if (_authorizationPolicyService.CanAdminister(user))
+        return _dbContext.Assets
+            .Include(asset => asset.Faena)
+            .Include(asset => asset.Family)
+            .Include(asset => asset.OperationalState);
+    }
+
+    private Task<AssetEntity?> FindAssetAsync(string codigo, bool tracking, CancellationToken cancellationToken)
+    {
+        var query = QueryAssets();
+        if (!tracking)
         {
-            return rows;
+            query = query.AsNoTracking();
         }
 
-        return rows
-            .Where(row => _authorizationPolicyService.CanViewFaena(user, row.GetValue("FaenaCodigo") ?? string.Empty))
-            .ToArray();
+        var code = NormalizeCode(codigo);
+        return query.FirstOrDefaultAsync(asset => asset.Code == code, cancellationToken);
     }
 
-    private async Task<IReadOnlyCollection<DataRow>> ReadDocumentRowsAsync(CancellationToken cancellationToken)
+    private async Task<FaenaEntity> FindFaenaAsync(string code, CancellationToken cancellationToken)
     {
-        return await _dataProvider.ReadRowsAsync(DocumentsSchema, cancellationToken);
+        var normalized = NormalizeCode(code);
+        var faena = await _dbContext.Faenas.FirstOrDefaultAsync(item => item.Code == normalized && item.IsActive, cancellationToken);
+        return faena ?? throw new DomainException("La faena indicada no existe o esta inactiva.");
     }
 
-    private async Task<IReadOnlyCollection<AssetWorkOrderSummary>> ReadWorkOrdersAsync(
-        string codigo,
+    private async Task<EquipmentFamilyEntity> FindActiveFamilyAsync(string value, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeCode(value);
+        var family = await _dbContext.EquipmentFamilies.FirstOrDefaultAsync(
+            item => item.IsActive && (item.Code == normalized || item.Name.ToUpper() == normalized),
+            cancellationToken);
+
+        return family ?? throw new DomainException("La familia de equipo indicada no existe o esta inactiva.");
+    }
+
+    private async Task<AssetOperationalStateEntity> ResolveOperationalStateAsync(
+        string? requested,
+        AssetStatus status,
         CancellationToken cancellationToken)
     {
-        var rows = await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken);
-        return rows
-            .Where(row => string.Equals(row.GetValue("ActivoCodigo"), codigo, StringComparison.OrdinalIgnoreCase))
-            .Select(row => new AssetWorkOrderSummary(
-                row.GetValue("NumeroOT")?.Trim() ?? string.Empty,
-                row.GetValue("Estado")?.Trim() ?? string.Empty,
-                row.GetValue("TipoMantenimiento")?.Trim() ?? string.Empty,
-                EmptyToNull(row.GetValue("Descripcion")),
-                ParseDateOnly(row.GetValue("FechaProgramada"))))
-            .Where(workOrder => !string.IsNullOrWhiteSpace(workOrder.NumeroOT))
-            .OrderByDescending(workOrder => workOrder.FechaProgramada)
-            .ToArray();
+        var code = NormalizeOperationalStateCode(requested) ?? DefaultOperationalStateCode(status);
+        var state = await _dbContext.AssetOperationalStates.FirstOrDefaultAsync(item => item.Code == code && item.IsActive, cancellationToken);
+        return state ?? throw new DomainException($"El estado operacional '{code}' no existe o esta inactivo.");
     }
 
-    private async Task<IReadOnlyCollection<CompatibleSparePartSummary>> ReadCompatibleSparePartsAsync(
-        DataRow asset,
-        CancellationToken cancellationToken)
+    private static AssetSummary ToSummary(AssetEntity entity)
     {
-        var family = asset.GetValue("Familia");
-        if (string.IsNullOrWhiteSpace(family))
-        {
-            return [];
-        }
-
-        var spareParts = await _dataProvider.ReadRowsAsync(SparePartsSchema, cancellationToken);
-        return spareParts
-            .Where(row => string.Equals(row.GetValue("Familia"), family, StringComparison.OrdinalIgnoreCase))
-            .Select(row => new CompatibleSparePartSummary(
-                row.GetValue("Codigo")?.Trim() ?? string.Empty,
-                row.GetValue("Descripcion")?.Trim() ?? string.Empty,
-                EmptyToNull(row.GetValue("Familia")),
-                EmptyToNull(row.GetValue("UnidadMedida"))))
-            .Where(part => !string.IsNullOrWhiteSpace(part.Codigo))
-            .OrderBy(part => part.Codigo, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    private static bool Matches(AssetListQuery query, AssetSummary asset)
-    {
-        return (string.IsNullOrWhiteSpace(query.FaenaCodigo) ||
-                string.Equals(asset.FaenaCodigo, query.FaenaCodigo, StringComparison.OrdinalIgnoreCase)) &&
-               (!query.Estado.HasValue || asset.Estado == query.Estado.Value) &&
-               (string.IsNullOrWhiteSpace(query.Familia) ||
-                string.Equals(asset.Familia, query.Familia, StringComparison.OrdinalIgnoreCase)) &&
-               (string.IsNullOrWhiteSpace(query.Criticidad) ||
-                string.Equals(asset.Criticidad, query.Criticidad, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static AssetSummary ToSummary(DataRow row, IReadOnlyCollection<DataRow> documents)
-    {
-        var codigo = row.GetValue("Codigo")?.Trim() ?? string.Empty;
-        var effectiveDocumentState = EffectiveDocumentState(row, documents);
-        var completeness = CalculateCompleteness(row, effectiveDocumentState);
+        var completeness = CalculateCompleteness(entity);
 
         return new AssetSummary(
-            codigo,
-            row.GetValue("Nombre")?.Trim() ?? string.Empty,
-            row.GetValue("FaenaCodigo")?.Trim() ?? string.Empty,
-            row.GetValue("TipoActivo")?.Trim() ?? string.Empty,
-            ParseStatus(row.GetValue("Estado")),
-            EmptyToNull(row.GetValue("UbicacionTecnicaCodigo")),
-            EmptyToNull(row.GetValue("Familia")),
-            EmptyToNull(row.GetValue("Marca")),
-            EmptyToNull(row.GetValue("Modelo")),
-            EmptyToNull(row.GetValue("Patente")),
-            EmptyToNull(row.GetValue("NumeroSerie")),
-            EmptyToNull(row.GetValue("Propiedad")),
-            EmptyToNull(row.GetValue("Criticidad")),
-            effectiveDocumentState,
-            EffectiveOperationalState(row),
+            entity.Code,
+            entity.Name,
+            entity.Faena.Code,
+            entity.AssetType,
+            ParseStatus(entity.RecordStatus, entity.OperationalState.Code),
+            entity.TechnicalLocationCode,
+            entity.Family.Name,
+            entity.Brand,
+            entity.Model,
+            entity.Plate,
+            entity.SerialNumber,
+            entity.Ownership,
+            entity.Criticality,
+            entity.DocumentStatus ?? "Pendiente",
+            entity.OperationalState.Code,
             completeness,
-            !HasCriticalExpiredDocument(codigo, documents),
-            ParseBool(row.GetValue("FichaValidada")));
+            !string.Equals(entity.DocumentStatus, "Vencido", StringComparison.OrdinalIgnoreCase),
+            entity.TechnicalSheetValidated);
     }
 
-    private static AssetDetail ToDetail(
-        DataRow row,
-        IReadOnlyCollection<DataRow> documents,
-        IReadOnlyCollection<AssetWorkOrderSummary> workOrders,
-        IReadOnlyCollection<CompatibleSparePartSummary> spareParts)
+    private static AssetDetail ToDetail(AssetEntity entity)
     {
-        var summary = ToSummary(row, documents);
+        var summary = ToSummary(entity);
         return new AssetDetail(
             summary.Codigo,
             summary.Nombre,
@@ -532,133 +495,118 @@ public sealed class AssetService : IAssetService
             summary.CompletitudFicha,
             summary.DisponibleDocumentalmente,
             summary.FichaValidada,
-            ParseDateTime(row.GetValue("FechaAlta")),
-            ParseDateTime(row.GetValue("FechaActualizacion")),
-            BuildTechnicalFields(row),
-            workOrders,
-            spareParts);
+            entity.CreatedAtUtc,
+            entity.UpdatedAtUtc,
+            BuildTechnicalFields(entity),
+            [],
+            []);
     }
 
-    private static DataRow BuildAssetRow(
-        string codigo,
-        string nombre,
-        string faenaCodigo,
-        string tipoActivo,
-        AssetStatus estado,
-        string? ubicacionTecnicaCodigo,
-        string? familia,
-        string? marca,
-        string? modelo,
-        string? patente,
-        string? numeroSerie,
-        string? propiedad,
-        string? criticidad,
-        string? estadoDocumental,
-        string? estadoOperacional,
-        IReadOnlyDictionary<string, string?>? technicalFields,
-        bool fichaValidada,
-        DateTimeOffset fechaAlta,
-        DateTimeOffset fechaActualizacion)
+    private static bool Matches(AssetListQuery query, AssetSummary asset)
     {
-        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        return (string.IsNullOrWhiteSpace(query.FaenaCodigo) ||
+                Same(asset.FaenaCodigo, query.FaenaCodigo)) &&
+               (!query.Estado.HasValue || asset.Estado == query.Estado.Value) &&
+               (string.IsNullOrWhiteSpace(query.Familia) ||
+                Same(asset.Familia, query.Familia)) &&
+               (string.IsNullOrWhiteSpace(query.Criticidad) ||
+                Same(asset.Criticidad, query.Criticidad));
+    }
+
+    private static AssetCompleteness CalculateCompleteness(AssetEntity entity)
+    {
+        var values = BuildTechnicalFields(entity);
+        var missing = RequiredTechnicalFields
+            .Where(field => !values.TryGetValue(field, out var value) || string.IsNullOrWhiteSpace(value))
+            .ToArray();
+
+        var completed = RequiredTechnicalFields.Length - missing.Length;
+        var percentage = (int)Math.Round((decimal)completed / RequiredTechnicalFields.Length * 100, MidpointRounding.AwayFromZero);
+        var state = percentage >= 100 ? "Completa" : completed == 0 ? "Pendiente" : "Parcial";
+
+        return new AssetCompleteness(RequiredTechnicalFields.Length, completed, percentage, state, missing);
+    }
+
+    private static IReadOnlyDictionary<string, string?> BuildTechnicalFields(AssetEntity entity)
+    {
+        return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Codigo"] = codigo.Trim(),
-            ["Nombre"] = nombre.Trim(),
-            ["FaenaCodigo"] = faenaCodigo.Trim(),
-            ["TipoActivo"] = tipoActivo.Trim(),
-            ["Estado"] = estado.ToString(),
-            ["UbicacionTecnicaCodigo"] = EmptyToNull(ubicacionTecnicaCodigo),
-            ["Familia"] = EmptyToNull(familia),
-            ["Marca"] = EmptyToNull(marca),
-            ["Modelo"] = EmptyToNull(modelo),
-            ["Patente"] = EmptyToNull(patente),
-            ["NumeroSerie"] = EmptyToNull(numeroSerie),
-            ["Propiedad"] = NormalizeCatalogValue(propiedad, "Propio"),
-            ["Criticidad"] = NormalizeCatalogValue(criticidad, "Media"),
-            ["EstadoDocumental"] = NormalizeCatalogValue(estadoDocumental, "Pendiente"),
-            ["EstadoOperacional"] = NormalizeCatalogValue(estadoOperacional, DefaultOperationalState(estado)),
-            ["FichaTecnicaJson"] = SerializeTechnicalFields(technicalFields),
-            ["FichaValidada"] = fichaValidada ? "true" : "false",
-            ["FechaAlta"] = fechaAlta.UtcDateTime.ToString("O"),
-            ["FechaActualizacion"] = fechaActualizacion.UtcDateTime.ToString("O")
+            ["Nombre"] = entity.Name,
+            ["FaenaCodigo"] = entity.Faena.Code,
+            ["TipoActivo"] = entity.AssetType,
+            ["Familia"] = entity.Family.Name,
+            ["Marca"] = entity.Brand,
+            ["Modelo"] = entity.Model,
+            ["NumeroSerie"] = entity.SerialNumber,
+            ["Propiedad"] = entity.Ownership,
+            ["Criticidad"] = entity.Criticality,
+            ["EstadoDocumental"] = entity.DocumentStatus,
+            ["EstadoOperacional"] = entity.OperationalState.Code,
+            ["UbicacionTecnicaCodigo"] = entity.TechnicalLocationCode,
+            ["Patente"] = entity.Plate
         };
-
-        var row = new DataRow(values);
-        var completeness = CalculateCompleteness(row, values["EstadoDocumental"] ?? "Pendiente");
-        values["CompletitudFicha"] = completeness.Percentage.ToString(CultureInfo.InvariantCulture);
-        return new DataRow(values);
     }
 
-    private static DataRow WithValues(DataRow existing, IReadOnlyDictionary<string, string?> nextValues)
+    private static string ToRecordStatus(AssetStatus status)
     {
-        var values = new Dictionary<string, string?>(existing.Values, StringComparer.OrdinalIgnoreCase);
-        foreach (var item in nextValues)
+        return status switch
         {
-            values[item.Key] = item.Value;
+            AssetStatus.Active or AssetStatus.InMaintenance => "vigente",
+            AssetStatus.Unavailable => "inactivo",
+            AssetStatus.Retired => "obsoleto",
+            AssetStatus.Draft => "no_vigente",
+            _ => "vigente"
+        };
+    }
+
+    private static AssetStatus ParseStatus(string? value, string? operationalStateCode = null)
+    {
+        if (Same(operationalStateCode, "FUERA_SERVICIO_TALLER"))
+        {
+            return AssetStatus.InMaintenance;
         }
 
-        var row = new DataRow(values);
-        values["CompletitudFicha"] = CalculateCompleteness(row, values["EstadoDocumental"] ?? "Pendiente")
-            .Percentage
-            .ToString(CultureInfo.InvariantCulture);
-
-        return new DataRow(values);
-    }
-
-    private async Task ValidateReferencesAsync(
-        string faenaCodigo,
-        string? ubicacionTecnicaCodigo,
-        CancellationToken cancellationToken)
-    {
-        if (!await CodeExistsAsync(FaenasSchema, "Codigo", faenaCodigo, cancellationToken))
+        if (Same(operationalStateCode, "FUERA_SERVICIO_FAENA"))
         {
-            throw new DomainException("La faena indicada no existe.");
+            return AssetStatus.Unavailable;
         }
 
-        if (!string.IsNullOrWhiteSpace(ubicacionTecnicaCodigo))
+        return value?.Trim().ToLowerInvariant() switch
         {
-            var locationExists = await CodeExistsAsync(LocationsSchema, "Codigo", ubicacionTecnicaCodigo, cancellationToken);
-            var matchesFaenaLocation = await FaenaDeclaresLocationAsync(faenaCodigo, ubicacionTecnicaCodigo, cancellationToken);
-            if (!locationExists && !matchesFaenaLocation)
-            {
-                throw new DomainException("La ubicacion tecnica indicada no existe.");
-            }
-        }
+            "inactivo" => AssetStatus.Unavailable,
+            "obsoleto" or "anulado" => AssetStatus.Retired,
+            "no_vigente" => AssetStatus.Draft,
+            _ => AssetStatus.Active
+        };
     }
 
-    private async Task EnsureCodeExistsAsync(
-        string schemaName,
-        string columnName,
-        string value,
-        string message,
-        CancellationToken cancellationToken)
+    private static string DefaultOperationalStateCode(AssetStatus status)
     {
-        var rows = await _dataProvider.ReadRowsAsync(schemaName, cancellationToken);
-        if (!rows.Any(row => string.Equals(row.GetValue(columnName), value, StringComparison.OrdinalIgnoreCase)))
+        return status switch
         {
-            throw new DomainException(message);
+            AssetStatus.Active => "OPERATIVO_FAENA",
+            AssetStatus.InMaintenance => "FUERA_SERVICIO_TALLER",
+            AssetStatus.Unavailable or AssetStatus.Retired => "FUERA_SERVICIO_FAENA",
+            AssetStatus.Draft => "ALERTA_FAENA",
+            _ => "OPERATIVO_FAENA"
+        };
+    }
+
+    private static string? NormalizeOperationalStateCode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
         }
-    }
 
-    private async Task<bool> CodeExistsAsync(
-        string schemaName,
-        string columnName,
-        string value,
-        CancellationToken cancellationToken)
-    {
-        var rows = await _dataProvider.ReadRowsAsync(schemaName, cancellationToken);
-        return rows.Any(row => string.Equals(row.GetValue(columnName), value, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private async Task<bool> FaenaDeclaresLocationAsync(
-        string faenaCodigo,
-        string ubicacionTecnicaCodigo,
-        CancellationToken cancellationToken)
-    {
-        var rows = await _dataProvider.ReadRowsAsync(FaenasSchema, cancellationToken);
-        var faena = rows.FirstOrDefault(row => string.Equals(row.GetValue("Codigo"), faenaCodigo, StringComparison.OrdinalIgnoreCase));
-        var declaredLocation = FirstNonEmpty(faena, "UbicacionTecnicaCodigo", "Ubicación Técnica", "UbicaciÃ³n TÃ©cnica");
-        return string.Equals(declaredLocation, ubicacionTecnicaCodigo, StringComparison.OrdinalIgnoreCase);
+        return value.Trim().ToUpperInvariant() switch
+        {
+            "OPERATIVO" or "OPERATIVO EN FAENA" or "OPERATIVO_FAENA" => "OPERATIVO_FAENA",
+            "ALERTA" or "CON ALERTA EN FAENA" or "ALERTA_FAENA" => "ALERTA_FAENA",
+            "FUERA DE SERVICIO EN FAENA" or "FUERA_SERVICIO_FAENA" => "FUERA_SERVICIO_FAENA",
+            "EN MANTENIMIENTO" or "FUERA DE SERVICIO EN TALLER" or "FUERA_SERVICIO_TALLER" => "FUERA_SERVICIO_TALLER",
+            var raw => raw.Replace(' ', '_')
+        };
     }
 
     private async Task RecordAssetAuditAsync(
@@ -711,239 +659,12 @@ public sealed class AssetService : IAssetService
         }
     }
 
-    private void EnsureCanViewAsset(UserAccessContext user, DataRow row)
+    private void EnsureCanViewAsset(UserAccessContext user, AssetEntity asset)
     {
-        var faenaCodigo = row.GetValue("FaenaCodigo")?.Trim() ?? string.Empty;
-        if (!_authorizationPolicyService.CanViewFaena(user, faenaCodigo))
+        if (!_authorizationPolicyService.CanViewFaena(user, asset.Faena.Code))
         {
             throw new UnauthorizedAccessException("El usuario no tiene acceso al activo solicitado.");
         }
-    }
-
-    private static DataRow? FindAssetRow(IReadOnlyCollection<DataRow> rows, string codigo)
-    {
-        return rows.FirstOrDefault(row =>
-            string.Equals(NormalizeCode(row.GetValue("Codigo")), NormalizeCode(codigo), StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static int FindAssetIndex(IReadOnlyList<DataRow> rows, string codigo)
-    {
-        for (var index = 0; index < rows.Count; index++)
-        {
-            if (string.Equals(NormalizeCode(rows[index].GetValue("Codigo")), NormalizeCode(codigo), StringComparison.OrdinalIgnoreCase))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static AssetStatus ParseStatus(string? value)
-    {
-        return Enum.TryParse<AssetStatus>(value, ignoreCase: true, out var status)
-            ? status
-            : AssetStatus.Active;
-    }
-
-    private static AssetDocumentResponse ToDocumentResponse(DataRow row)
-    {
-        var expiresOn = ParseDateOnly(row.GetValue("FechaVencimiento"));
-        var isCritical = ParseBool(row.GetValue("Critico"));
-        var explicitlyBlocks = ParseBool(row.GetValue("BloqueaDisponibilidad"));
-        var isHistorical = ParseBool(row.GetValue("EsHistorico"));
-        var rawStatus = row.GetValue("Estado")?.Trim() ?? string.Empty;
-        var expired = expiresOn.HasValue && expiresOn.Value < DateOnly.FromDateTime(DateTime.UtcNow);
-        var terminalStatus = rawStatus.Equals("Anulado", StringComparison.OrdinalIgnoreCase) ||
-                             rawStatus.Equals("Reemplazado", StringComparison.OrdinalIgnoreCase);
-        var blocksAvailability = !isHistorical && !terminalStatus && expired && (isCritical || explicitlyBlocks);
-        var effectiveStatus = terminalStatus
-            ? rawStatus
-            : blocksAvailability
-                ? "Vencido"
-                : rawStatus;
-
-        return new AssetDocumentResponse(
-            row.GetValue("EntidadTipo")?.Trim() ?? string.Empty,
-            row.GetValue("EntidadCodigo")?.Trim() ?? string.Empty,
-            row.GetValue("TipoDocumento")?.Trim() ?? string.Empty,
-            effectiveStatus,
-            expiresOn,
-            EmptyToNull(row.GetValue("ArchivoKey")),
-            isCritical,
-            expired,
-            blocksAvailability);
-    }
-
-    private static DataRow ToStateEventRow(AssetStateEventResponse stateEvent)
-    {
-        return new DataRow(new Dictionary<string, string?>
-        {
-            ["EventoId"] = stateEvent.EventoId,
-            ["ActivoCodigo"] = stateEvent.ActivoCodigo,
-            ["EstadoAnterior"] = stateEvent.EstadoAnterior.ToString(),
-            ["Estado"] = stateEvent.Estado.ToString(),
-            ["FechaEvento"] = stateEvent.FechaEvento.UtcDateTime.ToString("O"),
-            ["Motivo"] = stateEvent.Motivo,
-            ["UsuarioId"] = stateEvent.UsuarioId
-        });
-    }
-
-    private static bool IsAssetDocument(DataRow row, string codigo)
-    {
-        return string.Equals(row.GetValue("EntidadTipo"), "Activo", StringComparison.OrdinalIgnoreCase) &&
-               string.Equals(row.GetValue("EntidadCodigo"), codigo, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool HasCriticalExpiredDocument(string codigo, IReadOnlyCollection<DataRow> documents)
-    {
-        return documents.Any(row => IsAssetDocument(row, codigo) && ToDocumentResponse(row).BloqueaDisponibilidad);
-    }
-
-    private static string EffectiveDocumentState(DataRow row, IReadOnlyCollection<DataRow> documents)
-    {
-        var codigo = row.GetValue("Codigo")?.Trim() ?? string.Empty;
-        if (HasCriticalExpiredDocument(codigo, documents))
-        {
-            return "Vencido";
-        }
-
-        return NormalizeCatalogValue(row.GetValue("EstadoDocumental"), "Pendiente");
-    }
-
-    private static string EffectiveOperationalState(DataRow row)
-    {
-        return NormalizeCatalogValue(row.GetValue("EstadoOperacional"), DefaultOperationalState(ParseStatus(row.GetValue("Estado"))));
-    }
-
-    private static string DefaultOperationalState(AssetStatus status)
-    {
-        return status switch
-        {
-            AssetStatus.Draft => "Borrador",
-            AssetStatus.Active => "Operativo",
-            AssetStatus.InMaintenance => "En mantenimiento",
-            AssetStatus.Unavailable => "No disponible",
-            AssetStatus.Retired => "Retirado",
-            _ => "Operativo"
-        };
-    }
-
-    private static AssetCompleteness CalculateCompleteness(DataRow row, string effectiveDocumentState)
-    {
-        var missing = new List<string>();
-        foreach (var field in RequiredTechnicalFields)
-        {
-            var value = field.Equals("EstadoDocumental", StringComparison.OrdinalIgnoreCase)
-                ? effectiveDocumentState
-                : row.GetValue(field);
-
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                missing.Add(field);
-            }
-        }
-
-        var completed = RequiredTechnicalFields.Length - missing.Count;
-        var percentage = (int)Math.Round((decimal)completed / RequiredTechnicalFields.Length * 100, MidpointRounding.AwayFromZero);
-        var state = percentage >= 100 ? "Completa" : completed == 0 ? "Pendiente" : "Parcial";
-
-        return new AssetCompleteness(RequiredTechnicalFields.Length, completed, percentage, state, missing);
-    }
-
-    private static IReadOnlyDictionary<string, string?> BuildTechnicalFields(DataRow row)
-    {
-        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["TipoActivo"] = EmptyToNull(row.GetValue("TipoActivo")),
-            ["Familia"] = EmptyToNull(row.GetValue("Familia")),
-            ["Marca"] = EmptyToNull(row.GetValue("Marca")),
-            ["Modelo"] = EmptyToNull(row.GetValue("Modelo")),
-            ["Patente"] = EmptyToNull(row.GetValue("Patente")),
-            ["NumeroSerie"] = EmptyToNull(row.GetValue("NumeroSerie")),
-            ["Propiedad"] = EmptyToNull(row.GetValue("Propiedad")),
-            ["Criticidad"] = EmptyToNull(row.GetValue("Criticidad")),
-            ["UbicacionTecnicaCodigo"] = EmptyToNull(row.GetValue("UbicacionTecnicaCodigo"))
-        };
-
-        foreach (var item in ParseTechnicalFields(row.GetValue("FichaTecnicaJson")))
-        {
-            values[item.Key] = item.Value;
-        }
-
-        return values
-            .Where(item => !string.IsNullOrWhiteSpace(item.Value))
-            .ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static IReadOnlyDictionary<string, string?> ParseTechnicalFields(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return new Dictionary<string, string?>();
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<Dictionary<string, string?>>(value) ?? new Dictionary<string, string?>();
-        }
-        catch (JsonException)
-        {
-            return new Dictionary<string, string?>();
-        }
-    }
-
-    private static string? SerializeTechnicalFields(IReadOnlyDictionary<string, string?>? fields)
-    {
-        if (fields is null || fields.Count == 0)
-        {
-            return null;
-        }
-
-        var clean = fields
-            .Where(item => !string.IsNullOrWhiteSpace(item.Key) && !string.IsNullOrWhiteSpace(item.Value))
-            .ToDictionary(item => item.Key.Trim(), item => item.Value?.Trim(), StringComparer.OrdinalIgnoreCase);
-
-        return clean.Count == 0 ? null : JsonSerializer.Serialize(clean);
-    }
-
-    private static string Serialize(DataRow row)
-    {
-        return JsonSerializer.Serialize(row.Values);
-    }
-
-    private static string NormalizeCode(string? value)
-    {
-        return value?.Trim().ToUpperInvariant() ?? string.Empty;
-    }
-
-    private static string NormalizeCatalogValue(string? value, string defaultValue)
-    {
-        return string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
-    }
-
-    private static string? EmptyToNull(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    }
-
-    private static string? FirstNonEmpty(DataRow? row, params string[] columns)
-    {
-        if (row is null)
-        {
-            return null;
-        }
-
-        foreach (var column in columns)
-        {
-            var value = EmptyToNull(row.GetValue(column));
-            if (value is not null)
-            {
-                return value;
-            }
-        }
-
-        return null;
     }
 
     private static void ValidateRequired(string? value, string fieldName)
@@ -954,30 +675,41 @@ public sealed class AssetService : IAssetService
         }
     }
 
-    private static bool ParseBool(string? value)
+    private static string NormalizeCode(string? value)
     {
-        return !string.IsNullOrWhiteSpace(value) &&
-               (value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) ||
-                value.Trim().Equals("si", StringComparison.OrdinalIgnoreCase) ||
-                value.Trim().Equals("1", StringComparison.OrdinalIgnoreCase));
+        return value?.Trim().ToUpperInvariant() ?? string.Empty;
     }
 
-    private static DateOnly? ParseDateOnly(string? value)
+    private static string? EmptyToNull(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static bool Same(string? left, string? right)
+    {
+        return string.Equals(left?.Trim(), right?.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Serialize(AssetEntity entity)
+    {
+        return JsonSerializer.Serialize(new
         {
-            return null;
-        }
-
-        return DateOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var result)
-            ? result
-            : null;
-    }
-
-    private static DateTimeOffset? ParseDateTime(string? value)
-    {
-        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var result)
-            ? result
-            : null;
+            entity.Code,
+            entity.Name,
+            FaenaCodigo = entity.Faena?.Code,
+            Familia = entity.Family?.Code,
+            EstadoOperacional = entity.OperationalState?.Code,
+            entity.RecordStatus,
+            entity.AssetType,
+            entity.TechnicalLocationCode,
+            entity.Brand,
+            entity.Model,
+            entity.Plate,
+            entity.SerialNumber,
+            entity.Ownership,
+            entity.Criticality,
+            entity.DocumentStatus,
+            entity.TechnicalSheetValidated
+        });
     }
 }

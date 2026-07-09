@@ -139,7 +139,13 @@ Archivo Excel recibido
 
 ## Estado actualizado: PostgreSQL por defecto
 
-Desde la migracion del 2026-07-09, `DataProvider:Provider=PostgreSql` es el valor objetivo para desarrollo local. `ExcelDataProvider` queda como compatibilidad legacy y para importaciones, exportaciones, plantillas y seeds explicitos.
+Desde la migracion del 2026-07-09, `DataProvider:Provider=PostgreSql` es el valor activo validado para desarrollo local en `appsettings.Development.json`, `.env.example` y `docker-compose.yml`. `ExcelDataProvider` queda como compatibilidad legacy y para importaciones, exportaciones, plantillas y seeds explicitos.
+
+Observacion de configuracion actual:
+
+- [appsettings.json](/C:/Users/Thinkpad/Documents/Enaex/sistema/APLICACION-CMMS/backend/src/MaintenanceCMMS.Api/appsettings.json) aun deja `Provider=Excel` como fallback base.
+- El entorno local comprobado el 2026-07-09 corre efectivamente con `Provider=PostgreSql` por `Development` y variables de entorno.
+- No se debe interpretar ese fallback base como evidencia de runtime Excel en Docker o en desarrollo local.
 
 Se agregaron:
 
@@ -152,3 +158,11 @@ Se agregaron:
 - `GET /api/system/database-health`.
 
 `SqlDataProvider` ya no es un placeholder silencioso: cuando PostgreSQL esta activo, bloquea `ReadRowsAsync` y `SaveRowsAsync` para impedir que los modulos se migren a una tabla universal de filas. Los modulos pendientes deben reemplazar sus accesos `DataRow` por repositorios o consultas EF tipadas.
+
+Estado real del runtime al 2026-07-09:
+
+- Identidad y auditoria ya operan con `PostgreSqlIdentityStore` y `PostgreSqlAuditService`.
+- `FaenaService` y `AssetService` ya operan con `CmmsDbContext`.
+- `GET /api/system/data-provider` reporta `activeProvider=PostgreSql`.
+- `GET /api/system/database-health` reporta `healthy=true`, `canConnect=true` y `pendingMigrations=[]`.
+- Persisten servicios operacionales acoplados a `IDataProvider`/`DataRow`, por lo que la migracion funcional completa no esta cerrada aun.

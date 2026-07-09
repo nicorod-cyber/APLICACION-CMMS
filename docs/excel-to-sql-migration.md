@@ -120,6 +120,8 @@ Implementado:
 - Migracion inicial versionada para identidad, auditoria, faenas, familias, estados operacionales, activos y documentos compartidos.
 - Seed de desarrollo idempotente.
 - Identidad y auditoria PostgreSQL cuando `DataProvider:Provider=PostgreSql`.
+- `FaenaService` migrado a consultas EF sobre `faenas`.
+- `AssetService` migrado a EF sobre `activos`, `faenas`, `familias_equipo`, `estados_operacionales_activo`, `eventos_estado_activo` y `documento_activos`.
 - Endpoint `GET /api/system/database-health`.
 - `GET /api/system/excel-health` marcado como legacy/no oficial.
 
@@ -128,4 +130,32 @@ Pendiente:
 - Migrar todos los servicios que aun llaman `IDataProvider.ReadRowsAsync` y `SaveRowsAsync`.
 - Crear migraciones tipadas de OT, inventario, preventivos, programacion, abastecimiento, avisos, alertas, notificaciones, PDF templates y jerarquia tecnica.
 - Adaptar frontend para familias cerradas, estados operacionales oficiales y documentos multi-activo.
+
+## Verificacion ejecutada el 2026-07-09
+
+Se ejecuto sobre este repositorio:
+
+- `dotnet restore backend/MaintenanceCMMS.sln`
+- `dotnet build backend/MaintenanceCMMS.sln --no-restore`
+- `dotnet test backend/MaintenanceCMMS.sln --no-build`
+- `npm.cmd ci`
+- `npm.cmd run build`
+- `docker compose up --build -d`
+- `GET /api/health`
+- `GET /api/system/data-provider`
+- `GET /api/system/database-health`
+
+Resultado comprobado:
+
+- Backend compila.
+- Frontend compila.
+- Las 84 pruebas backend pasan cuando el runner puede acceder a las fuentes del sistema requeridas por ClosedXML.
+- Docker levanta `postgres`, `backend`, `frontend`, `nginx` y `mailhog`.
+- El proveedor activo reportado es PostgreSQL.
+- La base oficial PostgreSQL esta sana y sin migraciones pendientes.
+- El stack puede iniciar aunque `data/excel` no contenga los Excel operacionales, siempre que las funciones legacy de importacion/exportacion no se invoquen.
+
+Pendiente no resuelto:
+
+- Servicios operacionales que aun persisten en Excel mediante `IDataProvider`/`DataRow`.
 
