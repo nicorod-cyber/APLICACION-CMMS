@@ -1,3 +1,4 @@
+using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Enums;
@@ -34,8 +35,7 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
             .UseNpgsql($"Host=localhost;Port=5432;Database={databaseName};Username=cmms_app;Password=cmms_app_password")
             .Options;
         var dbContext = new CmmsDbContext(options);
-        await dbContext.Database.EnsureCreatedAsync();
-        await dbContext.Database.ExecuteSqlRawAsync("CREATE SEQUENCE IF NOT EXISTS work_notification_number_seq START WITH 1 INCREMENT BY 1; CREATE SEQUENCE IF NOT EXISTS work_order_number_seq START WITH 1 INCREMENT BY 1;");
+        await dbContext.Database.MigrateAsync();
         await SeedAsync(dbContext);
         return new PostgreSqlWorkTestFixture(databaseName, dbContext);
     }
@@ -54,6 +54,9 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         foreach (var value in Enum.GetNames<MaintenanceType>()) AddCatalog(db, "MaintenanceType", value);
         AddCatalog(db, "MaintenanceType", "Corrective");
         AddCatalog(db, "MaintenanceType", "Preventive");
+        foreach (var value in Enum.GetNames<WarehouseType>()) AddInventoryCatalog(db, "WarehouseType", value);
+        foreach (var value in Enum.GetNames<StockMovementType>()) AddInventoryCatalog(db, "MovementType", value);
+        AddInventoryCatalog(db, "Unit", "UN");
 
         var responseType = db.WorkCatalogs.Local.First(x => x.Category == "WorkOrderChecklistResponseType" && x.Code == WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica.ToString());
         var template = new ChecklistTemplateEntity { Code = "TPL-BASE", Name = "Plantilla base", IsActive = true };
@@ -78,6 +81,19 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         db.WorkCatalogs.Add(new WorkCatalogEntity { Category = category, Code = code, Name = code, IsActive = true, SortOrder = db.WorkCatalogs.Local.Count(x => x.Category == category) + 1 });
     }
 
+    private static void AddInventoryCatalog(CmmsDbContext db, string category, string code)
+    {
+        var normalizedCode = code.Trim().ToUpperInvariant();
+        if (db.InventoryCatalogs.Local.Any(item => item.Category == category && item.Code == normalizedCode)) return;
+        db.InventoryCatalogs.Add(new InventoryCatalogEntity
+        {
+            Category = category,
+            Code = normalizedCode,
+            Name = code,
+            IsActive = true,
+            SortOrder = db.InventoryCatalogs.Local.Count(item => item.Category == category) + 1
+        });
+    }
     public async ValueTask DisposeAsync()
     {
         await DbContext.DisposeAsync();

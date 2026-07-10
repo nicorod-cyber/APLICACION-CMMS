@@ -1,5 +1,6 @@
-﻿using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 
@@ -42,6 +43,19 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<WorkOrderStatusHistoryEntity> WorkOrderStatusHistory => Set<WorkOrderStatusHistoryEntity>();
     public DbSet<DocumentWorkOrderEntity> DocumentWorkOrders => Set<DocumentWorkOrderEntity>();
     public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
+    public DbSet<InventoryCatalogEntity> InventoryCatalogs => Set<InventoryCatalogEntity>();
+    public DbSet<WarehouseEntity> Warehouses => Set<WarehouseEntity>();
+    public DbSet<WarehouseLocationEntity> WarehouseLocations => Set<WarehouseLocationEntity>();
+    public DbSet<SparePartEntity> SpareParts => Set<SparePartEntity>();
+    public DbSet<WarehouseStockEntity> WarehouseStocks => Set<WarehouseStockEntity>();
+    public DbSet<StockMovementEntity> StockMovements => Set<StockMovementEntity>();
+    public DbSet<StockReservationEntity> StockReservations => Set<StockReservationEntity>();
+    public DbSet<StockTransferEntity> StockTransfers => Set<StockTransferEntity>();
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        optionsBuilder.ReplaceService<IMigrationsIdGenerator, CmmsLegacyMigrationsIdGenerator>();
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

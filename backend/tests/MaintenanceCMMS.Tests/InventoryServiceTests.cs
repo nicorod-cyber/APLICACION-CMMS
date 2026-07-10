@@ -287,12 +287,6 @@ public sealed class InventoryServiceTests
     {
         var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
         var db = fixture.DbContext;
-        await db.Database.ExecuteSqlRawAsync("CREATE SEQUENCE IF NOT EXISTS spare_part_number_seq START WITH 1; CREATE SEQUENCE IF NOT EXISTS stock_movement_number_seq START WITH 1; CREATE SEQUENCE IF NOT EXISTS stock_reservation_number_seq START WITH 1; CREATE SEQUENCE IF NOT EXISTS stock_transfer_number_seq START WITH 1;");
-        foreach (var type in Enum.GetNames<WarehouseType>()) db.Add(new InventoryCatalogEntity { Category = "WarehouseType", Code = type, Name = type });
-        foreach (var type in Enum.GetNames<StockMovementType>()) db.Add(new InventoryCatalogEntity { Category = "MovementType", Code = type, Name = type });
-        db.Add(new InventoryCatalogEntity { Category = "Unit", Code = "UN", Name = "UN" });
-        db.Add(new InventoryCatalogEntity { Category = "SparePartCategory", Code = "Chancadores", Name = "Chancadores" });
-        await db.SaveChangesAsync();
         var service = new InventoryService(db, new PostgreSqlAuditService(db, new AuditContextAccessor()), new AuthorizationPolicyService());
         return new InventoryFixture(fixture, service);
     }

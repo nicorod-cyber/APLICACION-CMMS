@@ -1,5 +1,6 @@
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
+using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Enums;
@@ -42,6 +43,7 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         await UpsertDocumentTypeAsync("FAENA-GRAL", "Documento general de faena", DocumentEntityType.Faena, false, false, false, 30, cancellationToken);
         await UpsertDocumentTypeAsync("OT-GRAL", "Documento general de OT", DocumentEntityType.OT, false, false, false, 30, cancellationToken);
         await UpsertWorkCatalogsAsync(cancellationToken);
+        await UpsertInventoryCatalogsAsync(cancellationToken);
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
@@ -116,6 +118,46 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
     }
 
 
+    private async Task UpsertInventoryCatalogsAsync(CancellationToken cancellationToken)
+    {
+        var sortOrder = 1;
+        foreach (var value in Enum.GetNames<WarehouseType>())
+        {
+            await UpsertInventoryCatalogAsync("WarehouseType", value.ToUpperInvariant(), value, sortOrder++, cancellationToken);
+        }
+
+        sortOrder = 1;
+        foreach (var value in Enum.GetNames<StockMovementType>())
+        {
+            await UpsertInventoryCatalogAsync("MovementType", value.ToUpperInvariant(), value, sortOrder++, cancellationToken);
+        }
+
+        await UpsertInventoryCatalogAsync("Unit", "UN", "Unidad", 1, cancellationToken);
+    }
+
+    private async Task UpsertInventoryCatalogAsync(string category, string code, string name, int sortOrder, CancellationToken cancellationToken)
+    {
+        var entity = await _dbContext.InventoryCatalogs.FirstOrDefaultAsync(
+            item => item.Category == category && item.Code == code,
+            cancellationToken);
+        if (entity is null)
+        {
+            _dbContext.InventoryCatalogs.Add(new InventoryCatalogEntity
+            {
+                Category = category,
+                Code = code,
+                Name = name,
+                IsActive = true,
+                SortOrder = sortOrder
+            });
+            return;
+        }
+
+        entity.Name = name;
+        entity.IsActive = true;
+        entity.SortOrder = sortOrder;
+        entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
+    }
     private async Task UpsertWorkCatalogsAsync(CancellationToken cancellationToken)
     {
         var order = 1;
