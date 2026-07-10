@@ -1,4 +1,4 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
 using MaintenanceCMMS.Api.Jobs;
@@ -3436,6 +3436,32 @@ technicalHierarchyApi.MapPost("/nodes/{code}/assets", async (
     })
     .WithName("AssignTechnicalHierarchyAssets");
 
+technicalHierarchyApi.MapPost("/import-excel", async (
+        TechnicalHierarchyExcelImportRequest request,
+        ClaimsPrincipal user,
+        ITechnicalHierarchyExcelImportService importService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await importService.ImportAsync(
+                new TechnicalHierarchyExcelImportCommand(
+                    request.SistemasComponentesPath,
+                    request.UbicacionesTecnicasPath,
+                    GetActorId(user)),
+                UserAccessContext.FromClaims(user),
+                cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ImportTechnicalHierarchyFromExcel");
 var alertsApi = api.MapGroup("/alerts")
     .RequireAuthorization();
 

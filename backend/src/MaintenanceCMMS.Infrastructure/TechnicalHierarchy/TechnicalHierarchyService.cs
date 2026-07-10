@@ -1,982 +1,237 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.TechnicalHierarchy;
 using MaintenanceCMMS.Domain.Common;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.TechnicalHierarchy;
 
 public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
 {
-    private const string HierarchySchema = "sistemas_componentes";
-    private const string AssetsSchema = "activos";
-    private const string FaenasSchema = "faenas";
-    private const string LocationsSchema = "ubicaciones_tecnicas";
+    private readonly CmmsDbContext _db;
+    private readonly IAuditService _audit;
+    private readonly IAuthorizationPolicyService _auth;
+    public TechnicalHierarchyService(CmmsDbContext db, IAuditService audit, IAuthorizationPolicyService auth){_db=db;_audit=audit;_auth=auth;}
 
-    private readonly IDataProvider _dataProvider;
-    private readonly IAuditService _auditService;
-    private readonly IAuthorizationPolicyService _authorizationPolicyService;
-
-    public TechnicalHierarchyService(
-        IDataProvider dataProvider,
-        IAuditService auditService,
-        IAuthorizationPolicyService authorizationPolicyService)
+    public async Task<IReadOnlyCollection<TechnicalNodeResponse>> ListAsync(TechnicalHierarchyQuery query, UserAccessContext user, CancellationToken ct)
     {
-        _dataProvider = dataProvider;
-        _auditService = auditService;
-        _authorizationPolicyService = authorizationPolicyService;
+        await EnsureCanFilterByFaenaAsync(query.FaenaCodigo,user,ct);
+        var all=await LoadAllAsync(ct);
+        var q=BaseQuery().AsNoTracking();
+        if(!query.IncludeObsolete)q=q.Where(x=>!x.IsObsolete);
+        if(query.Nivel.HasValue){var level=query.Nivel.Value.ToString();q=q.Where(x=>x.Level==level);}        
+        if(!string.IsNullOrWhiteSpace(query.FaenaCodigo)){var f=Code(query.FaenaCodigo)!;q=q.Where(x=>(x.Faena!=null&&x.Faena.Code.ToUpper()==f)||x.Assets.Any(a=>a.Asset.Faena.Code.ToUpper()==f));}
+        if(!string.IsNullOrWhiteSpace(query.Familia)){var fam=Code(query.Familia)!;q=q.Where(x=>x.Families.Any(f=>f.EquipmentFamily.Code.ToUpper()==fam));}
+        q=ApplyScope(q,user);
+        var nodes=(await q.ToArrayAsync(ct)).Select(x=>ToResponse(x,all)).ToArray();
+        if(!string.IsNullOrWhiteSpace(query.SistemaCodigo))nodes=nodes.Where(x=>Same(ResolveSystemCode(x.Codigo,all),query.SistemaCodigo)).ToArray();
+        return nodes.OrderBy(x=>x.Ruta,StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    public async Task<IReadOnlyCollection<TechnicalNodeResponse>> ListAsync(
-        TechnicalHierarchyQuery query,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        await EnsureCanFilterByFaenaAsync(query.FaenaCodigo, user, cancellationToken);
-        var rows = await _dataProvider.ReadRowsAsync(HierarchySchema, cancellationToken);
-        var assets = await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken);
+    public async Task<IReadOnlyCollection<TechnicalHierarchyTreeNode>> GetTreeAsync(TechnicalHierarchyQuery query, UserAccessContext user, CancellationToken ct)=>BuildTree(await ListAsync(query,user,ct));
 
-        return BuildResponses(rows)
-            .Where(node => MatchesQuery(node, query, rows, assets, user))
-            .OrderBy(node => node.Ruta, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+    public async Task<TechnicalNodeResponse?> GetByCodeAsync(string code, UserAccessContext user, CancellationToken ct)
+    {
+        var c=Code(code)!;
+        var node=await ApplyScope(BaseQuery().AsNoTracking(),user).SingleOrDefaultAsync(x=>x.Code.ToUpper()==c,ct);
+        return node is null?null:ToResponse(node,await LoadAllAsync(ct));
     }
 
-    public async Task<IReadOnlyCollection<TechnicalHierarchyTreeNode>> GetTreeAsync(
-        TechnicalHierarchyQuery query,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<TechnicalNodeResponse> CreateAsync(CreateTechnicalNodeRequest r, UserAccessContext user, CancellationToken ct)
     {
-        var nodes = await ListAsync(query, user, cancellationToken);
-        return BuildTree(nodes);
+        EnsureCanManage(user);Req(r.Codigo,nameof(r.Codigo));Req(r.Nombre,nameof(r.Nombre));var code=Code(r.Codigo)!;
+        if(await _db.TechnicalNodes.AnyAsync(x=>x.Code.ToUpper()==code,ct))throw new DomainException($"Ya existe un nodo tecnico con codigo '{r.Codigo}'.");
+        var parent=await ValidateParentAsync(null,r.Nivel,r.CodigoPadre,ct);var faena=await ResolveFaenaAsync(r.FaenaCodigo,user,ct);var loc=await ResolveLocationAsync(r.UbicacionTecnicaCodigo,ct);
+        var fams=await ResolveFamiliesAsync(r.FamiliasEquipo??[],ct);var assets=await ResolveAssetsAsync(r.ActivosAsignados??[],user,ct);var norm=NormalizeName(r.Nombre);
+        await EnsureNoDuplicateAsync(null,r.Nivel,parent?.Id,norm,ct);
+        var node=new TechnicalNodeEntity{Code=code,Name=r.Nombre.Trim(),NormalizedName=norm,Level=r.Nivel.ToString(),ParentId=parent?.Id,FaenaId=faena?.Id,TechnicalLocationId=loc?.Id,CreatedByUserId=user.UserId};
+        foreach(var f in fams)node.Families.Add(new TechnicalNodeFamilyEntity{EquipmentFamilyId=f.Id});
+        foreach(var a in assets)node.Assets.Add(new TechnicalNodeAssetEntity{AssetId=a.Id});
+        AddAliases(node,r.AliasHistoricos??[],"Manual");_db.TechnicalNodes.Add(node);await _db.SaveChangesAsync(ct);DetachTrackedTechnicalHierarchy();
+        await Audit(user,"Created",node.Code,null,JsonSerializer.Serialize(AuditShape(node)),"Nodo tecnico creado",ct);
+        return (await GetByCodeAsync(node.Code,user,ct))!;
     }
 
-    public async Task<TechnicalNodeResponse?> GetByCodeAsync(
-        string code,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<TechnicalNodeResponse?> UpdateAsync(string code, UpdateTechnicalNodeRequest r, UserAccessContext user, CancellationToken ct)
     {
-        var rows = await _dataProvider.ReadRowsAsync(HierarchySchema, cancellationToken);
-        var row = FindByCode(rows, code);
-        if (row is null)
-        {
-            return null;
-        }
-
-        var assets = await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken);
-        var node = BuildResponses(rows).First(item => SameCode(item.Codigo, code));
-        return CanViewNode(node, assets, user) ? node : throw new UnauthorizedAccessException("El usuario no tiene acceso al nodo solicitado.");
+        EnsureCanManage(user);Req(r.Nombre,nameof(r.Nombre));var node=await BaseQuery(true).SingleOrDefaultAsync(x=>x.Code.ToUpper()==Code(code),ct);if(node is null)return null;
+        var level=ParseLevel(node.Level);var parent=await ValidateParentAsync(node.Id,level,r.CodigoPadre,ct);var faena=await ResolveFaenaAsync(r.FaenaCodigo,user,ct);var loc=await ResolveLocationAsync(r.UbicacionTecnicaCodigo,ct);
+        var fams=await ResolveFamiliesAsync(r.FamiliasEquipo??node.Families.Select(x=>x.EquipmentFamily.Code).ToArray(),ct);var assets=await ResolveAssetsAsync(r.ActivosAsignados??node.Assets.Select(x=>x.Asset.Code).ToArray(),user,ct);
+        var norm=NormalizeName(r.Nombre);await EnsureNoDuplicateAsync(node.Id,level,parent?.Id,norm,ct);var prev=JsonSerializer.Serialize(AuditShape(node));var oldName=node.Name;
+        node.Name=r.Nombre.Trim();node.NormalizedName=norm;node.ParentId=parent?.Id;node.FaenaId=faena?.Id;node.TechnicalLocationId=loc?.Id;node.UpdatedByUserId=user.UserId;node.UpdatedAtUtc=DateTimeOffset.UtcNow;
+        ReplaceFamilies(node,fams);ReplaceAssets(node,assets);if(!string.Equals(oldName,node.Name,StringComparison.OrdinalIgnoreCase))AddAliases(node,[oldName],"Rename");AddAliases(node,r.AliasHistoricos??[],"Manual");
+        await _db.SaveChangesAsync(ct);await Audit(user,"Updated",node.Code,prev,JsonSerializer.Serialize(AuditShape(node)),r.Reason??"Nodo tecnico actualizado",ct);return await GetByCodeAsync(node.Code,user,ct);
     }
 
-    public async Task<TechnicalNodeResponse> CreateAsync(
-        CreateTechnicalNodeRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<TechnicalNodeResponse?> MarkObsoleteAsync(string code, MarkTechnicalNodeObsoleteRequest r, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        ValidateRequired(request.Codigo, nameof(request.Codigo));
-        ValidateRequired(request.Nombre, nameof(request.Nombre));
-
-        var rows = (await _dataProvider.ReadRowsAsync(HierarchySchema, cancellationToken)).ToList();
-        if (FindByCode(rows, request.Codigo) is not null)
-        {
-            throw new DomainException($"Ya existe un nodo tecnico con codigo '{request.Codigo}'.");
-        }
-
-        await ValidateReferencesAsync(
-            rows,
-            request.Nivel,
-            request.CodigoPadre,
-            request.FaenaCodigo,
-            request.UbicacionTecnicaCodigo,
-            request.ActivosAsignados ?? [],
-            user,
-            cancellationToken);
-
-        var normalizedName = NormalizeName(request.Nombre);
-        EnsureNoExactDuplicate(rows, request.Codigo, request.Nivel, request.CodigoPadre, normalizedName);
-
-        var now = DateTimeOffset.UtcNow;
-        var row = new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Codigo"] = request.Codigo.Trim(),
-            ["Nombre"] = request.Nombre.Trim(),
-            ["Nivel"] = request.Nivel.ToString(),
-            ["CodigoPadre"] = EmptyToNull(request.CodigoPadre),
-            ["NombreNormalizado"] = normalizedName,
-            ["FaenaCodigo"] = EmptyToNull(request.FaenaCodigo),
-            ["UbicacionTecnicaCodigo"] = EmptyToNull(request.UbicacionTecnicaCodigo),
-            ["FamiliasEquipo"] = JoinList(request.FamiliasEquipo ?? []),
-            ["ActivosAsignados"] = JoinList(request.ActivosAsignados ?? []),
-            ["AliasHistoricos"] = JoinList(request.AliasHistoricos ?? []),
-            ["Obsoleto"] = "false",
-            ["FusionadoEnCodigo"] = null,
-            ["FechaCreacionUtc"] = now.UtcDateTime.ToString("O"),
-            ["FechaActualizacionUtc"] = now.UtcDateTime.ToString("O")
-        });
-
-        rows.Add(row);
-        await _dataProvider.SaveRowsAsync(HierarchySchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "Created", request.Codigo, null, Serialize(row), "Nodo tecnico creado", cancellationToken);
-
-        return (await GetByCodeAsync(request.Codigo, user, cancellationToken))!;
+        EnsureCanManage(user);var node=await _db.TechnicalNodes.SingleOrDefaultAsync(x=>x.Code.ToUpper()==Code(code),ct);if(node is null)return null;
+        var prev=JsonSerializer.Serialize(new{node.Code,node.IsObsolete});node.IsObsolete=true;node.UpdatedByUserId=user.UserId;node.UpdatedAtUtc=DateTimeOffset.UtcNow;await _db.SaveChangesAsync(ct);
+        await Audit(user,"MarkedObsolete",node.Code,prev,JsonSerializer.Serialize(new{node.Code,node.IsObsolete}),r.Reason??"Nodo tecnico marcado como obsoleto; no se elimina fisicamente.",ct);
+        return await GetByCodeAsync(node.Code,user,ct);
     }
 
-    public async Task<TechnicalNodeResponse?> UpdateAsync(
-        string code,
-        UpdateTechnicalNodeRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<IReadOnlyCollection<SimilarTechnicalNode>> DetectSimilarAsync(TechnicalHierarchyQuery query, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        ValidateRequired(request.Nombre, nameof(request.Nombre));
-
-        var rows = (await _dataProvider.ReadRowsAsync(HierarchySchema, cancellationToken)).ToList();
-        var index = FindIndex(rows, code);
-        if (index < 0)
-        {
-            return null;
-        }
-
-        var existing = rows[index];
-        var level = ParseLevel(existing.GetValue("Nivel"));
-        await ValidateReferencesAsync(
-            rows,
-            level,
-            request.CodigoPadre,
-            request.FaenaCodigo,
-            request.UbicacionTecnicaCodigo,
-            request.ActivosAsignados ?? SplitList(existing.GetValue("ActivosAsignados")),
-            user,
-            cancellationToken);
-
-        var normalizedName = NormalizeName(request.Nombre);
-        EnsureNoExactDuplicate(rows, code, level, request.CodigoPadre, normalizedName);
-
-        var aliases = SplitList(existing.GetValue("AliasHistoricos")).ToList();
-        var previousName = existing.GetValue("Nombre")?.Trim();
-        if (!string.IsNullOrWhiteSpace(previousName) &&
-            !string.Equals(previousName, request.Nombre.Trim(), StringComparison.OrdinalIgnoreCase))
-        {
-            aliases.Add(previousName);
-        }
-
-        if (request.AliasHistoricos is not null)
-        {
-            aliases.AddRange(request.AliasHistoricos);
-        }
-
-        var updated = WithValues(existing, new Dictionary<string, string?>
-        {
-            ["Nombre"] = request.Nombre.Trim(),
-            ["CodigoPadre"] = EmptyToNull(request.CodigoPadre),
-            ["NombreNormalizado"] = normalizedName,
-            ["FaenaCodigo"] = EmptyToNull(request.FaenaCodigo),
-            ["UbicacionTecnicaCodigo"] = EmptyToNull(request.UbicacionTecnicaCodigo),
-            ["FamiliasEquipo"] = JoinList(request.FamiliasEquipo ?? SplitList(existing.GetValue("FamiliasEquipo"))),
-            ["ActivosAsignados"] = JoinList(request.ActivosAsignados ?? SplitList(existing.GetValue("ActivosAsignados"))),
-            ["AliasHistoricos"] = JoinList(aliases),
-            ["FechaActualizacionUtc"] = DateTimeOffset.UtcNow.UtcDateTime.ToString("O")
-        });
-
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(HierarchySchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "Updated", code, Serialize(existing), Serialize(updated), request.Reason ?? "Nodo tecnico actualizado", cancellationToken);
-
-        return await GetByCodeAsync(code, user, cancellationToken);
-    }
-
-    public async Task<TechnicalNodeResponse?> MarkObsoleteAsync(
-        string code,
-        MarkTechnicalNodeObsoleteRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanManage(user);
-
-        var rows = (await _dataProvider.ReadRowsAsync(HierarchySchema, cancellationToken)).ToList();
-        var index = FindIndex(rows, code);
-        if (index < 0)
-        {
-            return null;
-        }
-
-        var existing = rows[index];
-        var updated = WithValues(existing, new Dictionary<string, string?>
-        {
-            ["Obsoleto"] = "true",
-            ["FechaActualizacionUtc"] = DateTimeOffset.UtcNow.UtcDateTime.ToString("O")
-        });
-
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(HierarchySchema, rows, cancellationToken);
-        await RecordAuditAsync(
-            user,
-            "MarkedObsolete",
-            code,
-            Serialize(existing),
-            Serialize(updated),
-            request.Reason ?? "Nodo tecnico marcado como obsoleto; no se elimina fisicamente.",
-            cancellationToken);
-
-        return await GetByCodeAsync(code, user, cancellationToken);
-    }
-
-    public async Task<IReadOnlyCollection<SimilarTechnicalNode>> DetectSimilarAsync(
-        TechnicalHierarchyQuery query,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        var nodes = (await ListAsync(query with { IncludeObsolete = false }, user, cancellationToken)).ToArray();
-        var result = new List<SimilarTechnicalNode>();
-
-        for (var leftIndex = 0; leftIndex < nodes.Length; leftIndex++)
-        {
-            for (var rightIndex = leftIndex + 1; rightIndex < nodes.Length; rightIndex++)
-            {
-                var left = nodes[leftIndex];
-                var right = nodes[rightIndex];
-                if (left.Nivel != right.Nivel ||
-                    !string.Equals(left.CodigoPadre, right.CodigoPadre, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var similarity = CalculateSimilarity(left.NombreNormalizado, right.NombreNormalizado);
-                var aliasMatch = left.AliasHistoricos.Any(alias => NormalizeName(alias) == right.NombreNormalizado) ||
-                                 right.AliasHistoricos.Any(alias => NormalizeName(alias) == left.NombreNormalizado);
-
-                if (left.NombreNormalizado == right.NombreNormalizado || aliasMatch || similarity >= 0.82m)
-                {
-                    result.Add(new SimilarTechnicalNode(
-                        left,
-                        right,
-                        decimal.Round(similarity, 3),
-                        aliasMatch ? "Alias historico coincidente" : "Nombre normalizado similar"));
-                }
-            }
-        }
-
+        var nodes=(await ListAsync(query with{IncludeObsolete=false},user,ct)).ToArray();var result=new List<SimilarTechnicalNode>();
+        for(var i=0;i<nodes.Length;i++)for(var j=i+1;j<nodes.Length;j++){var l=nodes[i];var r=nodes[j];if(l.Nivel!=r.Nivel||!Same(l.CodigoPadre,r.CodigoPadre))continue;var sim=Similarity(l.NombreNormalizado,r.NombreNormalizado);var alias=l.AliasHistoricos.Any(a=>NormalizeName(a)==r.NombreNormalizado)||r.AliasHistoricos.Any(a=>NormalizeName(a)==l.NombreNormalizado);if(l.NombreNormalizado==r.NombreNormalizado||alias||sim>=0.82m)result.Add(new SimilarTechnicalNode(l,r,decimal.Round(sim,3),alias?"Alias historico coincidente":"Nombre normalizado similar"));}
         return result;
     }
 
-    public async Task<TechnicalNodeResponse?> MergeAsync(
-        MergeTechnicalNodesRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<TechnicalNodeResponse?> MergeAsync(MergeTechnicalNodesRequest r, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        ValidateRequired(request.SourceCode, nameof(request.SourceCode));
-        ValidateRequired(request.TargetCode, nameof(request.TargetCode));
-        ValidateRequired(request.Reason, nameof(request.Reason));
-
-        if (SameCode(request.SourceCode, request.TargetCode))
-        {
-            throw new DomainException("El nodo origen y destino deben ser distintos.");
-        }
-
-        var rows = (await _dataProvider.ReadRowsAsync(HierarchySchema, cancellationToken)).ToList();
-        var sourceIndex = FindIndex(rows, request.SourceCode);
-        var targetIndex = FindIndex(rows, request.TargetCode);
-        if (sourceIndex < 0 || targetIndex < 0)
-        {
-            return null;
-        }
-
-        var source = rows[sourceIndex];
-        var target = rows[targetIndex];
-        if (ParseLevel(source.GetValue("Nivel")) != ParseLevel(target.GetValue("Nivel")))
-        {
-            throw new DomainException("Solo se pueden fusionar nodos del mismo nivel.");
-        }
-
-        var targetFamilies = SplitList(target.GetValue("FamiliasEquipo")).Concat(SplitList(source.GetValue("FamiliasEquipo")));
-        var targetAssets = SplitList(target.GetValue("ActivosAsignados")).Concat(SplitList(source.GetValue("ActivosAsignados")));
-        var targetAliases = SplitList(target.GetValue("AliasHistoricos"))
-            .Concat(SplitList(source.GetValue("AliasHistoricos")))
-            .Concat([source.GetValue("Codigo"), source.GetValue("Nombre")])
-            .Where(alias => !string.IsNullOrWhiteSpace(alias))
-            .Select(alias => alias!);
-
-        var now = DateTimeOffset.UtcNow.UtcDateTime.ToString("O");
-        target = WithValues(target, new Dictionary<string, string?>
-        {
-            ["FamiliasEquipo"] = JoinList(targetFamilies),
-            ["ActivosAsignados"] = JoinList(targetAssets),
-            ["AliasHistoricos"] = JoinList(targetAliases),
-            ["FechaActualizacionUtc"] = now
-        });
-
-        source = WithValues(source, new Dictionary<string, string?>
-        {
-            ["Obsoleto"] = "true",
-            ["FusionadoEnCodigo"] = target.GetValue("Codigo"),
-            ["FechaActualizacionUtc"] = now
-        });
-
-        for (var index = 0; index < rows.Count; index++)
-        {
-            if (index == sourceIndex || index == targetIndex)
-            {
-                continue;
-            }
-
-            if (SameCode(rows[index].GetValue("CodigoPadre"), request.SourceCode))
-            {
-                rows[index] = WithValues(rows[index], new Dictionary<string, string?>
-                {
-                    ["CodigoPadre"] = target.GetValue("Codigo"),
-                    ["FechaActualizacionUtc"] = now
-                });
-            }
-        }
-
-        rows[targetIndex] = target;
-        rows[sourceIndex] = source;
-
-        await _dataProvider.SaveRowsAsync(HierarchySchema, rows, cancellationToken);
-        await RecordAuditAsync(
-            user,
-            "Merged",
-            request.TargetCode,
-            JsonSerializer.Serialize(new { Source = request.SourceCode, Target = request.TargetCode }),
-            Serialize(target),
-            request.Reason,
-            cancellationToken);
-
-        return await GetByCodeAsync(request.TargetCode, user, cancellationToken);
+        EnsureCanManage(user);Req(r.SourceCode,nameof(r.SourceCode));Req(r.TargetCode,nameof(r.TargetCode));Req(r.Reason,nameof(r.Reason));if(Same(r.SourceCode,r.TargetCode))throw new DomainException("El nodo origen y destino deben ser distintos.");DetachTrackedTechnicalHierarchy();
+        await using var tx=await _db.Database.BeginTransactionAsync(ct);
+        var sourceCode=Code(r.SourceCode)!;var targetCode=Code(r.TargetCode)!;
+        var source=await _db.TechnicalNodes.SingleOrDefaultAsync(x=>x.Code.ToUpper()==sourceCode,ct);var target=await _db.TechnicalNodes.SingleOrDefaultAsync(x=>x.Code.ToUpper()==targetCode,ct);if(source is null||target is null)return null;
+        if(!string.Equals(source.Level,target.Level,StringComparison.OrdinalIgnoreCase))throw new DomainException("Solo se pueden fusionar nodos del mismo nivel.");
+        if(source.FaenaId.HasValue&&target.FaenaId.HasValue&&source.FaenaId!=target.FaenaId)throw new DomainException("Solo se pueden fusionar nodos de la misma faena.");
+        var children=await _db.TechnicalNodes.Where(x=>x.ParentId==source.Id).ToArrayAsync(ct);foreach(var child in children){child.ParentId=target.Id;child.UpdatedAtUtc=DateTimeOffset.UtcNow;child.UpdatedByUserId=user.UserId;}
+        var sourceFamilyIds=await _db.TechnicalNodeFamilies.AsNoTracking().Where(x=>x.TechnicalNodeId==source.Id).Select(x=>x.EquipmentFamilyId).Distinct().ToArrayAsync(ct);var targetFamilyIds=(await _db.TechnicalNodeFamilies.AsNoTracking().Where(x=>x.TechnicalNodeId==target.Id).Select(x=>x.EquipmentFamilyId).ToArrayAsync(ct)).ToHashSet();
+        foreach(var id in sourceFamilyIds)if(targetFamilyIds.Add(id))_db.TechnicalNodeFamilies.Add(new TechnicalNodeFamilyEntity{TechnicalNodeId=target.Id,EquipmentFamilyId=id});
+        var sourceAssetIds=await _db.TechnicalNodeAssets.AsNoTracking().Where(x=>x.TechnicalNodeId==source.Id).Select(x=>x.AssetId).Distinct().ToArrayAsync(ct);var targetAssetIds=(await _db.TechnicalNodeAssets.AsNoTracking().Where(x=>x.TechnicalNodeId==target.Id).Select(x=>x.AssetId).ToArrayAsync(ct)).ToHashSet();
+        foreach(var id in sourceAssetIds)if(targetAssetIds.Add(id))_db.TechnicalNodeAssets.Add(new TechnicalNodeAssetEntity{TechnicalNodeId=target.Id,AssetId=id});
+        var sourceAliases=await _db.TechnicalNodeAliases.AsNoTracking().Where(x=>x.TechnicalNodeId==source.Id).Select(x=>x.Alias).ToArrayAsync(ct);var existingAliases=(await _db.TechnicalNodeAliases.AsNoTracking().Where(x=>x.TechnicalNodeId==target.Id).Select(x=>x.NormalizedAlias).ToArrayAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach(var alias in sourceAliases.Concat([source.Code,source.Name]).Where(x=>!string.IsNullOrWhiteSpace(x)).Select(x=>x.Trim())){var normalized=NormalizeName(alias);if(!string.IsNullOrWhiteSpace(normalized)&&existingAliases.Add(normalized))_db.TechnicalNodeAliases.Add(new TechnicalNodeAliasEntity{TechnicalNodeId=target.Id,Alias=alias,NormalizedAlias=normalized,Source="Merge"});}
+        source.IsObsolete=true;source.MergedIntoNodeId=target.Id;source.UpdatedAtUtc=DateTimeOffset.UtcNow;source.UpdatedByUserId=user.UserId;target.UpdatedAtUtc=DateTimeOffset.UtcNow;target.UpdatedByUserId=user.UserId;
+        await _db.SaveChangesAsync(ct);await tx.CommitAsync(ct);DetachTrackedTechnicalHierarchy();var merged=await GetByCodeAsync(target.Code,user,ct);await Audit(user,"Merged",target.Code,JsonSerializer.Serialize(new{r.SourceCode,r.TargetCode}),JsonSerializer.Serialize(merged),r.Reason,ct);return merged;
     }
 
-    public async Task<IReadOnlyCollection<TechnicalNodeResponse>> AssignFamiliesAsync(
-        BulkFamilyAssignmentRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<IReadOnlyCollection<TechnicalNodeResponse>> AssignFamiliesAsync(BulkFamilyAssignmentRequest r, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        if (request.NodeCodes.Count == 0)
-        {
-            throw new DomainException("Debe indicar al menos un nodo.");
-        }
-
-        var rows = (await _dataProvider.ReadRowsAsync(HierarchySchema, cancellationToken)).ToList();
-        var changed = new List<string>();
-
-        foreach (var code in request.NodeCodes)
-        {
-            var index = FindIndex(rows, code);
-            if (index < 0)
-            {
-                continue;
-            }
-
-            var families = request.Append
-                ? SplitList(rows[index].GetValue("FamiliasEquipo")).Concat(request.Families)
-                : request.Families;
-
-            rows[index] = WithValues(rows[index], new Dictionary<string, string?>
-            {
-                ["FamiliasEquipo"] = JoinList(families),
-                ["FechaActualizacionUtc"] = DateTimeOffset.UtcNow.UtcDateTime.ToString("O")
-            });
-            changed.Add(rows[index].GetValue("Codigo") ?? code);
-        }
-
-        await _dataProvider.SaveRowsAsync(HierarchySchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "AssignedFamilies", string.Join(";", changed), null, JsonSerializer.Serialize(request), "Asignacion masiva de familias", cancellationToken);
-
-        var visible = await ListAsync(new TechnicalHierarchyQuery(IncludeObsolete: true), user, cancellationToken);
-        return visible.Where(node => changed.Contains(node.Codigo, StringComparer.OrdinalIgnoreCase)).ToArray();
+        EnsureCanManage(user);if(r.NodeCodes.Count==0)throw new DomainException("Debe indicar al menos un nodo.");var fams=await ResolveFamiliesAsync(r.Families,ct);var changed=new List<string>();
+        foreach(var code in r.NodeCodes){var node=await BaseQuery(true).SingleOrDefaultAsync(x=>x.Code.ToUpper()==Code(code),ct);if(node is null)continue;if(!r.Append)node.Families.Clear();foreach(var f in fams)if(node.Families.All(x=>x.EquipmentFamilyId!=f.Id))node.Families.Add(new TechnicalNodeFamilyEntity{TechnicalNodeId=node.Id,EquipmentFamilyId=f.Id});node.UpdatedAtUtc=DateTimeOffset.UtcNow;node.UpdatedByUserId=user.UserId;changed.Add(node.Code);}
+        await _db.SaveChangesAsync(ct);await Audit(user,"AssignedFamilies",string.Join(";",changed),null,JsonSerializer.Serialize(r),"Asignacion masiva de familias",ct);var visible=await ListAsync(new TechnicalHierarchyQuery(IncludeObsolete:true),user,ct);return visible.Where(x=>changed.Contains(x.Codigo,StringComparer.OrdinalIgnoreCase)).ToArray();
     }
 
-    public async Task<TechnicalNodeResponse?> AssignAssetsAsync(
-        string code,
-        AssetAssignmentRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<TechnicalNodeResponse?> AssignAssetsAsync(string code, AssetAssignmentRequest r, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        var rows = (await _dataProvider.ReadRowsAsync(HierarchySchema, cancellationToken)).ToList();
-        var index = FindIndex(rows, code);
-        if (index < 0)
-        {
-            return null;
-        }
-
-        await ValidateAssetCodesAsync(request.AssetCodes, user, cancellationToken);
-        var assets = request.Append
-            ? SplitList(rows[index].GetValue("ActivosAsignados")).Concat(request.AssetCodes)
-            : request.AssetCodes;
-
-        var existing = rows[index];
-        var updated = WithValues(existing, new Dictionary<string, string?>
-        {
-            ["ActivosAsignados"] = JoinList(assets),
-            ["FechaActualizacionUtc"] = DateTimeOffset.UtcNow.UtcDateTime.ToString("O")
-        });
-
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(HierarchySchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "AssignedAssets", code, Serialize(existing), Serialize(updated), "Asignacion de activos", cancellationToken);
-
-        return await GetByCodeAsync(code, user, cancellationToken);
+        EnsureCanManage(user);var node=await BaseQuery(true).SingleOrDefaultAsync(x=>x.Code.ToUpper()==Code(code),ct);if(node is null)return null;var assets=await ResolveAssetsAsync(r.AssetCodes,user,ct);var prev=JsonSerializer.Serialize(AuditShape(node));
+        if(!r.Append)node.Assets.Clear();foreach(var a in assets)if(node.Assets.All(x=>x.AssetId!=a.Id))node.Assets.Add(new TechnicalNodeAssetEntity{TechnicalNodeId=node.Id,AssetId=a.Id});node.UpdatedAtUtc=DateTimeOffset.UtcNow;node.UpdatedByUserId=user.UserId;
+        await _db.SaveChangesAsync(ct);await Audit(user,"AssignedAssets",node.Code,prev,JsonSerializer.Serialize(AuditShape(node)),"Asignacion de activos",ct);return await GetByCodeAsync(node.Code,user,ct);
     }
 
-    private async Task ValidateReferencesAsync(
-        IReadOnlyCollection<DataRow> rows,
-        TechnicalHierarchyLevel level,
-        string? parentCode,
-        string? faenaCode,
-        string? locationCode,
-        IReadOnlyCollection<string> assetCodes,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    private IQueryable<TechnicalNodeEntity> BaseQuery(bool tracked=false)
     {
-        ValidateParent(rows, level, parentCode);
-
-        if (!string.IsNullOrWhiteSpace(faenaCode))
-        {
-            if (!_authorizationPolicyService.CanViewFaena(user, faenaCode))
-            {
-                throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena indicada.");
-            }
-
-            await EnsureCodeExistsAsync(FaenasSchema, "Codigo", faenaCode, "La faena indicada no existe.", cancellationToken);
-        }
-
-        if (!string.IsNullOrWhiteSpace(locationCode))
-        {
-            await EnsureCodeExistsAsync(LocationsSchema, "Codigo", locationCode, "La ubicacion tecnica indicada no existe.", cancellationToken);
-        }
-
-        await ValidateAssetCodesAsync(assetCodes, user, cancellationToken);
+        var q=_db.TechnicalNodes.Include(x=>x.Parent).Include(x=>x.Faena).Include(x=>x.TechnicalLocation).Include(x=>x.MergedIntoNode).Include(x=>x.Families).ThenInclude(x=>x.EquipmentFamily).Include(x=>x.Assets).ThenInclude(x=>x.Asset).ThenInclude(x=>x.Faena).Include(x=>x.Aliases).AsSplitQuery();
+        return tracked?q:q.AsNoTracking();
     }
 
-    private async Task ValidateAssetCodesAsync(
-        IReadOnlyCollection<string> assetCodes,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    private IQueryable<TechnicalNodeEntity> ApplyScope(IQueryable<TechnicalNodeEntity> q, UserAccessContext user)
     {
-        if (assetCodes.Count == 0)
-        {
-            return;
-        }
-
-        var assets = await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken);
-        foreach (var assetCode in assetCodes.Where(code => !string.IsNullOrWhiteSpace(code)))
-        {
-            var asset = assets.FirstOrDefault(row => SameCode(row.GetValue("Codigo"), assetCode));
-            if (asset is null)
-            {
-                throw new DomainException($"El activo '{assetCode}' no existe.");
-            }
-
-            var faenaCode = asset.GetValue("FaenaCodigo") ?? string.Empty;
-            if (!_authorizationPolicyService.CanViewFaena(user, faenaCode))
-            {
-                throw new UnauthorizedAccessException($"El usuario no tiene acceso al activo '{assetCode}'.");
-            }
-        }
+        if(user.Roles.Contains(AuthRoles.Admin,StringComparer.OrdinalIgnoreCase)||user.Permissions.Contains(AuthPermissions.Administration,StringComparer.OrdinalIgnoreCase))return q;
+        var faenas=user.Faenas.Select(Code).Where(x=>x is not null).Select(x=>x!).ToArray();
+        return q.Where(x=>x.FaenaId==null||(x.Faena!=null&&faenas.Contains(x.Faena.Code.ToUpper()))||x.Assets.Any(a=>faenas.Contains(a.Asset.Faena.Code.ToUpper())));
     }
 
-    private async Task EnsureCanFilterByFaenaAsync(
-        string? faenaCode,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    private async Task<IReadOnlyDictionary<string,TechnicalNodeEntity>> LoadAllAsync(CancellationToken ct)=>await BaseQuery().AsNoTracking().Where(x=>x.Code!="").ToDictionaryAsync(x=>NormCode(x.Code),StringComparer.OrdinalIgnoreCase,ct);
+
+    private async Task<TechnicalNodeEntity?> ValidateParentAsync(Guid? currentId, TechnicalHierarchyLevel level, string? parentCode, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(faenaCode))
-        {
-            return;
-        }
-
-        if (!_authorizationPolicyService.CanViewFaena(user, faenaCode))
-        {
-            throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena solicitada.");
-        }
-
-        await EnsureCodeExistsAsync(FaenasSchema, "Codigo", faenaCode, "La faena indicada no existe.", cancellationToken);
+        if(level==TechnicalHierarchyLevel.Sistema){if(!string.IsNullOrWhiteSpace(parentCode))throw new DomainException("Un sistema no debe tener nodo padre.");return null;}
+        if(string.IsNullOrWhiteSpace(parentCode))throw new DomainException($"El nivel {level} requiere CodigoPadre.");
+        var parent=await _db.TechnicalNodes.SingleOrDefaultAsync(x=>x.Code.ToUpper()==Code(parentCode),ct)??throw new DomainException("El nodo padre indicado no existe.");
+        if(currentId.HasValue&&parent.Id==currentId.Value)throw new DomainException("Un nodo no puede ser padre de si mismo.");
+        if(parent.IsObsolete)throw new DomainException("No se puede asociar a un nodo padre obsoleto.");
+        var expected=level switch{TechnicalHierarchyLevel.Subsistema=>TechnicalHierarchyLevel.Sistema,TechnicalHierarchyLevel.Componente=>TechnicalHierarchyLevel.Subsistema,TechnicalHierarchyLevel.Subcomponente=>TechnicalHierarchyLevel.Componente,_=>TechnicalHierarchyLevel.Sistema};
+        if(ParseLevel(parent.Level)!=expected)throw new DomainException($"El padre de {level} debe ser {expected}.");
+        if(currentId.HasValue)await EnsureNoCycleAsync(currentId.Value,parent.Id,ct);return parent;
     }
 
-    private async Task EnsureCodeExistsAsync(
-        string schemaName,
-        string columnName,
-        string value,
-        string message,
-        CancellationToken cancellationToken)
+    private async Task EnsureNoCycleAsync(Guid nodeId, Guid parentId, CancellationToken ct)
     {
-        var rows = await _dataProvider.ReadRowsAsync(schemaName, cancellationToken);
-        if (!rows.Any(row => string.Equals(row.GetValue(columnName), value, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new DomainException(message);
-        }
+        var current=parentId;for(var guard=0;guard<100;guard++){if(current==nodeId)throw new DomainException("La asignacion de padre genera un ciclo en la jerarquia tecnica.");var parent=await _db.TechnicalNodes.AsNoTracking().Where(x=>x.Id==current).Select(x=>new{x.ParentId}).SingleOrDefaultAsync(ct);if(parent?.ParentId is null)return;current=parent.ParentId.Value;}
+        throw new DomainException("La jerarquia tecnica supera la profundidad permitida o contiene un ciclo.");
     }
 
-    private static void ValidateParent(
-        IReadOnlyCollection<DataRow> rows,
-        TechnicalHierarchyLevel level,
-        string? parentCode)
+    private async Task<FaenaEntity?> ResolveFaenaAsync(string? faenaCode, UserAccessContext user, CancellationToken ct)
     {
-        if (level == TechnicalHierarchyLevel.Sistema)
-        {
-            if (!string.IsNullOrWhiteSpace(parentCode))
-            {
-                throw new DomainException("Un sistema no debe tener nodo padre.");
-            }
-
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(parentCode))
-        {
-            throw new DomainException($"El nivel {level} requiere CodigoPadre.");
-        }
-
-        var parent = FindByCode(rows, parentCode);
-        if (parent is null)
-        {
-            throw new DomainException("El nodo padre indicado no existe.");
-        }
-
-        if (ParseBool(parent.GetValue("Obsoleto")))
-        {
-            throw new DomainException("No se puede asociar a un nodo padre obsoleto.");
-        }
-
-        var expectedParentLevel = level switch
-        {
-            TechnicalHierarchyLevel.Subsistema => TechnicalHierarchyLevel.Sistema,
-            TechnicalHierarchyLevel.Componente => TechnicalHierarchyLevel.Subsistema,
-            TechnicalHierarchyLevel.Subcomponente => TechnicalHierarchyLevel.Componente,
-            _ => TechnicalHierarchyLevel.Sistema
-        };
-
-        if (ParseLevel(parent.GetValue("Nivel")) != expectedParentLevel)
-        {
-            throw new DomainException($"El padre de {level} debe ser {expectedParentLevel}.");
-        }
+        if(string.IsNullOrWhiteSpace(faenaCode))return null;if(!_auth.CanViewFaena(user,faenaCode))throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena indicada.");var code=Code(faenaCode)!;
+        return await _db.Faenas.SingleOrDefaultAsync(x=>x.Code.ToUpper()==code,ct)??throw new DomainException("La faena indicada no existe.");
     }
 
-    private static IReadOnlyCollection<TechnicalNodeResponse> BuildResponses(IReadOnlyCollection<DataRow> rows)
+    private async Task<TechnicalLocationEntity?> ResolveLocationAsync(string? locationCode, CancellationToken ct)
     {
-        var lookup = rows
-            .Where(row => !string.IsNullOrWhiteSpace(row.GetValue("Codigo")))
-            .ToDictionary(row => NormalizeCode(row.GetValue("Codigo")), row => row, StringComparer.OrdinalIgnoreCase);
-
-        return rows
-            .Where(row => !string.IsNullOrWhiteSpace(row.GetValue("Codigo")))
-            .Select(row => ToResponse(row, rows, lookup))
-            .ToArray();
+        if(string.IsNullOrWhiteSpace(locationCode))return null;var code=Code(locationCode)!;return await _db.TechnicalLocations.SingleOrDefaultAsync(x=>x.Code.ToUpper()==code,ct)??throw new DomainException("La ubicacion tecnica indicada no existe.");
     }
 
-    private static TechnicalNodeResponse ToResponse(
-        DataRow row,
-        IReadOnlyCollection<DataRow> rows,
-        IReadOnlyDictionary<string, DataRow> lookup)
+    private async Task<IReadOnlyCollection<EquipmentFamilyEntity>> ResolveFamiliesAsync(IReadOnlyCollection<string> values, CancellationToken ct)
     {
-        var code = row.GetValue("Codigo")?.Trim() ?? string.Empty;
-        var level = ParseLevel(row.GetValue("Nivel"));
-        var children = rows.Any(child => SameCode(child.GetValue("CodigoPadre"), code) && !ParseBool(child.GetValue("Obsoleto")));
-        var assignedAssets = SplitList(row.GetValue("ActivosAsignados"));
-        var families = SplitList(row.GetValue("FamiliasEquipo"));
-        var aliases = SplitList(row.GetValue("AliasHistoricos"));
-
-        return new TechnicalNodeResponse(
-            code,
-            row.GetValue("Nombre")?.Trim() ?? string.Empty,
-            row.GetValue("NombreNormalizado")?.Trim() ?? NormalizeName(row.GetValue("Nombre")),
-            level,
-            EmptyToNull(row.GetValue("CodigoPadre")),
-            EmptyToNull(row.GetValue("FaenaCodigo")),
-            EmptyToNull(row.GetValue("UbicacionTecnicaCodigo")),
-            families,
-            assignedAssets,
-            aliases,
-            ParseBool(row.GetValue("Obsoleto")),
-            EmptyToNull(row.GetValue("FusionadoEnCodigo")),
-            ParseDate(row.GetValue("FechaCreacionUtc")),
-            ParseDate(row.GetValue("FechaActualizacionUtc")),
-            BuildPath(row, lookup),
-            children,
-            children || assignedAssets.Count > 0);
+        var codes=Clean(values);if(codes.Count==0)return [];var rows=await _db.EquipmentFamilies.Where(x=>codes.Contains(x.Code.ToUpper())).ToArrayAsync(ct);var found=rows.Select(x=>Code(x.Code)!).ToHashSet(StringComparer.OrdinalIgnoreCase);var missing=codes.Where(x=>!found.Contains(x)).ToArray();if(missing.Length>0)throw new DomainException($"Familias de equipo inexistentes: {string.Join(", ",missing)}.");return rows;
     }
 
-    private static string BuildPath(DataRow row, IReadOnlyDictionary<string, DataRow> lookup)
+    private async Task<IReadOnlyCollection<AssetEntity>> ResolveAssetsAsync(IReadOnlyCollection<string> values, UserAccessContext user, CancellationToken ct)
     {
-        var parts = new Stack<string>();
-        var current = row;
-        var guard = 0;
+        var codes=Clean(values);if(codes.Count==0)return [];var rows=await _db.Assets.Include(x=>x.Faena).Where(x=>codes.Contains(x.Code.ToUpper())).ToArrayAsync(ct);var found=rows.Select(x=>Code(x.Code)!).ToHashSet(StringComparer.OrdinalIgnoreCase);var missing=codes.Where(x=>!found.Contains(x)).ToArray();if(missing.Length>0)throw new DomainException($"Activos inexistentes: {string.Join(", ",missing)}.");foreach(var a in rows)if(!_auth.CanViewFaena(user,a.Faena.Code))throw new UnauthorizedAccessException($"El usuario no tiene acceso al activo '{a.Code}'.");return rows;
+    }
 
-        while (guard < 20)
-        {
-            parts.Push(current.GetValue("Nombre")?.Trim() ?? current.GetValue("Codigo")?.Trim() ?? string.Empty);
-            var parentCode = current.GetValue("CodigoPadre");
-            if (string.IsNullOrWhiteSpace(parentCode) || !lookup.TryGetValue(NormalizeCode(parentCode), out var parent))
-            {
-                break;
-            }
+    private async Task EnsureNoDuplicateAsync(Guid? currentId, TechnicalHierarchyLevel level, Guid? parentId, string normalizedName, CancellationToken ct)
+    {
+        var l=level.ToString();var exists=await _db.TechnicalNodes.AnyAsync(x=>(!currentId.HasValue||x.Id!=currentId.Value)&&!x.IsObsolete&&x.Level==l&&x.ParentId==parentId&&x.NormalizedName==normalizedName,ct);if(exists)throw new DomainException("Ya existe un nodo tecnico con el mismo nombre normalizado en el mismo nivel y padre.");
+    }
 
-            current = parent;
-            guard++;
-        }
+    private async Task EnsureCanFilterByFaenaAsync(string? faenaCode, UserAccessContext user, CancellationToken ct)
+    {
+        if(string.IsNullOrWhiteSpace(faenaCode))return;if(!_auth.CanViewFaena(user,faenaCode))throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena solicitada.");var code=Code(faenaCode)!;if(!await _db.Faenas.AnyAsync(x=>x.Code.ToUpper()==code,ct))throw new DomainException("La faena indicada no existe.");
+    }
 
-        return string.Join(" / ", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
+    private void DetachTrackedTechnicalHierarchy()
+    {
+        foreach(var entry in _db.ChangeTracker.Entries().Where(x=>x.Entity is TechnicalNodeEntity or TechnicalNodeFamilyEntity or TechnicalNodeAssetEntity or TechnicalNodeAliasEntity or TechnicalLocationEntity).ToArray())entry.State=EntityState.Detached;
+    }
+    private static void ReplaceFamilies(TechnicalNodeEntity node,IReadOnlyCollection<EquipmentFamilyEntity> fams){var desired=fams.Select(x=>x.Id).ToHashSet();foreach(var e in node.Families.Where(x=>!desired.Contains(x.EquipmentFamilyId)).ToArray())node.Families.Remove(e);foreach(var f in fams)if(node.Families.All(x=>x.EquipmentFamilyId!=f.Id))node.Families.Add(new TechnicalNodeFamilyEntity{TechnicalNodeId=node.Id,EquipmentFamilyId=f.Id});}
+    private static void ReplaceAssets(TechnicalNodeEntity node,IReadOnlyCollection<AssetEntity> assets){var desired=assets.Select(x=>x.Id).ToHashSet();foreach(var e in node.Assets.Where(x=>!desired.Contains(x.AssetId)).ToArray())node.Assets.Remove(e);foreach(var a in assets)if(node.Assets.All(x=>x.AssetId!=a.Id))node.Assets.Add(new TechnicalNodeAssetEntity{TechnicalNodeId=node.Id,AssetId=a.Id});}
+    private static void AddAliases(TechnicalNodeEntity node,IEnumerable<string?> aliases,string source){var existing=node.Aliases.Select(x=>x.NormalizedAlias).ToHashSet(StringComparer.OrdinalIgnoreCase);foreach(var alias in aliases.Where(x=>!string.IsNullOrWhiteSpace(x)).Select(x=>x!.Trim())){var n=NormalizeName(alias);if(string.IsNullOrWhiteSpace(n)||existing.Contains(n))continue;node.Aliases.Add(new TechnicalNodeAliasEntity{TechnicalNodeId=node.Id,Alias=alias,NormalizedAlias=n,Source=source});existing.Add(n);}}
+
+    private static TechnicalNodeResponse ToResponse(TechnicalNodeEntity n,IReadOnlyDictionary<string,TechnicalNodeEntity> all)
+    {
+        var fams=n.Families.Select(x=>x.EquipmentFamily.Code).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToArray();
+        var assets=n.Assets.Select(x=>x.Asset.Code).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToArray();
+        var aliases=n.Aliases.Select(x=>x.Alias).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToArray();
+        var children=all.Values.Any(x=>x.ParentId==n.Id&&!x.IsObsolete);
+        return new TechnicalNodeResponse(n.Code,n.Name,n.NormalizedName,ParseLevel(n.Level),n.Parent?.Code,n.Faena?.Code,n.TechnicalLocation?.Code,fams,assets,aliases,n.IsObsolete,n.MergedIntoNode?.Code,n.CreatedAtUtc,n.UpdatedAtUtc,PathOf(n,all),children,children||assets.Length>0);
+    }
+
+    private static string PathOf(TechnicalNodeEntity node,IReadOnlyDictionary<string,TechnicalNodeEntity> all)
+    {
+        var byId=all.Values.ToDictionary(x=>x.Id);var parts=new Stack<string>();var current=node;
+        for(var i=0;i<100;i++){parts.Push(string.IsNullOrWhiteSpace(current.Name)?current.Code:current.Name);if(current.ParentId is null||!byId.TryGetValue(current.ParentId.Value,out var p))break;current=p;}
+        return string.Join(" / ",parts.Where(x=>!string.IsNullOrWhiteSpace(x)));
     }
 
     private static IReadOnlyCollection<TechnicalHierarchyTreeNode> BuildTree(IReadOnlyCollection<TechnicalNodeResponse> nodes)
     {
-        var byParent = nodes
-            .GroupBy(node => NormalizeCode(node.CodigoPadre))
-            .ToDictionary(group => group.Key, group => group.OrderBy(node => node.Nombre, StringComparer.OrdinalIgnoreCase).ToArray());
-        var availableCodes = nodes.Select(node => NormalizeCode(node.Codigo)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var roots = nodes
-            .Where(node => string.IsNullOrWhiteSpace(node.CodigoPadre) || !availableCodes.Contains(NormalizeCode(node.CodigoPadre)))
-            .OrderBy(node => node.Nombre, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        return roots.Select(Build).ToArray();
-
-        TechnicalHierarchyTreeNode Build(TechnicalNodeResponse node)
-        {
-            var children = byParent.TryGetValue(NormalizeCode(node.Codigo), out var directChildren)
-                ? directChildren.Select(Build).ToArray()
-                : [];
-
-            return new TechnicalHierarchyTreeNode(node, children);
-        }
+        var byParent=nodes.GroupBy(x=>NormCode(x.CodigoPadre)).ToDictionary(g=>g.Key,g=>g.OrderBy(x=>x.Nombre,StringComparer.OrdinalIgnoreCase).ToArray());var codes=nodes.Select(x=>NormCode(x.Codigo)).ToHashSet(StringComparer.OrdinalIgnoreCase);var roots=nodes.Where(x=>string.IsNullOrWhiteSpace(x.CodigoPadre)||!codes.Contains(NormCode(x.CodigoPadre))).OrderBy(x=>x.Nombre,StringComparer.OrdinalIgnoreCase).ToArray();return roots.Select(Build).ToArray();
+        TechnicalHierarchyTreeNode Build(TechnicalNodeResponse n){var children=byParent.TryGetValue(NormCode(n.Codigo),out var direct)?direct.Select(Build).ToArray():[];return new TechnicalHierarchyTreeNode(n,children);}
     }
 
-    private static bool MatchesQuery(
-        TechnicalNodeResponse node,
-        TechnicalHierarchyQuery query,
-        IReadOnlyCollection<DataRow> rows,
-        IReadOnlyCollection<DataRow> assets,
-        UserAccessContext user)
+    private static string? ResolveSystemCode(string code,IReadOnlyDictionary<string,TechnicalNodeEntity> all)
     {
-        if (!query.IncludeObsolete && node.Obsoleto)
-        {
-            return false;
-        }
-
-        if (query.Nivel.HasValue && node.Nivel != query.Nivel.Value)
-        {
-            return false;
-        }
-
-        if (!CanViewNode(node, assets, user))
-        {
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.FaenaCodigo) && !NodeMatchesFaena(node, assets, query.FaenaCodigo))
-        {
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.Familia) &&
-            !node.FamiliasEquipo.Contains(query.Familia, StringComparer.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.SistemaCodigo) &&
-            !SameCode(ResolveSystemCode(node.Codigo, rows), query.SistemaCodigo))
-        {
-            return false;
-        }
-
-        return true;
+        var c=NormCode(code);for(var i=0;i<100&&all.TryGetValue(c,out var current);i++){if(ParseLevel(current.Level)==TechnicalHierarchyLevel.Sistema)return current.Code;c=NormCode(current.Parent?.Code);}return null;
     }
 
-    private static bool CanViewNode(
-        TechnicalNodeResponse node,
-        IReadOnlyCollection<DataRow> assets,
-        UserAccessContext user)
-    {
-        if (user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) ||
-            user.Permissions.Contains(AuthPermissions.Administration, StringComparer.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(node.FaenaCodigo))
-        {
-            return user.Faenas.Contains(node.FaenaCodigo, StringComparer.OrdinalIgnoreCase);
-        }
-
-        var assignedAssetFaenas = assets
-            .Where(asset => node.ActivosAsignados.Contains(asset.GetValue("Codigo") ?? string.Empty, StringComparer.OrdinalIgnoreCase))
-            .Select(asset => asset.GetValue("FaenaCodigo") ?? string.Empty)
-            .Where(faena => !string.IsNullOrWhiteSpace(faena))
-            .ToArray();
-
-        return assignedAssetFaenas.Length == 0 || assignedAssetFaenas.Any(faena => user.Faenas.Contains(faena, StringComparer.OrdinalIgnoreCase));
-    }
-
-    private static bool NodeMatchesFaena(
-        TechnicalNodeResponse node,
-        IReadOnlyCollection<DataRow> assets,
-        string faenaCode)
-    {
-        return string.Equals(node.FaenaCodigo, faenaCode, StringComparison.OrdinalIgnoreCase) ||
-               assets.Any(asset =>
-                   node.ActivosAsignados.Contains(asset.GetValue("Codigo") ?? string.Empty, StringComparer.OrdinalIgnoreCase) &&
-                   string.Equals(asset.GetValue("FaenaCodigo"), faenaCode, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string? ResolveSystemCode(string code, IReadOnlyCollection<DataRow> rows)
-    {
-        var lookup = rows.ToDictionary(row => NormalizeCode(row.GetValue("Codigo")), row => row, StringComparer.OrdinalIgnoreCase);
-        var currentCode = NormalizeCode(code);
-        var guard = 0;
-
-        while (guard < 20 && lookup.TryGetValue(currentCode, out var current))
-        {
-            if (ParseLevel(current.GetValue("Nivel")) == TechnicalHierarchyLevel.Sistema)
-            {
-                return current.GetValue("Codigo");
-            }
-
-            currentCode = NormalizeCode(current.GetValue("CodigoPadre"));
-            guard++;
-        }
-
-        return null;
-    }
-
-    private static void EnsureNoExactDuplicate(
-        IReadOnlyCollection<DataRow> rows,
-        string code,
-        TechnicalHierarchyLevel level,
-        string? parentCode,
-        string normalizedName)
-    {
-        var duplicate = rows.Any(row =>
-            !SameCode(row.GetValue("Codigo"), code) &&
-            !ParseBool(row.GetValue("Obsoleto")) &&
-            ParseLevel(row.GetValue("Nivel")) == level &&
-            SameCode(row.GetValue("CodigoPadre"), parentCode) &&
-            string.Equals(row.GetValue("NombreNormalizado") ?? NormalizeName(row.GetValue("Nombre")), normalizedName, StringComparison.OrdinalIgnoreCase));
-
-        if (duplicate)
-        {
-            throw new DomainException("Ya existe un nodo tecnico con el mismo nombre normalizado en el mismo nivel y padre.");
-        }
-    }
-
-    private async Task RecordAuditAsync(
-        UserAccessContext user,
-        string action,
-        string entityId,
-        string? previousValue,
-        string? newValue,
-        string? detail,
-        CancellationToken cancellationToken)
-    {
-        await _auditService.RecordAsync(new AuditEventRequest(
-            user.UserId,
-            action,
-            AuditModules.TechnicalHierarchy,
-            "TechnicalHierarchy",
-            entityId,
-            previousValue,
-            newValue,
-            Severity: action.Equals("Merged", StringComparison.OrdinalIgnoreCase) ? AuditSeverity.High : AuditSeverity.Medium,
-            Detail: detail), cancellationToken);
-    }
-
-    private void EnsureCanManage(UserAccessContext user)
-    {
-        if (!_authorizationPolicyService.CanManageTechnicalHierarchy(user))
-        {
-            throw new UnauthorizedAccessException("El usuario no tiene permiso para gestionar jerarquia tecnica.");
-        }
-    }
+    private async Task Audit(UserAccessContext user,string action,string id,string? previous,string? next,string? detail,CancellationToken ct)=>await _audit.RecordAsync(new AuditEventRequest(user.UserId,action,AuditModules.TechnicalHierarchy,"TechnicalHierarchy",id,previous,next,Severity:action.Equals("Merged",StringComparison.OrdinalIgnoreCase)?AuditSeverity.High:AuditSeverity.Medium,Detail:detail),ct);
+    private void EnsureCanManage(UserAccessContext user){if(!_auth.CanManageTechnicalHierarchy(user))throw new UnauthorizedAccessException("El usuario no tiene permiso para gestionar jerarquia tecnica.");}
 
     public static string NormalizeName(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        var normalized = value.Trim().Normalize(NormalizationForm.FormD);
-        var builder = new StringBuilder();
-        var previousWasSpace = false;
-
-        foreach (var character in normalized)
-        {
-            var category = CharUnicodeInfo.GetUnicodeCategory(character);
-            if (category == UnicodeCategory.NonSpacingMark)
-            {
-                continue;
-            }
-
-            if (char.IsLetterOrDigit(character))
-            {
-                builder.Append(char.ToUpperInvariant(character));
-                previousWasSpace = false;
-                continue;
-            }
-
-            if (!previousWasSpace)
-            {
-                builder.Append(' ');
-                previousWasSpace = true;
-            }
-        }
-
-        return builder.ToString().Normalize(NormalizationForm.FormC).Trim();
+        if(string.IsNullOrWhiteSpace(value))return string.Empty;var normalized=value.Trim().Normalize(NormalizationForm.FormD);var b=new StringBuilder();var space=false;
+        foreach(var ch in normalized){var cat=CharUnicodeInfo.GetUnicodeCategory(ch);if(cat==UnicodeCategory.NonSpacingMark)continue;if(char.IsLetterOrDigit(ch)){b.Append(char.ToUpperInvariant(ch));space=false;continue;}if(!space){b.Append(' ');space=true;}}
+        return b.ToString().Normalize(NormalizationForm.FormC).Trim();
     }
 
-    private static decimal CalculateSimilarity(string left, string right)
-    {
-        if (string.IsNullOrWhiteSpace(left) && string.IsNullOrWhiteSpace(right))
-        {
-            return 1;
-        }
-
-        var maxLength = Math.Max(left.Length, right.Length);
-        if (maxLength == 0)
-        {
-            return 1;
-        }
-
-        var distance = LevenshteinDistance(left, right);
-        return 1 - ((decimal)distance / maxLength);
-    }
-
-    private static int LevenshteinDistance(string left, string right)
-    {
-        var distances = new int[left.Length + 1, right.Length + 1];
-        for (var i = 0; i <= left.Length; i++)
-        {
-            distances[i, 0] = i;
-        }
-
-        for (var j = 0; j <= right.Length; j++)
-        {
-            distances[0, j] = j;
-        }
-
-        for (var i = 1; i <= left.Length; i++)
-        {
-            for (var j = 1; j <= right.Length; j++)
-            {
-                var cost = left[i - 1] == right[j - 1] ? 0 : 1;
-                distances[i, j] = Math.Min(
-                    Math.Min(distances[i - 1, j] + 1, distances[i, j - 1] + 1),
-                    distances[i - 1, j - 1] + cost);
-            }
-        }
-
-        return distances[left.Length, right.Length];
-    }
-
-    private static DataRow WithValues(DataRow row, IReadOnlyDictionary<string, string?> nextValues)
-    {
-        var values = new Dictionary<string, string?>(row.Values, StringComparer.OrdinalIgnoreCase);
-        foreach (var item in nextValues)
-        {
-            values[item.Key] = item.Value;
-        }
-
-        return new DataRow(values);
-    }
-
-    private static DataRow? FindByCode(IReadOnlyCollection<DataRow> rows, string? code)
-    {
-        return rows.FirstOrDefault(row => SameCode(row.GetValue("Codigo"), code));
-    }
-
-    private static int FindIndex(IReadOnlyList<DataRow> rows, string? code)
-    {
-        for (var index = 0; index < rows.Count; index++)
-        {
-            if (SameCode(rows[index].GetValue("Codigo"), code))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static TechnicalHierarchyLevel ParseLevel(string? value)
-    {
-        return Enum.TryParse<TechnicalHierarchyLevel>(value, ignoreCase: true, out var level)
-            ? level
-            : TechnicalHierarchyLevel.Sistema;
-    }
-
-    private static string Serialize(DataRow row)
-    {
-        return JsonSerializer.Serialize(row.Values);
-    }
-
-    private static string NormalizeCode(string? value)
-    {
-        return value?.Trim().ToUpperInvariant() ?? string.Empty;
-    }
-
-    private static bool SameCode(string? left, string? right)
-    {
-        return string.Equals(NormalizeCode(left), NormalizeCode(right), StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static void ValidateRequired(string? value, string fieldName)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new DomainException($"El campo {fieldName} es obligatorio.");
-        }
-    }
-
-    private static IReadOnlyCollection<string> SplitList(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return [];
-        }
-
-        return value
-            .Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(item => !string.IsNullOrWhiteSpace(item))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    private static string? JoinList(IEnumerable<string?> values)
-    {
-        var clean = values
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value!.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        return clean.Length == 0 ? null : string.Join(';', clean);
-    }
-
-    private static string? EmptyToNull(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    }
-
-    private static bool ParseBool(string? value)
-    {
-        return !string.IsNullOrWhiteSpace(value) &&
-               (value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) ||
-                value.Trim().Equals("si", StringComparison.OrdinalIgnoreCase) ||
-                value.Trim().Equals("1", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static DateTimeOffset? ParseDate(string? value)
-    {
-        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var result)
-            ? result
-            : null;
-    }
+    private static decimal Similarity(string left,string right){if(string.IsNullOrWhiteSpace(left)&&string.IsNullOrWhiteSpace(right))return 1;var max=Math.Max(left.Length,right.Length);if(max==0)return 1;return 1-((decimal)Distance(left,right)/max);}    
+    private static int Distance(string left,string right){var d=new int[left.Length+1,right.Length+1];for(var i=0;i<=left.Length;i++)d[i,0]=i;for(var j=0;j<=right.Length;j++)d[0,j]=j;for(var i=1;i<=left.Length;i++)for(var j=1;j<=right.Length;j++){var cost=left[i-1]==right[j-1]?0:1;d[i,j]=Math.Min(Math.Min(d[i-1,j]+1,d[i,j-1]+1),d[i-1,j-1]+cost);}return d[left.Length,right.Length];}
+    private static TechnicalHierarchyLevel ParseLevel(string? value)=>Enum.TryParse<TechnicalHierarchyLevel>(value,true,out var level)?level:TechnicalHierarchyLevel.Sistema;
+    private static object AuditShape(TechnicalNodeEntity n)=>new{n.Code,n.Name,n.Level,Parent=n.Parent?.Code,Faena=n.Faena?.Code,Families=n.Families.Select(x=>x.EquipmentFamily?.Code).ToArray(),Assets=n.Assets.Select(x=>x.Asset?.Code).ToArray(),Aliases=n.Aliases.Select(x=>x.Alias).ToArray(),n.IsObsolete,MergedInto=n.MergedIntoNode?.Code};
+    private static IReadOnlyCollection<string> Clean(IEnumerable<string?> values)=>values.Where(x=>!string.IsNullOrWhiteSpace(x)).Select(x=>Code(x)!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    private static string NormCode(string? value)=>value?.Trim().ToUpperInvariant()??string.Empty;
+    private static string? Code(string? value)=>string.IsNullOrWhiteSpace(value)?null:value.Trim().ToUpperInvariant();
+    private static bool Same(string? left,string? right)=>string.Equals(NormCode(left),NormCode(right),StringComparison.OrdinalIgnoreCase);
+    private static void Req(string? value,string name){if(string.IsNullOrWhiteSpace(value))throw new DomainException($"El campo {name} es obligatorio.");}
 }

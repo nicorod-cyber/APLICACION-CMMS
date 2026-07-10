@@ -147,6 +147,7 @@ public static class DependencyInjection
             };
         });
         services.AddScoped<ITechnicalHierarchyService, TechnicalHierarchyService>();
+        services.AddScoped<ITechnicalHierarchyExcelImportService, TechnicalHierarchyExcelImportService>();
         services.AddScoped<IAuthorizationPolicyService, AuthorizationPolicyService>();
         services.AddScoped<IExternalIdentityProvider, MicrosoftEntraIdentityProvider>();
 

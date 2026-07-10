@@ -51,6 +51,11 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<StockMovementEntity> StockMovements => Set<StockMovementEntity>();
     public DbSet<StockReservationEntity> StockReservations => Set<StockReservationEntity>();
     public DbSet<StockTransferEntity> StockTransfers => Set<StockTransferEntity>();
+    public DbSet<TechnicalLocationEntity> TechnicalLocations => Set<TechnicalLocationEntity>();
+    public DbSet<TechnicalNodeEntity> TechnicalNodes => Set<TechnicalNodeEntity>();
+    public DbSet<TechnicalNodeFamilyEntity> TechnicalNodeFamilies => Set<TechnicalNodeFamilyEntity>();
+    public DbSet<TechnicalNodeAssetEntity> TechnicalNodeAssets => Set<TechnicalNodeAssetEntity>();
+    public DbSet<TechnicalNodeAliasEntity> TechnicalNodeAliases => Set<TechnicalNodeAliasEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {

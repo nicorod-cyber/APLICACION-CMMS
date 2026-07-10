@@ -1,10 +1,12 @@
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Inventory;
+using MaintenanceCMMS.Application.TechnicalHierarchy;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Auditing;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using MaintenanceCMMS.Infrastructure.Inventory;
+using MaintenanceCMMS.Infrastructure.TechnicalHierarchy;
 using MaintenanceCMMS.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -19,7 +21,7 @@ public sealed class PostgreSqlMigrationTests
     private static readonly UserAccessContext Admin = new(
         "migration-test",
         [AuthRoles.Admin],
-        [AuthPermissions.Administration, AuthPermissions.AdjustStock, AuthPermissions.ViewGlobalWarehouses],
+        [AuthPermissions.Administration, AuthPermissions.AdjustStock, AuthPermissions.ViewGlobalWarehouses, AuthPermissions.ManageTechnicalHierarchy],
         []);
 
     [Fact]
@@ -116,6 +118,64 @@ public sealed class PostgreSqlMigrationTests
         }
     }
 
+    [Fact]
+    public async Task MigrateFromEmptyDatabase_CreatesTechnicalHierarchyAndSupportsServiceFlow()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        await database.Context.Database.MigrateAsync();
+        foreach (var table in new[] { "ubicaciones_tecnicas", "nodos_tecnicos", "nodo_tecnico_familias", "nodo_tecnico_activos", "nodo_tecnico_aliases" }) Assert.True(await database.ExistsAsync(table));
+        var faena = new FaenaEntity { Code = "TH-FAE", Name = "Faena TH", IsActive = true };
+        var family = new EquipmentFamilyEntity { Code = "TH-FAM", Name = "Familia TH", IsActive = true };
+        var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
+        database.Context.AddRange(faena, family, state, new AssetEntity { Code = "TH-ACT", Name = "Activo TH", Faena = faena, Family = family, OperationalState = state, AssetType = "Equipo", RecordStatus = "vigente" });
+        await database.Context.SaveChangesAsync();
+        var service = new TechnicalHierarchyService(database.Context, new PostgreSqlAuditService(database.Context, new AuditContextAccessor()), new AuthorizationPolicyService());
+        var node = await service.CreateAsync(new CreateTechnicalNodeRequest("TH-SIS", "Sistema TH", TechnicalHierarchyLevel.Sistema, FaenaCodigo: "TH-FAE", FamiliasEquipo: ["TH-FAM"], ActivosAsignados: ["TH-ACT"]), Admin, CancellationToken.None);
+        Assert.Equal("Sistema TH", node.Ruta);
+        await using var second = database.NewContext();
+        Assert.True(await second.TechnicalNodes.AnyAsync(x => x.Code == "TH-SIS"));
+    }
+
+    [Fact]
+    public async Task MigrateFromInventory_PreservesPreviousRowsAndAddsTechnicalHierarchy()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        await database.Context.Database.GetService<IMigrator>().MigrateAsync(database.InventoryMigrationId);
+        var faena = new FaenaEntity { Code = "INV-FAE", Name = "Faena previa", IsActive = true };
+        var family = new EquipmentFamilyEntity { Code = "INV-FAM", Name = "Familia previa", IsActive = true };
+        var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
+        database.Context.AddRange(faena, family, state, new AssetEntity { Code = "INV-ACT", Name = "Activo previo", Faena = faena, Family = family, OperationalState = state, AssetType = "Equipo", RecordStatus = "vigente" }, new InventoryCatalogEntity { Category = "Unit", Code = "UN", Name = "UN", IsActive = true });
+        await database.Context.SaveChangesAsync();
+        await database.Context.Database.MigrateAsync();
+        Assert.Equal(1, await database.Context.Faenas.CountAsync(x => x.Code == "INV-FAE"));
+        Assert.Equal(1, await database.Context.InventoryCatalogs.CountAsync(x => x.Code == "UN"));
+        Assert.True(await database.ExistsAsync("nodos_tecnicos"));
+        Assert.True(await database.ExistsAsync("ubicaciones_tecnicas"));
+    }
+
+    [Fact]
+    public async Task RollbackToInventory_RemovesOnlyTechnicalHierarchyObjects()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        await database.Context.Database.MigrateAsync();
+        database.Context.InventoryCatalogs.Add(new InventoryCatalogEntity { Category = "Unit", Code = "UN", Name = "UN", IsActive = true });
+        await database.Context.SaveChangesAsync();
+        await database.Context.Database.GetService<IMigrator>().MigrateAsync(database.InventoryMigrationId);
+        foreach (var table in new[] { "ubicaciones_tecnicas", "nodos_tecnicos", "nodo_tecnico_familias", "nodo_tecnico_activos", "nodo_tecnico_aliases" }) Assert.False(await database.ExistsAsync(table));
+        foreach (var table in new[] { "usuarios", "faenas", "activos", "catalogos_inventario", "repuestos", "bodegas", "audit_log" }) Assert.True(await database.ExistsAsync(table));
+        Assert.Equal(1, await database.Context.InventoryCatalogs.CountAsync(x => x.Code == "UN"));
+    }
+
+    [Fact]
+    public async Task GeneratedScript_DoesNotDuplicateInventoryOrTechnicalHierarchyTables()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        var script = database.Context.Database.GetService<IMigrator>().GenerateScript("0", null);
+        foreach (var table in new[] { "catalogos_inventario", "repuestos", "bodegas", "ubicaciones_tecnicas", "nodos_tecnicos", "nodo_tecnico_familias", "nodo_tecnico_activos", "nodo_tecnico_aliases" })
+        {
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(script, $"CREATE TABLE(?: IF NOT EXISTS)? \\\"?{table}\\\"?"));
+        }
+    }
     private sealed class MigrationDatabase : IAsyncDisposable
     {
         private MigrationDatabase(string name, CmmsDbContext context)
@@ -127,6 +187,7 @@ public sealed class PostgreSqlMigrationTests
         public string Name { get; }
         public CmmsDbContext Context { get; }
         public string WorkMigrationId => "202607090003_WorkNotificationsAndOrdersPostgreSql";
+        public string InventoryMigrationId => "20260710134248_InventoryDomainPostgreSql";
         public static async Task<MigrationDatabase> CreateAsync()
         {
             var name = $"cmms_migration_tests_{Guid.NewGuid():N}";
@@ -142,6 +203,14 @@ public sealed class PostgreSqlMigrationTests
                 .UseNpgsql($"Host=localhost;Port=5432;Database={name};Username=cmms_app;Password=cmms_app_password")
                 .Options;
             return new MigrationDatabase(name, new CmmsDbContext(options));
+        }
+
+        public CmmsDbContext NewContext()
+        {
+            var options = new DbContextOptionsBuilder<CmmsDbContext>()
+                .UseNpgsql($"Host=localhost;Port=5432;Database={Name};Username=cmms_app;Password=cmms_app_password")
+                .Options;
+            return new CmmsDbContext(options);
         }
 
         public async Task<bool> ExistsAsync(string relation)
