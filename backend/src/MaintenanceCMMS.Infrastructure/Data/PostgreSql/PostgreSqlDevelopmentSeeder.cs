@@ -1,5 +1,8 @@
-﻿using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
+using MaintenanceCMMS.Application.WorkNotifications;
+using MaintenanceCMMS.Application.WorkOrders;
+using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -37,12 +40,16 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         await UpsertDocumentTypeAsync("PERMISO", "Permiso operacional", DocumentEntityType.Activo, true, false, false, 30, cancellationToken);
         await UpsertDocumentTypeAsync("CERT", "Certificado", DocumentEntityType.Activo, false, false, false, 45, cancellationToken);
         await UpsertDocumentTypeAsync("FAENA-GRAL", "Documento general de faena", DocumentEntityType.Faena, false, false, false, 30, cancellationToken);
+        await UpsertDocumentTypeAsync("OT-GRAL", "Documento general de OT", DocumentEntityType.OT, false, false, false, 30, cancellationToken);
+        await UpsertWorkCatalogsAsync(cancellationToken);
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         var faena = await _dbContext.Faenas.SingleAsync(item => item.Code == "FAENA_DEMO", cancellationToken);
         var family = await _dbContext.EquipmentFamilies.SingleAsync(item => item.Code == "CAMION_PLUMA", cancellationToken);
         var state = await _dbContext.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO_FAENA", cancellationToken);
+
+        await UpsertBaseChecklistTemplateAsync(cancellationToken);
 
         if (!await _dbContext.Assets.AnyAsync(item => item.Code == "ACT-DEMO-001", cancellationToken))
         {
@@ -108,6 +115,81 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         }
     }
 
+
+    private async Task UpsertWorkCatalogsAsync(CancellationToken cancellationToken)
+    {
+        var order = 1;
+        foreach (var value in Enum.GetNames<WorkNotificationType>()) await UpsertWorkCatalogAsync("WorkNotificationType", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<WorkNotificationStatus>()) await UpsertWorkCatalogAsync("WorkNotificationStatus", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<WorkNotificationPriority>()) await UpsertWorkCatalogAsync("WorkNotificationPriority", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<WorkNotificationCriticality>()) await UpsertWorkCatalogAsync("WorkNotificationCriticality", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<WorkFailureClassification>()) await UpsertWorkCatalogAsync("WorkFailureClassification", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<WorkOrderLifecycleStatus>()) await UpsertWorkCatalogAsync("WorkOrderLifecycleStatus", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<WorkOrderSparePartStatus>()) await UpsertWorkCatalogAsync("WorkOrderSparePartStatus", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<WorkOrderEvidenceType>()) await UpsertWorkCatalogAsync("WorkOrderEvidenceType", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<WorkOrderChecklistResponseType>()) await UpsertWorkCatalogAsync("WorkOrderChecklistResponseType", value, order++, cancellationToken);
+        order = 1;
+        foreach (var value in Enum.GetNames<MaintenanceType>()) await UpsertWorkCatalogAsync("MaintenanceType", value, order++, cancellationToken);
+    }
+
+    private async Task UpsertWorkCatalogAsync(string category, string code, int sortOrder, CancellationToken cancellationToken)
+    {
+        var entity = await _dbContext.WorkCatalogs.FirstOrDefaultAsync(item => item.Category == category && item.Code == code, cancellationToken);
+        if (entity is null)
+        {
+            _dbContext.WorkCatalogs.Add(new WorkCatalogEntity { Category = category, Code = code, Name = code, IsActive = true, SortOrder = sortOrder });
+        }
+        else
+        {
+            entity.Name = code;
+            entity.IsActive = true;
+            entity.SortOrder = sortOrder;
+            entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private async Task UpsertBaseChecklistTemplateAsync(CancellationToken cancellationToken)
+    {
+        var responseType = await _dbContext.WorkCatalogs.FirstAsync(
+            item => item.Category == "WorkOrderChecklistResponseType" && item.Code == nameof(WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica),
+            cancellationToken);
+        var template = await _dbContext.ChecklistTemplates
+            .Include(item => item.Items)
+            .FirstOrDefaultAsync(item => item.Code == "TPL-BASE", cancellationToken);
+        if (template is null)
+        {
+            template = new ChecklistTemplateEntity { Code = "TPL-BASE", Name = "Plantilla base", IsActive = true };
+            _dbContext.ChecklistTemplates.Add(template);
+        }
+        else
+        {
+            template.Name = "Plantilla base";
+            template.IsActive = true;
+            template.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+
+        if (!template.Items.Any(item => item.SortOrder == 1))
+        {
+            template.Items.Add(new ChecklistTemplateItemEntity
+            {
+                Id = Guid.NewGuid(),
+                SortOrder = 1,
+                ItemText = "Verificacion base",
+                Mandatory = true,
+                ResponseTypeId = responseType.Id,
+                ResponseType = responseType,
+                IsActive = true
+            });
+        }
+    }
     private async Task UpsertPermissionAsync(string code, string name, CancellationToken cancellationToken)
     {
         var normalized = code.Trim().ToLowerInvariant();
@@ -166,3 +248,4 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         }
     }
 }
+

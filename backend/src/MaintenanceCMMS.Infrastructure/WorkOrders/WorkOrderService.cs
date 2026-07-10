@@ -1,1752 +1,254 @@
+using System.Data;
 using System.Globalization;
 using System.Text.Json;
-using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace MaintenanceCMMS.Infrastructure.WorkOrders;
 
 public sealed class WorkOrderService : IWorkOrderService
 {
-    private const string WorkOrdersSchema = "ordenes_trabajo";
-    private const string TasksSchema = "tareas_ot";
-    private const string TaskTechniciansSchema = "ot_tecnicos_tarea";
-    private const string LaborSchema = "ot_hh";
-    private const string EvidencesSchema = "ot_evidencias";
-    private const string SparePartsSchema = "ot_repuestos";
-    private const string ChecklistSchema = "ot_checklists";
-    private const string SignaturesSchema = "ot_firmas";
-    private const string HistorySchema = "ot_estado_historial";
-    private const string AssetsSchema = "activos";
-    private const string ChecklistTemplatesSchema = "checklists";
-
-    private readonly IDataProvider _dataProvider;
+    private readonly CmmsDbContext _dbContext;
     private readonly IAuditService _auditService;
 
-    public WorkOrderService(IDataProvider dataProvider, IAuditService auditService)
+    public WorkOrderService(CmmsDbContext dbContext, IAuditService auditService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _auditService = auditService;
     }
 
-    public async Task<IReadOnlyCollection<WorkOrderSummaryResponse>> ListAsync(
-        WorkOrderQuery query,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<IReadOnlyCollection<WorkOrderSummaryResponse>> ListAsync(WorkOrderQuery query, UserAccessContext user, CancellationToken cancellationToken)
     {
         EnsureCanView(user);
-        var data = await ReadDataAsync(cancellationToken);
-
-        return data.Orders
-            .Select(row => BuildSummary(row, data))
-            .Where(item => query.IncludeClosed || item.Estado is not (WorkOrderLifecycleStatus.ValidadaPlanificacion or WorkOrderLifecycleStatus.Anulada))
-            .Where(item => !query.Status.HasValue || item.Estado == query.Status)
-            .Where(item => string.IsNullOrWhiteSpace(query.FaenaCodigo) || Same(item.FaenaCodigo, query.FaenaCodigo))
-            .Where(item => string.IsNullOrWhiteSpace(query.ActivoCodigo) || Same(item.ActivoCodigo, query.ActivoCodigo))
-            .Where(item => string.IsNullOrWhiteSpace(query.TechnicianId) || HasAssignedTechnician(data.Technicians, item.NumeroOT, query.TechnicianId))
-            .Where(item => CanViewOrder(user, item, data.Technicians))
-            .OrderByDescending(item => item.FechaProgramada ?? item.FechaInicioProgramada ?? DateTimeOffset.MinValue)
-            .ThenBy(item => item.NumeroOT, StringComparer.OrdinalIgnoreCase)
+        var orders = await BaseQuery().AsNoTracking().ToArrayAsync(cancellationToken);
+        return orders.Select(ToDetail)
+            .Where(d => query.IncludeClosed || d.Summary.Estado is not (WorkOrderLifecycleStatus.ValidadaPlanificacion or WorkOrderLifecycleStatus.Anulada))
+            .Where(d => !query.Status.HasValue || d.Summary.Estado == query.Status)
+            .Where(d => string.IsNullOrWhiteSpace(query.FaenaCodigo) || Same(d.Summary.FaenaCodigo, query.FaenaCodigo))
+            .Where(d => string.IsNullOrWhiteSpace(query.ActivoCodigo) || Same(d.Summary.ActivoCodigo, query.ActivoCodigo))
+            .Where(d => string.IsNullOrWhiteSpace(query.TechnicianId) || d.Technicians.Any(t => Same(t.TecnicoUserId, query.TechnicianId)))
+            .Where(d => CanViewOrder(user, d))
+            .Select(d => d.Summary)
+            .OrderByDescending(x => x.FechaProgramada ?? x.FechaInicioProgramada ?? DateTimeOffset.MinValue)
+            .ThenBy(x => x.NumeroOT, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
-    public async Task<WorkOrderDetailResponse?> GetByIdAsync(
-        string numeroOt,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<WorkOrderDetailResponse?> GetByIdAsync(string numeroOt, UserAccessContext user, CancellationToken cancellationToken)
     {
         EnsureCanView(user);
-        var data = await ReadDataAsync(cancellationToken);
-        var row = FindOrder(data.Orders, numeroOt);
-        if (row is null)
-        {
-            return null;
-        }
-
-        var detail = BuildDetail(row, data);
-        if (!CanViewOrder(user, detail.Summary, data.Technicians))
-        {
-            throw new UnauthorizedAccessException("No tiene acceso a la OT solicitada.");
-        }
-
+        var order = await FindAsync(numeroOt, false, cancellationToken);
+        if (order is null) return null;
+        var detail = ToDetail(order);
+        if (!CanViewOrder(user, detail)) throw new UnauthorizedAccessException("No tiene acceso a la OT solicitada.");
         return detail;
     }
 
-    public async Task<WorkOrderDetailResponse> CreateAsync(
-        CreateWorkOrderRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<WorkOrderDetailResponse> CreateAsync(CreateWorkOrderRequest request, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanPlan(user);
-        ValidateRequired(request.ActivoCodigo, nameof(request.ActivoCodigo));
-        ValidateRequired(request.Descripcion, nameof(request.Descripcion));
-        ValidateRequired(request.TipoMantenimiento, nameof(request.TipoMantenimiento));
-
-        var asset = await FindAssetAsync(request.ActivoCodigo, cancellationToken);
-        if (asset is null)
+        EnsureCanPlan(user); ValidateRequired(request.ActivoCodigo, nameof(request.ActivoCodigo)); ValidateRequired(request.Descripcion, nameof(request.Descripcion)); ValidateRequired(request.TipoMantenimiento, nameof(request.TipoMantenimiento));
+        var asset = await ResolveAssetAsync(request.ActivoCodigo, request.FaenaCodigo, user, ct);
+        await using var tx = await _dbContext.Database.BeginTransactionAsync(ct);
+        var now = DateTimeOffset.UtcNow; var status = await CatalogAsync("WorkOrderLifecycleStatus", WorkOrderLifecycleStatus.OTCreada.ToString(), ct);
+        var order = new WorkOrderEntity
         {
-            throw new DomainException($"El activo '{request.ActivoCodigo}' no existe.");
-        }
-
-        var faenaCodigo = ResolveFaena(request.FaenaCodigo, asset);
-        EnsureFaenaAccess(user, faenaCodigo);
-
-        var rows = (await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken)).ToList();
-        var number = NextWorkOrderNumber(rows);
-        var now = DateTimeOffset.UtcNow;
-        var row = WorkOrderRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["NumeroOT"] = number,
-            ["ActivoCodigo"] = NormalizeCode(request.ActivoCodigo),
-            ["Estado"] = WorkOrderLifecycleStatus.OTCreada.ToString(),
-            ["TipoMantenimiento"] = NormalizeText(request.TipoMantenimiento),
-            ["Descripcion"] = NormalizeText(request.Descripcion),
-            ["FechaProgramada"] = FormatOptionalDate(request.FechaProgramada),
-            ["AvisoId"] = NormalizeCode(request.AvisoId),
-            ["FaenaCodigo"] = NormalizeCode(faenaCodigo),
-            ["Sistema"] = NormalizeText(request.Sistema),
-            ["Subsistema"] = NormalizeText(request.Subsistema),
-            ["Componente"] = NormalizeText(request.Componente),
-            ["Prioridad"] = NormalizeText(request.Prioridad) ?? "Media",
-            ["Criticidad"] = NormalizeText(request.Criticidad) ?? "Media",
-            ["EsPreventivaAutomatica"] = "False",
-            ["RequiereFirma"] = request.RequiereFirma.ToString(CultureInfo.InvariantCulture),
-            ["FechaInicioProgramada"] = FormatOptionalDate(request.FechaInicioProgramada),
-            ["FechaFinProgramada"] = FormatOptionalDate(request.FechaFinProgramada),
-            ["CreadoPor"] = user.UserId,
-            ["CreadoEnUtc"] = FormatDate(now),
-            ["ActualizadoPor"] = user.UserId,
-            ["ActualizadoEnUtc"] = FormatDate(now)
-        });
-
-        rows.Add(row);
-        await _dataProvider.SaveRowsAsync(WorkOrdersSchema, rows, cancellationToken);
-        await AddHistoryAsync(number, WorkOrderLifecycleStatus.OTCreada, WorkOrderLifecycleStatus.OTCreada, user, "OT creada", cancellationToken);
-        await RecordAuditAsync(user, "work_order.created", number, null, row, faenaCodigo, request.Descripcion, cancellationToken);
-
-        return (await GetByIdAsync(number, user, cancellationToken))!;
-    }
-
-    public Task<WorkOrderDetailResponse> CreatePreventiveAsync(
-        CreatePreventiveWorkOrderRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        return CreatePreventiveInternalAsync(request, user, cancellationToken);
-    }
-
-    public async Task<WorkOrderTaskResponse?> AddTaskAsync(
-        string numeroOt,
-        CreateWorkOrderTaskRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(request.Descripcion, nameof(request.Descripcion));
-
-        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
-        EnsureOrderOpen(order);
-
-        var rows = (await _dataProvider.ReadRowsAsync(TasksSchema, cancellationToken)).ToList();
-        var code = NormalizeCode(request.CodigoTarea) ?? NextTaskCode(rows, numeroOt);
-        if (rows.Any(row => Same(row.GetValue("NumeroOT"), numeroOt) && Same(row.GetValue("CodigoTarea"), code)))
-        {
-            throw new DomainException($"La tarea '{code}' ya existe en la OT.");
-        }
-
-        var task = TaskRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["CodigoTarea"] = code,
-            ["Descripcion"] = NormalizeText(request.Descripcion),
-            ["RequiereEvidencia"] = request.RequiereEvidencia.ToString(CultureInfo.InvariantCulture),
-            ["RequiereHH"] = request.RequiereHH.ToString(CultureInfo.InvariantCulture),
-            ["FechaInicioProgramada"] = FormatOptionalDate(request.FechaInicioProgramada),
-            ["FechaFinProgramada"] = FormatOptionalDate(request.FechaFinProgramada),
-            ["ChecklistObligatorio"] = request.ChecklistObligatorio.ToString(CultureInfo.InvariantCulture),
-            ["Observaciones"] = NormalizeText(request.Observaciones)
-        });
-
-        rows.Add(task);
-        await _dataProvider.SaveRowsAsync(TasksSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.task_created", numeroOt, null, task, order.FaenaCodigo, request.Descripcion, cancellationToken);
-        return ToTask(task);
-    }
-
-    public async Task<WorkOrderTaskTechnicianResponse?> AssignTechnicianAsync(
-        string numeroOt,
-        string codigoTarea,
-        AssignTaskTechnicianRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(request.TecnicoUserId, nameof(request.TecnicoUserId));
-
-        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
-        EnsureTaskExists(await _dataProvider.ReadRowsAsync(TasksSchema, cancellationToken), numeroOt, codigoTarea);
-
-        var rows = (await _dataProvider.ReadRowsAsync(TaskTechniciansSchema, cancellationToken)).ToList();
-        if (rows.Any(row => Same(row.GetValue("NumeroOT"), numeroOt) &&
-                            Same(row.GetValue("CodigoTarea"), codigoTarea) &&
-                            Same(row.GetValue("TecnicoUserId"), request.TecnicoUserId)))
-        {
-            throw new DomainException("El tecnico ya esta asignado a esta tarea.");
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        var rowToCreate = TaskTechnicianRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["AsignacionId"] = NewId("ASG"),
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["CodigoTarea"] = NormalizeCode(codigoTarea),
-            ["TecnicoUserId"] = NormalizeText(request.TecnicoUserId),
-            ["TecnicoNombre"] = NormalizeText(request.TecnicoNombre),
-            ["AsignadoEnUtc"] = FormatDate(now),
-            ["AsignadoPor"] = user.UserId
-        });
-
-        rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(TaskTechniciansSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.technician_assigned", numeroOt, null, rowToCreate, order.FaenaCodigo, request.TecnicoUserId, cancellationToken);
-        return ToTechnician(rowToCreate);
-    }
-
-    public async Task<WorkOrderLaborResponse?> RegisterLaborAsync(
-        string numeroOt,
-        string codigoTarea,
-        RegisterLaborRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        ValidateRequired(request.TecnicoUserId, nameof(request.TecnicoUserId));
-        ValidateRequired(request.Descripcion, nameof(request.Descripcion));
-        var calculatedHours = CalculateLaborHours(request.Horas, request.HoraInicio, request.HoraTermino);
-        if (calculatedHours <= 0)
-        {
-            throw new DomainException("Las HH deben ser mayores a cero.");
-        }
-
-        var data = await ReadDataAsync(cancellationToken);
-        var order = BuildDetail(FindOrder(data.Orders, numeroOt) ?? throw new DomainException("La OT no existe."), data);
-        EnsureFaenaAccess(user, order.Summary.FaenaCodigo);
-        EnsureTechnicianCanWork(user, order, codigoTarea, request.TecnicoUserId);
-        EnsureTaskExists(data.Tasks, numeroOt, codigoTarea);
-
-        var rows = data.Labor.ToList();
-        var rowToCreate = LaborRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["HHId"] = NewId("HH"),
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["CodigoTarea"] = NormalizeCode(codigoTarea),
-            ["TecnicoUserId"] = NormalizeText(request.TecnicoUserId),
-            ["Horas"] = FormatNumber(calculatedHours),
-            ["Descripcion"] = NormalizeText(request.Descripcion),
-            ["FechaTrabajo"] = FormatDate(request.FechaTrabajo ?? request.HoraInicio ?? DateTimeOffset.UtcNow),
-            ["HoraInicio"] = FormatOptionalDate(request.HoraInicio),
-            ["HoraTermino"] = FormatOptionalDate(request.HoraTermino),
-            ["RegistradoPor"] = user.UserId,
-            ["Comentario"] = NormalizeText(request.Comentario),
-            ["ValidadoSupervisor"] = "false",
-            ["ValidadoPor"] = null,
-            ["ValidadoEnUtc"] = null
-        });
-
-        rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(LaborSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.labor_registered", numeroOt, null, rowToCreate, order.Summary.FaenaCodigo, request.Descripcion, cancellationToken);
-        return ToLabor(rowToCreate);
-    }
-
-    public async Task<WorkOrderLaborResponse?> ValidateLaborAsync(
-        string numeroOt,
-        string hhId,
-        ValidateLaborRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        EnsureCanPlanOrSupervisor(user);
-
-        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
-        var rows = (await _dataProvider.ReadRowsAsync(LaborSchema, cancellationToken)).ToList();
-        var index = rows.FindIndex(row => Same(row.GetValue("NumeroOT"), numeroOt) && Same(row.GetValue("HHId"), hhId));
-        if (index < 0)
-        {
-            return null;
-        }
-
-        var previous = rows[index];
-        var values = CopyRow(previous, LaborColumns);
-        values["ValidadoSupervisor"] = request.Validado.ToString(CultureInfo.InvariantCulture);
-        values["ValidadoPor"] = request.Validado ? user.UserId : null;
-        values["ValidadoEnUtc"] = request.Validado ? FormatDate(DateTimeOffset.UtcNow) : null;
-        values["Comentario"] = Append(values.GetValueOrDefault("Comentario"), request.Reason);
-        var updated = LaborRow(values);
-
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(LaborSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.labor_validated", numeroOt, previous, updated, order.FaenaCodigo, request.Reason, cancellationToken);
-        return ToLabor(updated);
-    }
-
-    public async Task<WorkOrderEvidenceResponse?> RegisterEvidenceAsync(
-        string numeroOt,
-        RegisterEvidenceRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        ValidateRequired(request.Nombre, nameof(request.Nombre));
-        var isCommentOnly = request.TipoEvidencia == WorkOrderEvidenceType.Comentario;
-        if (!isCommentOnly &&
-            string.IsNullOrWhiteSpace(request.ArchivoKey) &&
-            string.IsNullOrWhiteSpace(request.SharePointUrl) &&
-            string.IsNullOrWhiteSpace(request.LocalPath))
-        {
-            throw new DomainException("Debe indicar ArchivoKey, SharePointUrl o LocalPath para la evidencia.");
-        }
-
-        var data = await ReadDataAsync(cancellationToken);
-        var order = BuildDetail(FindOrder(data.Orders, numeroOt) ?? throw new DomainException("La OT no existe."), data);
-        EnsureFaenaAccess(user, order.Summary.FaenaCodigo);
-        if (!string.IsNullOrWhiteSpace(request.CodigoTarea))
-        {
-            EnsureTaskExists(data.Tasks, numeroOt, request.CodigoTarea);
-            EnsureTechnicianCanWork(user, order, request.CodigoTarea, user.UserId);
-        }
-        else
-        {
-            EnsureCanPlanOrSupervisorOrAssigned(user, order);
-        }
-
-        var rows = data.Evidences.ToList();
-        var rowToCreate = EvidenceRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["EvidenciaId"] = NewId("EVI"),
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["CodigoTarea"] = NormalizeCode(request.CodigoTarea),
-            ["Nombre"] = NormalizeText(request.Nombre),
-            ["ArchivoKey"] = NormalizeText(request.ArchivoKey),
-            ["SharePointUrl"] = NormalizeText(request.SharePointUrl),
-            ["CubreEvidenciaObligatoria"] = request.CubreEvidenciaObligatoria.ToString(CultureInfo.InvariantCulture),
-            ["TipoEvidencia"] = request.TipoEvidencia.ToString(),
-            ["EsFoto"] = (request.EsFoto || request.TipoEvidencia is WorkOrderEvidenceType.FotoAntes or WorkOrderEvidenceType.FotoDespues).ToString(CultureInfo.InvariantCulture),
-            ["EsObligatoria"] = request.EsObligatoria.ToString(CultureInfo.InvariantCulture),
-            ["StorageProvider"] = NormalizeText(request.StorageProvider) ?? InferStorageProvider(request),
-            ["LocalPath"] = NormalizeText(request.LocalPath),
-            ["OfflineId"] = NormalizeText(request.OfflineId),
-            ["SyncStatus"] = NormalizeText(request.SyncStatus) ?? "Synced",
-            ["CreadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow),
-            ["CreadoPor"] = user.UserId,
-            ["Observaciones"] = NormalizeText(request.Observaciones)
-        });
-
-        rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(EvidencesSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.evidence_registered", numeroOt, null, rowToCreate, order.Summary.FaenaCodigo, request.Nombre, cancellationToken);
-        return ToEvidence(rowToCreate);
-    }
-
-    public async Task<WorkOrderSparePartResponse?> AddSparePartAsync(
-        string numeroOt,
-        AddWorkOrderSparePartRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(request.CodigoTarea, nameof(request.CodigoTarea));
-        ValidateRequired(request.RepuestoCodigo, nameof(request.RepuestoCodigo));
-        ValidateRequired(request.Unidad, nameof(request.Unidad));
-        if (request.Cantidad <= 0)
-        {
-            throw new DomainException("La cantidad de repuesto debe ser mayor a cero.");
-        }
-
-        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
-        EnsureTaskExists(await _dataProvider.ReadRowsAsync(TasksSchema, cancellationToken), numeroOt, request.CodigoTarea);
-
-        var rows = (await _dataProvider.ReadRowsAsync(SparePartsSchema, cancellationToken)).ToList();
-        var rowToCreate = SparePartRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["ItemId"] = NewId("REPOT"),
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["CodigoTarea"] = NormalizeCode(request.CodigoTarea),
-            ["RepuestoCodigo"] = NormalizeCode(request.RepuestoCodigo),
-            ["Cantidad"] = FormatNumber(request.Cantidad),
-            ["Unidad"] = NormalizeText(request.Unidad),
-            ["BodegaCodigo"] = NormalizeCode(request.BodegaCodigo),
-            ["Estado"] = request.Estado.ToString(),
-            ["CantidadUtilizada"] = "0",
-            ["CantidadDevuelta"] = "0",
-            ["Observaciones"] = NormalizeText(request.Observaciones)
-        });
-
-        rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(SparePartsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.spare_part_added", numeroOt, null, rowToCreate, order.FaenaCodigo, request.RepuestoCodigo, cancellationToken);
-        return ToSparePart(rowToCreate);
-    }
-
-    public async Task<WorkOrderSparePartResponse?> UpdateSparePartUsageAsync(
-        string numeroOt,
-        string itemId,
-        UpdateWorkOrderSparePartUsageRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
-        EnsureCanPlanOrSupervisor(user);
-
-        var rows = (await _dataProvider.ReadRowsAsync(SparePartsSchema, cancellationToken)).ToList();
-        var index = rows.FindIndex(row => Same(row.GetValue("NumeroOT"), numeroOt) && Same(row.GetValue("ItemId"), itemId));
-        if (index < 0)
-        {
-            return null;
-        }
-
-        var previous = rows[index];
-        var values = CopyRow(previous, SparePartColumns);
-        values["Estado"] = request.Estado.ToString();
-        values["CantidadUtilizada"] = FormatNumber(request.CantidadUtilizada ?? ParseDecimal(values.GetValueOrDefault("CantidadUtilizada")));
-        values["CantidadDevuelta"] = FormatNumber(request.CantidadDevuelta ?? ParseDecimal(values.GetValueOrDefault("CantidadDevuelta")));
-        values["Observaciones"] = Append(values.GetValueOrDefault("Observaciones"), request.Reason);
-        var updated = SparePartRow(values);
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(SparePartsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.spare_part_updated", numeroOt, previous, updated, order.FaenaCodigo, request.Reason, cancellationToken);
-        return ToSparePart(updated);
-    }
-
-    public async Task<WorkOrderChecklistItemResponse?> AddChecklistItemAsync(
-        string numeroOt,
-        AddWorkOrderChecklistItemRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(request.CodigoTarea, nameof(request.CodigoTarea));
-        ValidateRequired(request.Item, nameof(request.Item));
-
-        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
-        EnsureTaskExists(await _dataProvider.ReadRowsAsync(TasksSchema, cancellationToken), numeroOt, request.CodigoTarea);
-
-        var rows = (await _dataProvider.ReadRowsAsync(ChecklistSchema, cancellationToken)).ToList();
-        var rowToCreate = ChecklistRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["ItemId"] = NewId("CHKOT"),
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["CodigoTarea"] = NormalizeCode(request.CodigoTarea),
-            ["Item"] = NormalizeText(request.Item),
-            ["Obligatorio"] = request.Obligatorio.ToString(CultureInfo.InvariantCulture),
-            ["Completado"] = request.Completado.ToString(CultureInfo.InvariantCulture),
-            ["CompletadoEnUtc"] = request.Completado ? FormatDate(DateTimeOffset.UtcNow) : null,
-            ["CompletadoPor"] = request.Completado ? user.UserId : null,
-            ["TemplateCode"] = NormalizeCode(request.TemplateCode),
-            ["TipoRespuesta"] = request.TipoRespuesta.ToString(),
-            ["Respuesta"] = request.Completado ? DefaultChecklistResponse(request.TipoRespuesta) : null,
-            ["ValorNumerico"] = null,
-            ["Texto"] = null,
-            ["EvidenciaId"] = null,
-            ["RequiereFoto"] = request.RequiereFoto.ToString(CultureInfo.InvariantCulture),
-            ["RequiereArchivo"] = request.RequiereArchivo.ToString(CultureInfo.InvariantCulture),
-            ["RequiereFirma"] = request.RequiereFirma.ToString(CultureInfo.InvariantCulture),
-            ["FirmaId"] = null
-        });
-
-        rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(ChecklistSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.checklist_added", numeroOt, null, rowToCreate, order.FaenaCodigo, request.Item, cancellationToken);
-        return ToChecklist(rowToCreate);
-    }
-
-    public async Task<WorkOrderChecklistItemResponse?> UpdateChecklistItemAsync(
-        string numeroOt,
-        string itemId,
-        UpdateChecklistItemRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        var data = await ReadDataAsync(cancellationToken);
-        var order = BuildDetail(FindOrder(data.Orders, numeroOt) ?? throw new DomainException("La OT no existe."), data);
-        EnsureCanPlanOrSupervisorOrAssigned(user, order);
-
-        var rows = data.Checklist.ToList();
-        var index = rows.FindIndex(row => Same(row.GetValue("NumeroOT"), numeroOt) && Same(row.GetValue("ItemId"), itemId));
-        if (index < 0)
-        {
-            return null;
-        }
-
-        var previous = rows[index];
-        var values = CopyRow(previous, ChecklistColumns);
-        ValidateChecklistCompletion(values, request);
-        values["Completado"] = request.Completado.ToString(CultureInfo.InvariantCulture);
-        values["CompletadoEnUtc"] = request.Completado ? FormatDate(DateTimeOffset.UtcNow) : null;
-        values["CompletadoPor"] = request.Completado ? user.UserId : null;
-        var responseType = ParseEnum(values.GetValueOrDefault("TipoRespuesta"), WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica);
-        values["Respuesta"] = NormalizeText(request.Respuesta) ?? values.GetValueOrDefault("Respuesta") ?? DefaultChecklistResponse(responseType);
-        values["ValorNumerico"] = request.ValorNumerico.HasValue ? FormatNumber(request.ValorNumerico.Value) : values.GetValueOrDefault("ValorNumerico");
-        values["Texto"] = NormalizeText(request.Texto) ?? values.GetValueOrDefault("Texto");
-        values["EvidenciaId"] = NormalizeText(request.EvidenciaId) ?? values.GetValueOrDefault("EvidenciaId");
-        values["FirmaId"] = NormalizeText(request.FirmaId) ?? values.GetValueOrDefault("FirmaId");
-        var updated = ChecklistRow(values);
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(ChecklistSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.checklist_updated", numeroOt, previous, updated, order.Summary.FaenaCodigo, request.Reason, cancellationToken);
-        return ToChecklist(updated);
-    }
-
-    public async Task<IReadOnlyCollection<WorkOrderChecklistItemResponse>> ApplyChecklistTemplateAsync(
-        string numeroOt,
-        ApplyChecklistTemplateRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(request.CodigoTarea, nameof(request.CodigoTarea));
-        ValidateRequired(request.TemplateCode, nameof(request.TemplateCode));
-
-        var order = await GetOrderForMutationAsync(numeroOt, user, cancellationToken);
-        EnsureTaskExists(await _dataProvider.ReadRowsAsync(TasksSchema, cancellationToken), numeroOt, request.CodigoTarea);
-
-        var templates = await _dataProvider.ReadRowsAsync(ChecklistTemplatesSchema, cancellationToken);
-        var template = templates.FirstOrDefault(row => Same(row.GetValue("Codigo"), request.TemplateCode));
-        if (template is null)
-        {
-            throw new DomainException("La plantilla de checklist no existe.");
-        }
-
-        var templateItems = ParseTemplateItems(template.GetValue("Items"));
-        if (templateItems.Count == 0)
-        {
-            throw new DomainException("La plantilla de checklist no tiene items configurados.");
-        }
-
-        var rows = (await _dataProvider.ReadRowsAsync(ChecklistSchema, cancellationToken)).ToList();
-        var created = new List<WorkOrderChecklistItemResponse>();
-        foreach (var item in templateItems)
-        {
-            var rowToCreate = ChecklistRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["ItemId"] = NewId("CHKOT"),
-                ["NumeroOT"] = NormalizeCode(numeroOt),
-                ["CodigoTarea"] = NormalizeCode(request.CodigoTarea),
-                ["Item"] = NormalizeText(item.Item),
-                ["Obligatorio"] = item.Obligatorio.ToString(CultureInfo.InvariantCulture),
-                ["Completado"] = "false",
-                ["CompletadoEnUtc"] = null,
-                ["CompletadoPor"] = null,
-                ["TemplateCode"] = NormalizeCode(request.TemplateCode),
-                ["TipoRespuesta"] = item.TipoRespuesta.ToString(),
-                ["Respuesta"] = null,
-                ["ValorNumerico"] = null,
-                ["Texto"] = null,
-                ["EvidenciaId"] = null,
-                ["RequiereFoto"] = item.RequiereFoto.ToString(CultureInfo.InvariantCulture),
-                ["RequiereArchivo"] = item.RequiereArchivo.ToString(CultureInfo.InvariantCulture),
-                ["RequiereFirma"] = item.RequiereFirma.ToString(CultureInfo.InvariantCulture),
-                ["FirmaId"] = null
-            });
-            rows.Add(rowToCreate);
-            created.Add(ToChecklist(rowToCreate));
-        }
-
-        await _dataProvider.SaveRowsAsync(ChecklistSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.checklist_template_applied", numeroOt, null, ChecklistRow(CopyRow(rows.Last(), ChecklistColumns)), order.FaenaCodigo, request.TemplateCode, cancellationToken);
-        return created;
-    }
-
-    public async Task<WorkOrderSignatureResponse?> RegisterSignatureAsync(
-        string numeroOt,
-        RegisterWorkOrderSignatureRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(request.SignatureFileKey) && string.IsNullOrWhiteSpace(request.SignatureImageDataUrl))
-        {
-            throw new DomainException("Debe registrar archivo o imagen de firma.");
-        }
-        var data = await ReadDataAsync(cancellationToken);
-        var order = BuildDetail(FindOrder(data.Orders, numeroOt) ?? throw new DomainException("La OT no existe."), data);
-        EnsureCanPlanOrSupervisorOrAssigned(user, order);
-        if (!string.IsNullOrWhiteSpace(request.CodigoTarea))
-        {
-            EnsureTaskExists(data.Tasks, numeroOt, request.CodigoTarea);
-            EnsureTechnicianCanWork(user, order, request.CodigoTarea, request.UsuarioId ?? user.UserId);
-        }
-
-        var rows = data.Signatures.ToList();
-        var rowToCreate = SignatureRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["FirmaId"] = NewId("FIRMA"),
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["CodigoTarea"] = NormalizeCode(request.CodigoTarea),
-            ["Scope"] = NormalizeText(request.Scope) ?? (string.IsNullOrWhiteSpace(request.CodigoTarea) ? "OT" : "Tarea"),
-            ["UsuarioId"] = NormalizeText(request.UsuarioId) ?? user.UserId,
-            ["SignatureFileKey"] = NormalizeText(request.SignatureFileKey),
-            ["SignatureImageDataUrl"] = NormalizeText(request.SignatureImageDataUrl),
-            ["FirmadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow),
-            ["Comentario"] = NormalizeText(request.Comentario)
-        });
-
-        rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(SignaturesSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "work_order.signature_registered", numeroOt, null, rowToCreate, order.Summary.FaenaCodigo, request.Comentario, cancellationToken);
-        return ToSignature(rowToCreate);
-    }
-
-    public Task<WorkOrderDetailResponse?> ScheduleAsync(
-        string numeroOt,
-        ScheduleWorkOrderRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        return ChangeStatusAsync(numeroOt, WorkOrderLifecycleStatus.Programada, user, request.Reason, cancellationToken, values =>
-        {
-            values["FechaInicioProgramada"] = FormatDate(request.FechaInicioProgramada);
-            values["FechaFinProgramada"] = FormatOptionalDate(request.FechaFinProgramada);
-            values["FechaProgramada"] = FormatDate(request.FechaInicioProgramada);
-        }, WorkOrderLifecycleStatus.OTCreada, WorkOrderLifecycleStatus.EnPlanificacion, WorkOrderLifecycleStatus.Programada);
-    }
-
-    public Task<WorkOrderDetailResponse?> StartAsync(
-        string numeroOt,
-        WorkOrderActionRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        return ChangeStatusAsync(numeroOt, WorkOrderLifecycleStatus.EnEjecucion, user, request.Reason, cancellationToken, values =>
-        {
-            values["FechaInicioRealUtc"] ??= FormatDate(DateTimeOffset.UtcNow);
-        }, WorkOrderLifecycleStatus.OTCreada, WorkOrderLifecycleStatus.EnPlanificacion, WorkOrderLifecycleStatus.Programada, WorkOrderLifecycleStatus.PendienteRepuestos, WorkOrderLifecycleStatus.PendienteDocumentacion, WorkOrderLifecycleStatus.Pausada);
-    }
-
-    public Task<WorkOrderDetailResponse?> PauseAsync(
-        string numeroOt,
-        WorkOrderActionRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        return ChangeStatusAsync(numeroOt, WorkOrderLifecycleStatus.Pausada, user, request.Reason, cancellationToken, null, WorkOrderLifecycleStatus.EnEjecucion);
-    }
-
-    public Task<WorkOrderDetailResponse?> FinishByTechnicianAsync(
-        string numeroOt,
-        WorkOrderActionRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        return ChangeStatusAsync(numeroOt, WorkOrderLifecycleStatus.FinalizadaTecnico, user, request.Reason, cancellationToken, values =>
-        {
-            values["FechaFinalizacionTecnicoUtc"] = FormatDate(DateTimeOffset.UtcNow);
-            values["FinalizadoPor"] = user.UserId;
-        }, WorkOrderLifecycleStatus.EnEjecucion, WorkOrderLifecycleStatus.Pausada, WorkOrderLifecycleStatus.Programada);
-    }
-
-    public async Task<WorkOrderDetailResponse?> CloseTechnicallyAsync(
-        string numeroOt,
-        WorkOrderActionRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanClose(user);
-        ValidateRequired(request.Reason, nameof(request.Reason));
-
-        var data = await ReadDataAsync(cancellationToken);
-        var row = FindOrder(data.Orders, numeroOt);
-        if (row is null)
-        {
-            return null;
-        }
-
-        var detail = BuildDetail(row, data);
-        EnsureFaenaAccess(user, detail.Summary.FaenaCodigo);
-        EnsureStatus(detail.Summary.Estado, WorkOrderLifecycleStatus.FinalizadaTecnico, WorkOrderLifecycleStatus.EnRevisionSupervisor);
-        if (detail.ClosureBlockers.Count > 0)
-        {
-            throw new DomainException($"No se puede cerrar la OT: {string.Join(" | ", detail.ClosureBlockers.Select(item => item.Message))}");
-        }
-
-        return await ChangeStatusAsync(numeroOt, WorkOrderLifecycleStatus.CerradaTecnicamente, user, request.Reason, cancellationToken, values =>
-        {
-            values["FechaCierreSupervisorUtc"] = FormatDate(DateTimeOffset.UtcNow);
-            values["CerradoPor"] = user.UserId;
-        }, WorkOrderLifecycleStatus.FinalizadaTecnico, WorkOrderLifecycleStatus.EnRevisionSupervisor);
-    }
-
-    public Task<WorkOrderDetailResponse?> ValidatePlanningAsync(
-        string numeroOt,
-        WorkOrderActionRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanValidatePlanning(user);
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        return ChangeStatusAsync(numeroOt, WorkOrderLifecycleStatus.ValidadaPlanificacion, user, request.Reason, cancellationToken, values =>
-        {
-            values["FechaValidacionPlanificacionUtc"] = FormatDate(DateTimeOffset.UtcNow);
-            values["ValidadoPor"] = user.UserId;
-        }, WorkOrderLifecycleStatus.CerradaTecnicamente);
-    }
-
-    public Task<WorkOrderDetailResponse?> AnnulAsync(
-        string numeroOt,
-        WorkOrderActionRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlanOrSupervisor(user);
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        return ChangeStatusAsync(numeroOt, WorkOrderLifecycleStatus.Anulada, user, request.Reason, cancellationToken, values =>
-        {
-            values["AnuladoPor"] = user.UserId;
-            values["FechaAnulacionUtc"] = FormatDate(DateTimeOffset.UtcNow);
-            values["MotivoAnulacion"] = request.Reason;
-        });
-    }
-
-    private async Task<WorkOrderDetailResponse> CreatePreventiveInternalAsync(
-        CreatePreventiveWorkOrderRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        var created = await CreateAsync(new CreateWorkOrderRequest(
-            request.ActivoCodigo,
-            request.Descripcion,
-            "Preventive",
-            request.FaenaCodigo,
-            Sistema: request.Sistema,
-            Subsistema: request.Subsistema,
-            Componente: request.Componente,
-            Prioridad: "Media",
-            Criticidad: "Media",
-            FechaProgramada: request.FechaProgramada,
-            FechaInicioProgramada: request.FechaInicioProgramada,
-            FechaFinProgramada: request.FechaFinProgramada,
-            RequiereFirma: request.RequiereFirma),
-            user,
-            cancellationToken);
-
-        var rows = (await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken)).ToList();
-        var index = rows.FindIndex(row => Same(row.GetValue("NumeroOT"), created.Summary.NumeroOT));
-        var values = CopyRow(rows[index], WorkOrderColumns);
-        values["EsPreventivaAutomatica"] = "True";
-        values["PlanPreventivoCodigo"] = NormalizeCode(request.PlanPreventivoCodigo);
-        var updated = WorkOrderRow(values);
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(WorkOrdersSchema, rows, cancellationToken);
-        return (await GetByIdAsync(created.Summary.NumeroOT, user, cancellationToken))!;
-    }
-
-    private async Task<WorkOrderDetailResponse?> ChangeStatusAsync(
-        string numeroOt,
-        WorkOrderLifecycleStatus newStatus,
-        UserAccessContext user,
-        string reason,
-        CancellationToken cancellationToken,
-        Action<Dictionary<string, string?>>? mutate = null,
-        params WorkOrderLifecycleStatus[] allowedCurrentStatuses)
-    {
-        var rows = (await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken)).ToList();
-        var index = rows.FindIndex(row => Same(row.GetValue("NumeroOT"), numeroOt));
-        if (index < 0)
-        {
-            return null;
-        }
-
-        var previous = rows[index];
-        var currentStatus = ParseStatus(previous.GetValue("Estado"));
-        if (allowedCurrentStatuses.Length > 0)
-        {
-            EnsureStatus(currentStatus, allowedCurrentStatuses);
-        }
-
-        var faenaCodigo = previous.GetValue("FaenaCodigo");
-        EnsureFaenaAccess(user, faenaCodigo);
-
-        if (newStatus is WorkOrderLifecycleStatus.EnEjecucion or WorkOrderLifecycleStatus.Pausada or WorkOrderLifecycleStatus.FinalizadaTecnico)
-        {
-            var detail = await GetByIdAsync(numeroOt, user, cancellationToken) ?? throw new DomainException("La OT no existe.");
-            EnsureCanPlanOrSupervisorOrAssigned(user, detail);
-        }
-
-        var values = CopyRow(previous, WorkOrderColumns);
-        values["Estado"] = newStatus.ToString();
-        values["ActualizadoPor"] = user.UserId;
-        values["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow);
-        mutate?.Invoke(values);
-        var updated = WorkOrderRow(values);
-        rows[index] = updated;
-
-        await _dataProvider.SaveRowsAsync(WorkOrdersSchema, rows, cancellationToken);
-        await AddHistoryAsync(numeroOt, currentStatus, newStatus, user, reason, cancellationToken);
-        await RecordAuditAsync(user, "work_order.status_changed", numeroOt, previous, updated, faenaCodigo, reason, cancellationToken, AuditSeverity.High);
-        return await GetByIdAsync(numeroOt, user, cancellationToken);
-    }
-
-    private async Task<WorkOrderSummaryResponse> GetOrderForMutationAsync(
-        string numeroOt,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        var detail = await GetByIdAsync(numeroOt, user, cancellationToken);
-        return detail?.Summary ?? throw new DomainException("La OT no existe.");
-    }
-
-    private async Task<WorkOrderData> ReadDataAsync(CancellationToken cancellationToken)
-    {
-        return new WorkOrderData(
-            await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(TasksSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(TaskTechniciansSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(LaborSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(EvidencesSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(SparePartsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(ChecklistSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(SignaturesSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(HistorySchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken));
-    }
-
-    private WorkOrderDetailResponse BuildDetail(DataRow order, WorkOrderData data)
-    {
-        var summary = BuildSummary(order, data);
-        var tasks = data.Tasks.Where(row => Same(row.GetValue("NumeroOT"), summary.NumeroOT)).Select(ToTask).OrderBy(item => item.CodigoTarea, StringComparer.OrdinalIgnoreCase).ToArray();
-        var technicians = data.Technicians.Where(row => Same(row.GetValue("NumeroOT"), summary.NumeroOT)).Select(ToTechnician).ToArray();
-        var labor = data.Labor.Where(row => Same(row.GetValue("NumeroOT"), summary.NumeroOT)).Select(ToLabor).ToArray();
-        var evidences = data.Evidences.Where(row => Same(row.GetValue("NumeroOT"), summary.NumeroOT)).Select(ToEvidence).ToArray();
-        var spareParts = data.SpareParts.Where(row => Same(row.GetValue("NumeroOT"), summary.NumeroOT)).Select(ToSparePart).ToArray();
-        var checklist = data.Checklist.Where(row => Same(row.GetValue("NumeroOT"), summary.NumeroOT)).Select(ToChecklist).ToArray();
-        var signatures = data.Signatures.Where(row => Same(row.GetValue("NumeroOT"), summary.NumeroOT)).Select(ToSignature).ToArray();
-        var history = data.History.Where(row => Same(row.GetValue("NumeroOT"), summary.NumeroOT)).Select(ToHistory).OrderBy(item => item.FechaUtc).ToArray();
-        var blockers = BuildClosureBlockers(summary, tasks, labor, evidences, spareParts, checklist, signatures);
-
-        return new WorkOrderDetailResponse(summary with { BloqueosCierre = blockers.Count }, tasks, technicians, labor, evidences, spareParts, checklist, signatures, history, blockers);
-    }
-
-    private WorkOrderSummaryResponse BuildSummary(DataRow row, WorkOrderData data)
-    {
-        var numeroOt = row.GetValue("NumeroOT") ?? string.Empty;
-        var tasks = data.Tasks.Where(item => Same(item.GetValue("NumeroOT"), numeroOt)).ToArray();
-        var technicians = data.Technicians.Where(item => Same(item.GetValue("NumeroOT"), numeroOt)).ToArray();
-        var labor = data.Labor.Where(item => Same(item.GetValue("NumeroOT"), numeroOt)).ToArray();
-        var detailTasks = tasks.Select(ToTask).ToArray();
-        var blockers = BuildClosureBlockers(
-            ToSummaryWithoutBlockers(row, data),
-            detailTasks,
-            labor.Select(ToLabor).ToArray(),
-            data.Evidences.Where(item => Same(item.GetValue("NumeroOT"), numeroOt)).Select(ToEvidence).ToArray(),
-            data.SpareParts.Where(item => Same(item.GetValue("NumeroOT"), numeroOt)).Select(ToSparePart).ToArray(),
-            data.Checklist.Where(item => Same(item.GetValue("NumeroOT"), numeroOt)).Select(ToChecklist).ToArray(),
-            data.Signatures.Where(item => Same(item.GetValue("NumeroOT"), numeroOt)).Select(ToSignature).ToArray());
-
-        var summary = ToSummaryWithoutBlockers(row, data);
-        return summary with
-        {
-            TareasTotal = tasks.Length,
-            TecnicosTotal = technicians.Select(item => item.GetValue("TecnicoUserId")).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
-            HorasRegistradas = labor.Sum(item => ParseDecimal(item.GetValue("Horas"))),
-            BloqueosCierre = blockers.Count
+            Id = Guid.NewGuid(), WorkOrderNumber = await NextNumberAsync("work_order_number_seq", "OT", ct), AssetId = asset.Id, Asset = asset, FaenaId = asset.FaenaId, Faena = asset.Faena,
+            StatusId = status.Id, Status = status, MaintenanceTypeId = (await CatalogAsync("MaintenanceType", request.TipoMantenimiento, ct)).Id,
+            Description = request.Descripcion.Trim(), NotificationId = await ResolveNotificationIdAsync(request.AvisoId, ct), System = N(request.Sistema), Subsystem = N(request.Subsistema), Component = N(request.Componente),
+            PriorityId = (await CatalogAsync("WorkNotificationPriority", N(request.Prioridad) ?? "Media", ct)).Id, CriticalityId = (await CatalogAsync("WorkNotificationCriticality", N(request.Criticidad) ?? "Media", ct)).Id,
+            ScheduledAtUtc = request.FechaProgramada, ScheduledStartUtc = request.FechaInicioProgramada, ScheduledEndUtc = request.FechaFinProgramada,
+            RequiresSignature = request.RequiereFirma, CreatedByUserId = user.UserId, CreatedByUserAtUtc = now, UpdatedByUserId = user.UserId, UpdatedByUserAtUtc = now
         };
+        _dbContext.WorkOrders.Add(order);
+        AddHistory(order, status, status, user, "OT creada", now);
+        await _dbContext.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+        await Audit(user, "work_order.created", order.WorkOrderNumber, null, order, order.Faena.Code, request.Descripcion, ct);
+        return (await GetByIdAsync(order.WorkOrderNumber, user, ct))!;
     }
 
-    private WorkOrderSummaryResponse ToSummaryWithoutBlockers(DataRow row, WorkOrderData data)
+    public async Task<WorkOrderDetailResponse> CreatePreventiveAsync(CreatePreventiveWorkOrderRequest r, UserAccessContext u, CancellationToken ct)
     {
-        var assetCode = row.GetValue("ActivoCodigo") ?? string.Empty;
-        var asset = data.Assets.FirstOrDefault(item => Same(item.GetValue("Codigo"), assetCode));
-        return new WorkOrderSummaryResponse(
-            row.GetValue("NumeroOT") ?? string.Empty,
-            ParseStatus(row.GetValue("Estado")),
-            assetCode,
-            EmptyToNull(asset?.GetValue("Nombre")),
-            row.GetValue("FaenaCodigo") ?? asset?.GetValue("FaenaCodigo") ?? string.Empty,
-            row.GetValue("TipoMantenimiento") ?? string.Empty,
-            row.GetValue("Descripcion") ?? string.Empty,
-            EmptyToNull(row.GetValue("AvisoId")),
-            EmptyToNull(row.GetValue("Sistema")),
-            EmptyToNull(row.GetValue("Subsistema")),
-            EmptyToNull(row.GetValue("Componente")),
-            row.GetValue("Prioridad") ?? "Media",
-            row.GetValue("Criticidad") ?? "Media",
-            ParseDate(row.GetValue("FechaProgramada")),
-            ParseDate(row.GetValue("FechaInicioProgramada")),
-            ParseDate(row.GetValue("FechaFinProgramada")),
-            ParseBool(row.GetValue("EsPreventivaAutomatica")),
-            ParseBool(row.GetValue("RequiereFirma")),
-            0,
-            0,
-            0,
-            0);
+        var d = await CreateAsync(new CreateWorkOrderRequest(r.ActivoCodigo, r.Descripcion, "Preventive", r.FaenaCodigo, null, r.Sistema, r.Subsistema, r.Componente, "Media", "Media", r.FechaProgramada, r.FechaInicioProgramada, r.FechaFinProgramada, r.RequiereFirma), u, ct);
+        var e = await FindAsync(d.Summary.NumeroOT, true, ct); e!.PreventivePlanCode = N(r.PlanPreventivoCodigo); e.IsAutomaticPreventive = true; await _dbContext.SaveChangesAsync(ct);
+        return (await GetByIdAsync(d.Summary.NumeroOT, u, ct))!;
     }
 
-    private static IReadOnlyCollection<WorkOrderClosureBlocker> BuildClosureBlockers(
-        WorkOrderSummaryResponse summary,
-        IReadOnlyCollection<WorkOrderTaskResponse> tasks,
-        IReadOnlyCollection<WorkOrderLaborResponse> labor,
-        IReadOnlyCollection<WorkOrderEvidenceResponse> evidences,
-        IReadOnlyCollection<WorkOrderSparePartResponse> spareParts,
-        IReadOnlyCollection<WorkOrderChecklistItemResponse> checklist,
-        IReadOnlyCollection<WorkOrderSignatureResponse> signatures)
+    public async Task<WorkOrderTaskResponse?> AddTaskAsync(string numeroOt, CreateWorkOrderTaskRequest r, UserAccessContext u, CancellationToken ct)
     {
-        var blockers = new List<WorkOrderClosureBlocker>();
+        EnsureCanPlan(u); ValidateRequired(r.Descripcion, nameof(r.Descripcion)); var o = await MutOrder(numeroOt, u, ct); EnsureOpen(o);
+        var code = C(r.CodigoTarea) ?? await NextTaskCodeAsync(o.Id, ct); if (o.Tasks.Any(t => t.IsActive && Same(t.TaskCode, code))) throw new DomainException($"La tarea '{code}' ya existe en la OT.");
+        var t = new WorkOrderTaskEntity { Id = Guid.NewGuid(), WorkOrderId = o.Id, TaskCode = code, Description = r.Descripcion.Trim(), ScheduledStartUtc = r.FechaInicioProgramada, ScheduledEndUtc = r.FechaFinProgramada, RequiresEvidence = r.RequiereEvidencia, RequiresLabor = r.RequiereHH, ChecklistMandatory = r.ChecklistObligatorio, Observations = N(r.Observaciones) };
+        _dbContext.WorkOrderTasks.Add(t); await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.task_created", numeroOt, null, t, o.Faena.Code, r.Descripcion, ct); return ToTask(o.WorkOrderNumber, t);
+    }
 
-        foreach (var task in tasks.Where(item => item.RequiereEvidencia))
+    public async Task<WorkOrderTaskTechnicianResponse?> AssignTechnicianAsync(string numeroOt, string codigoTarea, AssignTaskTechnicianRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        EnsureCanPlan(u); ValidateRequired(r.TecnicoUserId, nameof(r.TecnicoUserId)); var o = await MutOrder(numeroOt, u, ct); var task = Task(o, codigoTarea);
+        if (o.Technicians.Any(t => t.IsActive && t.TaskId == task.Id && Same(t.TechnicianUserId, r.TecnicoUserId))) throw new DomainException("El tecnico ya esta asignado a esta tarea.");
+        var e = new WorkOrderTaskTechnicianEntity { Id = Guid.NewGuid(), WorkOrderId = o.Id, TaskId = task.Id, TechnicianUserId = r.TecnicoUserId.Trim(), TechnicianDisplayName = N(r.TecnicoNombre), AssignedAtUtc = DateTimeOffset.UtcNow, AssignedByUserId = u.UserId };
+        _dbContext.WorkOrderTaskTechnicians.Add(e); await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.technician_assigned", numeroOt, null, e, o.Faena.Code, r.TecnicoUserId, ct); return ToTech(o.WorkOrderNumber, task.TaskCode, e);
+    }
+
+    public async Task<WorkOrderLaborResponse?> RegisterLaborAsync(string numeroOt, string codigoTarea, RegisterLaborRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        ValidateRequired(r.TecnicoUserId, nameof(r.TecnicoUserId)); ValidateRequired(r.Descripcion, nameof(r.Descripcion)); var h = Hours(r.Horas, r.HoraInicio, r.HoraTermino); if (h <= 0) throw new DomainException("Las HH deben ser mayores a cero.");
+        var o = await MutOrder(numeroOt, u, ct); var task = Task(o, codigoTarea); EnsureTechCanWork(u, ToDetail(o), codigoTarea, r.TecnicoUserId);
+        var e = new WorkOrderLaborEntity { Id = Guid.NewGuid(), WorkOrderId = o.Id, TaskId = task.Id, TechnicianUserId = r.TecnicoUserId.Trim(), Hours = h, Description = r.Descripcion.Trim(), WorkDateUtc = r.FechaTrabajo ?? r.HoraInicio ?? DateTimeOffset.UtcNow, StartTimeUtc = r.HoraInicio, EndTimeUtc = r.HoraTermino, RegisteredByUserId = u.UserId, Comment = N(r.Comentario) };
+        _dbContext.WorkOrderLabor.Add(e); await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.labor_registered", numeroOt, null, e, o.Faena.Code, r.Descripcion, ct); return ToLabor(o.WorkOrderNumber, task.TaskCode, e);
+    }
+
+    public async Task<WorkOrderLaborResponse?> ValidateLaborAsync(string numeroOt, string hhId, ValidateLaborRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        ValidateRequired(r.Reason, nameof(r.Reason)); EnsureCanPlan(u); var o = await MutOrder(numeroOt, u, ct); if (!Guid.TryParse(hhId, out var id)) return null;
+        var e = o.Labor.FirstOrDefault(x => x.Id == id && x.IsActive); if (e is null) return null; e.SupervisorValidated = r.Validado; e.ValidatedByUserId = r.Validado ? u.UserId : null; e.ValidatedAtUtc = r.Validado ? DateTimeOffset.UtcNow : null; e.Comment = Append(e.Comment, r.Reason); e.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.labor_validated", numeroOt, null, e, o.Faena.Code, r.Reason, ct); return ToLabor(o.WorkOrderNumber, e.Task.TaskCode, e);
+    }
+
+    public async Task<WorkOrderEvidenceResponse?> RegisterEvidenceAsync(string numeroOt, RegisterEvidenceRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        ValidateRequired(r.Nombre, nameof(r.Nombre)); if (r.TipoEvidencia != WorkOrderEvidenceType.Comentario && string.IsNullOrWhiteSpace(r.ArchivoKey) && string.IsNullOrWhiteSpace(r.SharePointUrl) && string.IsNullOrWhiteSpace(r.LocalPath)) throw new DomainException("Debe indicar ArchivoKey, SharePointUrl o LocalPath para la evidencia.");
+        var o = await MutOrder(numeroOt, u, ct); WorkOrderTaskEntity? task = null; if (!string.IsNullOrWhiteSpace(r.CodigoTarea)) { task = Task(o, r.CodigoTarea); EnsureTechCanWork(u, ToDetail(o), r.CodigoTarea, u.UserId); } else EnsurePlanSupervisorOrAssigned(u, ToDetail(o));
+        var e = new WorkOrderEvidenceEntity { Id = Guid.NewGuid(), WorkOrderId = o.Id, TaskId = task?.Id, Name = r.Nombre.Trim(), EvidenceTypeId = (await CatalogAsync("WorkOrderEvidenceType", r.TipoEvidencia.ToString(), ct)).Id, IsPhoto = r.EsFoto || r.TipoEvidencia is WorkOrderEvidenceType.FotoAntes or WorkOrderEvidenceType.FotoDespues, IsMandatory = r.EsObligatoria, CoversMandatoryEvidence = r.CubreEvidenciaObligatoria, StorageProvider = N(r.StorageProvider) ?? Infer(r), ExternalKey = N(r.ArchivoKey), ExternalUri = N(r.SharePointUrl), LocalPath = N(r.LocalPath), OfflineId = N(r.OfflineId), SyncStatus = N(r.SyncStatus) ?? "Synced", Observations = N(r.Observaciones), CreatedByUserId = u.UserId, CreatedByUserAtUtc = DateTimeOffset.UtcNow };
+        _dbContext.WorkOrderEvidences.Add(e); await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.evidence_registered", numeroOt, null, e, o.Faena.Code, r.Nombre, ct); return ToEvidence(o.WorkOrderNumber, task?.TaskCode, e);
+    }
+
+    public async Task<WorkOrderSparePartResponse?> AddSparePartAsync(string numeroOt, AddWorkOrderSparePartRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        EnsureCanPlan(u); ValidateRequired(r.CodigoTarea, nameof(r.CodigoTarea)); ValidateRequired(r.RepuestoCodigo, nameof(r.RepuestoCodigo)); ValidateRequired(r.Unidad, nameof(r.Unidad)); if (r.Cantidad <= 0) throw new DomainException("La cantidad de repuesto debe ser mayor a cero.");
+        var o = await MutOrder(numeroOt, u, ct); var task = Task(o, r.CodigoTarea); var e = new WorkOrderSparePartEntity { Id = Guid.NewGuid(), WorkOrderId = o.Id, TaskId = task.Id, SparePartCode = C(r.RepuestoCodigo)!, Quantity = r.Cantidad, Unit = r.Unidad.Trim(), WarehouseCode = C(r.BodegaCodigo), StatusId = (await CatalogAsync("WorkOrderSparePartStatus", r.Estado.ToString(), ct)).Id, Observations = N(r.Observaciones) };
+        _dbContext.WorkOrderSpareParts.Add(e); await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.spare_part_added", numeroOt, null, e, o.Faena.Code, r.RepuestoCodigo, ct); return ToSpare(o.WorkOrderNumber, task.TaskCode, e);
+    }
+
+    public async Task<WorkOrderSparePartResponse?> UpdateSparePartUsageAsync(string numeroOt, string itemId, UpdateWorkOrderSparePartUsageRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        ValidateRequired(r.Reason, nameof(r.Reason)); var o = await MutOrder(numeroOt, u, ct); if (!Guid.TryParse(itemId, out var id)) return null; var e = o.SpareParts.FirstOrDefault(x => x.Id == id && x.IsActive); if (e is null) return null;
+        e.StatusId = (await CatalogAsync("WorkOrderSparePartStatus", r.Estado.ToString(), ct)).Id; e.UsedQuantity = r.CantidadUtilizada ?? e.UsedQuantity; e.ReturnedQuantity = r.CantidadDevuelta ?? e.ReturnedQuantity; e.Observations = Append(e.Observations, r.Reason); e.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.spare_part_updated", numeroOt, null, e, o.Faena.Code, r.Reason, ct); return ToSpare(o.WorkOrderNumber, e.Task.TaskCode, e);
+    }
+
+    public async Task<WorkOrderChecklistItemResponse?> AddChecklistItemAsync(string numeroOt, AddWorkOrderChecklistItemRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        EnsureCanPlan(u); ValidateRequired(r.CodigoTarea, nameof(r.CodigoTarea)); ValidateRequired(r.Item, nameof(r.Item)); var o = await MutOrder(numeroOt, u, ct); var task = Task(o, r.CodigoTarea);
+        var e = new WorkOrderChecklistEntity { Id = Guid.NewGuid(), WorkOrderId = o.Id, TaskId = task.Id, ItemText = r.Item.Trim(), Mandatory = r.Obligatorio, Completed = r.Completado, CompletedAtUtc = r.Completado ? DateTimeOffset.UtcNow : null, CompletedByUserId = r.Completado ? u.UserId : null, ResponseTypeId = (await CatalogAsync("WorkOrderChecklistResponseType", r.TipoRespuesta.ToString(), ct)).Id, RequiresPhoto = r.RequiereFoto, RequiresFile = r.RequiereArchivo, RequiresSignature = r.RequiereFirma };
+        _dbContext.WorkOrderChecklist.Add(e); await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.checklist_added", numeroOt, null, e, o.Faena.Code, r.Item, ct); return ToChecklist(o.WorkOrderNumber, task.TaskCode, e);
+    }
+
+    public async Task<WorkOrderChecklistItemResponse?> UpdateChecklistItemAsync(string numeroOt, string itemId, UpdateChecklistItemRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        ValidateRequired(r.Reason, nameof(r.Reason)); var o = await MutOrder(numeroOt, u, ct); if (!Guid.TryParse(itemId, out var id)) return null; var e = o.Checklist.FirstOrDefault(x => x.Id == id && x.IsActive); if (e is null) return null; ValidateChecklist(e, r);
+        e.Completed = r.Completado; e.CompletedAtUtc = r.Completado ? DateTimeOffset.UtcNow : null; e.CompletedByUserId = r.Completado ? u.UserId : null; e.Response = N(r.Respuesta) ?? e.Response ?? DefaultResp(ParseEnum(e.ResponseType.Code, WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica)); e.NumericValue = r.ValorNumerico ?? e.NumericValue; e.TextValue = N(r.Texto) ?? e.TextValue; e.EvidenceId = G(r.EvidenciaId) ?? e.EvidenceId; e.SignatureId = G(r.FirmaId) ?? e.SignatureId; e.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.checklist_updated", numeroOt, null, e, o.Faena.Code, r.Reason, ct); return ToChecklist(o.WorkOrderNumber, e.Task.TaskCode, e);
+    }
+
+    public async Task<IReadOnlyCollection<WorkOrderChecklistItemResponse>> ApplyChecklistTemplateAsync(string numeroOt, ApplyChecklistTemplateRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        EnsureCanPlan(u); ValidateRequired(r.CodigoTarea, nameof(r.CodigoTarea)); ValidateRequired(r.TemplateCode, nameof(r.TemplateCode)); var o = await MutOrder(numeroOt, u, ct); var task = Task(o, r.CodigoTarea);
+        var template = await _dbContext.ChecklistTemplates.Include(t => t.Items).FirstOrDefaultAsync(t => t.Code == C(r.TemplateCode) && t.IsActive, ct); if (template is null) throw new DomainException($"No existe la plantilla de checklist '{r.TemplateCode}'.");
+        var list = new List<WorkOrderChecklistEntity>(); foreach (var i in template.Items.Where(i => i.IsActive).OrderBy(i => i.SortOrder)) { var e = new WorkOrderChecklistEntity { Id = Guid.NewGuid(), WorkOrderId = o.Id, TaskId = task.Id, TemplateId = template.Id, TemplateItemId = i.Id, ItemText = i.ItemText, Mandatory = i.Mandatory, ResponseTypeId = i.ResponseTypeId, RequiresPhoto = i.RequiresPhoto, RequiresFile = i.RequiresFile, RequiresSignature = i.RequiresSignature }; _dbContext.WorkOrderChecklist.Add(e); list.Add(e); }
+        await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.checklist_template_applied", numeroOt, null, list, o.Faena.Code, r.TemplateCode, ct); return list.Select(i => ToChecklist(o.WorkOrderNumber, task.TaskCode, i)).ToArray();
+    }
+
+    public async Task<WorkOrderSignatureResponse?> RegisterSignatureAsync(string numeroOt, RegisterWorkOrderSignatureRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(r.SignatureImageDataUrl) && string.IsNullOrWhiteSpace(r.SignatureFileKey)) throw new DomainException("La firma en Data URL debe almacenarse como archivo externo antes de registrarse en SQL.");
+        var o = await MutOrder(numeroOt, u, ct); WorkOrderTaskEntity? task = string.IsNullOrWhiteSpace(r.CodigoTarea) ? null : Task(o, r.CodigoTarea);
+        var e = new WorkOrderSignatureEntity { Id = Guid.NewGuid(), WorkOrderId = o.Id, TaskId = task?.Id, Scope = N(r.Scope) ?? "OT", SignerUserId = N(r.UsuarioId) ?? u.UserId, SignatureFileKey = N(r.SignatureFileKey), SignedAtUtc = DateTimeOffset.UtcNow, Comment = N(r.Comentario) };
+        _dbContext.WorkOrderSignatures.Add(e); await _dbContext.SaveChangesAsync(ct); await Audit(u, "work_order.signature_registered", numeroOt, null, e, o.Faena.Code, e.Scope, ct); return ToSignature(o.WorkOrderNumber, task?.TaskCode, e);
+    }
+
+    public Task<WorkOrderDetailResponse?> ScheduleAsync(string n, ScheduleWorkOrderRequest r, UserAccessContext u, CancellationToken ct) => Status(n, u, ct, WorkOrderLifecycleStatus.Programada, "work_order.scheduled", r.Reason, e => { e.ScheduledStartUtc = r.FechaInicioProgramada; e.ScheduledEndUtc = r.FechaFinProgramada; e.ScheduledAtUtc = r.FechaInicioProgramada; });
+    public Task<WorkOrderDetailResponse?> StartAsync(string n, WorkOrderActionRequest r, UserAccessContext u, CancellationToken ct) => Status(n, u, ct, WorkOrderLifecycleStatus.EnEjecucion, "work_order.started", r.Reason, e => e.ActualStartUtc ??= DateTimeOffset.UtcNow);
+    public Task<WorkOrderDetailResponse?> PauseAsync(string n, WorkOrderActionRequest r, UserAccessContext u, CancellationToken ct) => Status(n, u, ct, WorkOrderLifecycleStatus.Pausada, "work_order.paused", r.Reason, _ => { });
+    public Task<WorkOrderDetailResponse?> FinishByTechnicianAsync(string n, WorkOrderActionRequest r, UserAccessContext u, CancellationToken ct) => Status(n, u, ct, WorkOrderLifecycleStatus.FinalizadaTecnico, "work_order.finished_by_technician", r.Reason, e => { e.TechnicianFinishedAtUtc = DateTimeOffset.UtcNow; e.FinishedByUserId = u.UserId; });
+    public Task<WorkOrderDetailResponse?> CloseTechnicallyAsync(string n, WorkOrderActionRequest r, UserAccessContext u, CancellationToken ct) => Status(n, u, ct, WorkOrderLifecycleStatus.CerradaTecnicamente, "work_order.closed_technically", r.Reason, e => { var b = Blockers(ToDetail(e)); if (b.Count > 0) throw new DomainException($"La OT tiene bloqueos de cierre: {string.Join("; ", b.Select(x => x.Message))}"); e.SupervisorClosedAtUtc = DateTimeOffset.UtcNow; e.ClosedByUserId = u.UserId; });
+    public Task<WorkOrderDetailResponse?> ValidatePlanningAsync(string n, WorkOrderActionRequest r, UserAccessContext u, CancellationToken ct) => Status(n, u, ct, WorkOrderLifecycleStatus.ValidadaPlanificacion, "work_order.planning_validated", r.Reason, e => { e.PlanningValidatedAtUtc = DateTimeOffset.UtcNow; e.ValidatedByUserId = u.UserId; });
+    public Task<WorkOrderDetailResponse?> AnnulAsync(string n, WorkOrderActionRequest r, UserAccessContext u, CancellationToken ct) => Status(n, u, ct, WorkOrderLifecycleStatus.Anulada, "work_order.annulled", r.Reason, e => { e.AnnulledAtUtc = DateTimeOffset.UtcNow; e.AnnulledByUserId = u.UserId; e.AnnulReason = r.Reason; });
+
+    private async Task<WorkOrderDetailResponse?> Status(string n, UserAccessContext u, CancellationToken ct, WorkOrderLifecycleStatus next, string action, string reason, Action<WorkOrderEntity> mutate)
+    {
+        ValidateRequired(reason, "Reason"); var o = await MutOrder(n, u, ct); if (next is WorkOrderLifecycleStatus.EnEjecucion or WorkOrderLifecycleStatus.Pausada or WorkOrderLifecycleStatus.FinalizadaTecnico) EnsurePlanSupervisorOrAssigned(u, ToDetail(o)); else EnsureCanPlan(u); var prev = o.Status; mutate(o); var ns = await CatalogAsync("WorkOrderLifecycleStatus", next.ToString(), ct); o.StatusId = ns.Id; o.UpdatedByUserId = u.UserId; o.UpdatedByUserAtUtc = DateTimeOffset.UtcNow; AddHistory(o, prev, ns, u, reason, DateTimeOffset.UtcNow); await _dbContext.SaveChangesAsync(ct); await Audit(u, action, n, prev.Code, ns.Code, o.Faena.Code, reason, ct); return await GetByIdAsync(n, u, ct);
+    }
+
+    private IQueryable<WorkOrderEntity> BaseQuery() => _dbContext.WorkOrders.AsSplitQuery()
+        .Include(o => o.Asset).ThenInclude(a => a.Faena).Include(o => o.Faena).Include(o => o.Status).Include(o => o.MaintenanceType).Include(o => o.Priority).Include(o => o.Criticality).Include(o => o.FailureClassification).Include(o => o.Notification)
+        .Include(o => o.Tasks).Include(o => o.Technicians).ThenInclude(t => t.Task).Include(o => o.Labor).ThenInclude(l => l.Task).Include(o => o.Evidences).ThenInclude(e => e.EvidenceType).Include(o => o.Evidences).ThenInclude(e => e.Task)
+        .Include(o => o.SpareParts).ThenInclude(s => s.Status).Include(o => o.SpareParts).ThenInclude(s => s.Task).Include(o => o.Checklist).ThenInclude(c => c.ResponseType).Include(o => o.Checklist).ThenInclude(c => c.Task).Include(o => o.Checklist).ThenInclude(c => c.Template)
+        .Include(o => o.Signatures).ThenInclude(s => s.Task).Include(o => o.History).ThenInclude(h => h.PreviousStatus).Include(o => o.History).ThenInclude(h => h.NewStatus);
+    private Task<WorkOrderEntity?> FindAsync(string n, bool tracking, CancellationToken ct) { var q = BaseQuery(); if (!tracking) q = q.AsNoTracking(); return q.FirstOrDefaultAsync(o => o.WorkOrderNumber == C(n), ct); }
+    private async Task<WorkOrderEntity> MutOrder(string n, UserAccessContext u, CancellationToken ct) { var o = await FindAsync(n, true, ct) ?? throw new DomainException("La OT no existe."); EnsureFaena(u, o.Faena.Code); return o; }
+    private static WorkOrderTaskEntity Task(WorkOrderEntity o, string c) => o.Tasks.FirstOrDefault(t => t.IsActive && Same(t.TaskCode, c)) ?? throw new DomainException($"La tarea '{c}' no existe en la OT.");
+    private async Task<AssetEntity> ResolveAssetAsync(string c, string? f, UserAccessContext u, CancellationToken ct) { var a = await _dbContext.Assets.Include(x => x.Faena).FirstOrDefaultAsync(x => x.Code == C(c) && x.RecordStatus == "vigente", ct) ?? throw new DomainException($"El activo '{c}' no existe."); if (!string.IsNullOrWhiteSpace(f) && !Same(a.Faena.Code, f)) throw new DomainException("El activo seleccionado no pertenece a la faena indicada."); EnsureFaena(u, a.Faena.Code); return a; }
+    private async Task<Guid?> ResolveNotificationIdAsync(string? a, CancellationToken ct) => string.IsNullOrWhiteSpace(a) ? null : (await _dbContext.WorkNotifications.FirstOrDefaultAsync(n => n.NotificationNumber == C(a), ct))?.Id;
+    private async Task<WorkCatalogEntity> CatalogAsync(string cat, string code, CancellationToken ct) => await _dbContext.WorkCatalogs.FirstOrDefaultAsync(x => x.Category == cat && x.Code == code.Trim(), ct) ?? throw new DomainException($"No existe catalogo {cat}:{code}.");
+    private async Task<string> NextNumberAsync(string seq, string prefix, CancellationToken ct) { var cn = _dbContext.Database.GetDbConnection(); if (cn.State != ConnectionState.Open) await cn.OpenAsync(ct); await using var cmd = cn.CreateCommand(); if (_dbContext.Database.CurrentTransaction is not null) cmd.Transaction = _dbContext.Database.CurrentTransaction.GetDbTransaction(); cmd.CommandText = $"SELECT nextval('{seq}')"; var v = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture); return $"{prefix}-{v:000000}"; }
+    private async Task<string> NextTaskCodeAsync(Guid id, CancellationToken ct) => $"T-{(await _dbContext.WorkOrderTasks.CountAsync(t => t.WorkOrderId == id, ct) + 1):000}";
+    private void AddHistory(WorkOrderEntity o, WorkCatalogEntity p, WorkCatalogEntity n, UserAccessContext u, string r, DateTimeOffset now) => _dbContext.WorkOrderStatusHistory.Add(new WorkOrderStatusHistoryEntity { Id = Guid.NewGuid(), WorkOrder = o, WorkOrderId = o.Id, PreviousStatusId = p.Id, NewStatusId = n.Id, OccurredAtUtc = now, UserId = u.UserId, Reason = r });
+
+    private static WorkOrderDetailResponse ToDetail(WorkOrderEntity o)
+    {
+        var tasks = o.Tasks.Where(t => t.IsActive).OrderBy(t => t.TaskCode).Select(t => ToTask(o.WorkOrderNumber, t)).ToArray();
+        var tech = o.Technicians.Where(t => t.IsActive).Select(t => ToTech(o.WorkOrderNumber, t.Task.TaskCode, t)).ToArray();
+        var labor = o.Labor.Where(l => l.IsActive).Select(l => ToLabor(o.WorkOrderNumber, l.Task.TaskCode, l)).ToArray();
+        var ev = o.Evidences.Where(e => e.IsActive).Select(e => ToEvidence(o.WorkOrderNumber, e.Task?.TaskCode, e)).ToArray();
+        var sp = o.SpareParts.Where(s => s.IsActive).Select(s => ToSpare(o.WorkOrderNumber, s.Task.TaskCode, s)).ToArray();
+        var ch = o.Checklist.Where(c => c.IsActive).Select(c => ToChecklist(o.WorkOrderNumber, c.Task.TaskCode, c)).ToArray();
+        var sig = o.Signatures.Where(s => s.IsActive).Select(s => ToSignature(o.WorkOrderNumber, s.Task?.TaskCode, s)).ToArray();
+        var hist = o.History.OrderBy(h => h.OccurredAtUtc).Select(h => new WorkOrderStatusHistoryResponse(h.Id.ToString("D"), o.WorkOrderNumber, ParseEnum(h.PreviousStatus.Code, WorkOrderLifecycleStatus.OTCreada), ParseEnum(h.NewStatus.Code, WorkOrderLifecycleStatus.OTCreada), h.OccurredAtUtc, h.UserId, h.Reason)).ToArray();
+        var sum = new WorkOrderSummaryResponse(o.WorkOrderNumber, ParseEnum(o.Status.Code, WorkOrderLifecycleStatus.OTCreada), o.Asset.Code, o.Asset.Name, o.Faena.Code, o.MaintenanceType.Code, o.Description, o.Notification?.NotificationNumber, o.System, o.Subsystem, o.Component, o.Priority?.Code ?? "Media", o.Criticality?.Code ?? "Media", o.ScheduledAtUtc, o.ScheduledStartUtc, o.ScheduledEndUtc, o.IsAutomaticPreventive, o.RequiresSignature, tasks.Length, tech.Length, labor.Sum(l => l.Horas), 0);
+        var detail = new WorkOrderDetailResponse(sum, tasks, tech, labor, ev, sp, ch, sig, hist, []); var b = Blockers(detail); return detail with { Summary = sum with { BloqueosCierre = b.Count }, ClosureBlockers = b };
+    }
+    private static WorkOrderTaskResponse ToTask(string ot, WorkOrderTaskEntity t) => new(ot, t.TaskCode, t.Description, t.ScheduledStartUtc, t.ScheduledEndUtc, t.RequiresEvidence, t.RequiresLabor, t.ChecklistMandatory, t.Observations);
+    private static WorkOrderTaskTechnicianResponse ToTech(string ot, string task, WorkOrderTaskTechnicianEntity t) => new(t.Id.ToString("D"), ot, task, t.TechnicianUserId, t.TechnicianDisplayName, t.AssignedAtUtc, t.AssignedByUserId);
+    private static WorkOrderLaborResponse ToLabor(string ot, string task, WorkOrderLaborEntity l) => new(l.Id.ToString("D"), ot, task, l.TechnicianUserId, l.Hours, l.Description, l.WorkDateUtc, l.RegisteredByUserId, l.StartTimeUtc, l.EndTimeUtc, l.Comment, l.SupervisorValidated, l.ValidatedByUserId, l.ValidatedAtUtc);
+    private static WorkOrderEvidenceResponse ToEvidence(string ot, string? task, WorkOrderEvidenceEntity e) => new(e.Id.ToString("D"), ot, task, e.Name, e.ExternalKey, e.ExternalUri, e.CoversMandatoryEvidence, e.CreatedByUserAtUtc, e.CreatedByUserId, e.Observations, ParseEnum(e.EvidenceType.Code, WorkOrderEvidenceType.Archivo), e.IsPhoto, e.IsMandatory, e.StorageProvider, e.LocalPath, e.OfflineId, e.SyncStatus);
+    private static WorkOrderSparePartResponse ToSpare(string ot, string task, WorkOrderSparePartEntity s) => new(s.Id.ToString("D"), ot, task, s.SparePartCode, s.Quantity, s.Unit, s.WarehouseCode, ParseEnum(s.Status.Code, WorkOrderSparePartStatus.Solicitado), s.UsedQuantity, s.ReturnedQuantity, s.Observations);
+    private static WorkOrderChecklistItemResponse ToChecklist(string ot, string task, WorkOrderChecklistEntity c) => new(c.Id.ToString("D"), ot, task, c.ItemText, c.Mandatory, c.Completed, c.CompletedAtUtc, c.CompletedByUserId, c.Template?.Code, ParseEnum(c.ResponseType.Code, WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica), c.Response, c.NumericValue, c.TextValue, c.EvidenceId?.ToString("D"), c.RequiresPhoto, c.RequiresFile, c.RequiresSignature, c.SignatureId?.ToString("D"));
+    private static WorkOrderSignatureResponse ToSignature(string ot, string? task, WorkOrderSignatureEntity s) => new(s.Id.ToString("D"), ot, s.SignerUserId, s.SignatureFileKey, s.SignedAtUtc, s.Comment, task, s.Scope, null);
+
+    private static IReadOnlyCollection<WorkOrderClosureBlocker> Blockers(WorkOrderDetailResponse d)
+    {
+        var b = new List<WorkOrderClosureBlocker>();
+        foreach (var t in d.Tasks)
         {
-            if (!evidences.Any(item => Same(item.CodigoTarea, task.CodigoTarea) && item.CubreEvidenciaObligatoria))
-            {
-                blockers.Add(new WorkOrderClosureBlocker("missing_evidence", $"La tarea {task.CodigoTarea} requiere evidencia."));
-            }
+            if (t.RequiereEvidencia && !d.Evidences.Any(e => Same(e.CodigoTarea, t.CodigoTarea) && e.CubreEvidenciaObligatoria)) b.Add(new("EVIDENCE_REQUIRED", $"La tarea {t.CodigoTarea} requiere evidencia."));
+            if (t.RequiereHH && !d.Labor.Any(l => Same(l.CodigoTarea, t.CodigoTarea))) b.Add(new("LABOR_REQUIRED", $"La tarea {t.CodigoTarea} requiere HH."));
+            if (d.Labor.Any(l => Same(l.CodigoTarea, t.CodigoTarea) && !l.ValidadoSupervisor)) b.Add(new("LABOR_VALIDATION_REQUIRED", $"La tarea {t.CodigoTarea} tiene HH sin validar."));
+            if (t.ChecklistObligatorio && !d.Checklist.Any(c => Same(c.CodigoTarea, t.CodigoTarea) && c.Completado)) b.Add(new("CHECKLIST_REQUIRED", $"La tarea {t.CodigoTarea} requiere checklist completo."));
         }
-
-        foreach (var task in tasks.Where(item => item.RequiereHH))
-        {
-            var taskLabor = labor.Where(item => Same(item.CodigoTarea, task.CodigoTarea)).ToArray();
-            if (taskLabor.Sum(item => item.Horas) <= 0)
-            {
-                blockers.Add(new WorkOrderClosureBlocker("missing_labor", $"La tarea {task.CodigoTarea} requiere HH."));
-            }
-            else if (!taskLabor.Any(item => item.ValidadoSupervisor))
-            {
-                blockers.Add(new WorkOrderClosureBlocker("labor_not_validated", $"La tarea {task.CodigoTarea} tiene HH sin validacion de supervisor."));
-            }
-        }
-
-        foreach (var item in checklist.Where(item => item.Obligatorio && !item.Completado))
-        {
-            blockers.Add(new WorkOrderClosureBlocker("incomplete_checklist", $"Checklist obligatorio pendiente: {item.Item}."));
-        }
-
-        foreach (var item in checklist.Where(item => item.Completado))
-        {
-            if ((item.RequiereFoto || item.RequiereArchivo) && string.IsNullOrWhiteSpace(item.EvidenciaId))
-            {
-                blockers.Add(new WorkOrderClosureBlocker("missing_checklist_evidence", $"Checklist {item.Item} requiere evidencia asociada."));
-            }
-
-            if (item.RequiereFirma && string.IsNullOrWhiteSpace(item.FirmaId))
-            {
-                blockers.Add(new WorkOrderClosureBlocker("missing_checklist_signature", $"Checklist {item.Item} requiere firma asociada."));
-            }
-        }
-
-        foreach (var item in spareParts.Where(item => item.Estado == WorkOrderSparePartStatus.Entregado))
-        {
-            blockers.Add(new WorkOrderClosureBlocker("unresolved_spare_part", $"Repuesto entregado pendiente de uso/devolucion: {item.RepuestoCodigo}."));
-        }
-
-        if (summary.Estado is not WorkOrderLifecycleStatus.ValidadaPlanificacion &&
-            summary.Estado is not WorkOrderLifecycleStatus.Anulada &&
-            summary.Estado is not WorkOrderLifecycleStatus.CerradaTecnicamente &&
-            summary.RequiereFirma &&
-            signatures.Count == 0)
-        {
-            blockers.Add(new WorkOrderClosureBlocker("missing_signature", "La OT requiere firma antes del cierre tecnico."));
-        }
-
-        return blockers;
+        foreach (var c in d.Checklist.Where(c => c.Obligatorio && !c.Completado)) b.Add(new("CHECKLIST_ITEM_REQUIRED", $"Checklist pendiente: {c.Item}"));
+        foreach (var c in d.Checklist.Where(c => c.Completado && (c.RequiereFoto || c.RequiereArchivo) && string.IsNullOrWhiteSpace(c.EvidenciaId))) b.Add(new("CHECKLIST_EVIDENCE_REQUIRED", $"Checklist requiere evidencia: {c.Item}"));
+        foreach (var c in d.Checklist.Where(c => c.Completado && c.RequiereFirma && string.IsNullOrWhiteSpace(c.FirmaId))) b.Add(new("CHECKLIST_SIGNATURE_REQUIRED", $"Checklist requiere firma: {c.Item}"));
+        foreach (var s in d.SpareParts.Where(s => s.Estado == WorkOrderSparePartStatus.Entregado && s.CantidadUtilizada + s.CantidadDevuelta < s.Cantidad)) b.Add(new("SPARE_PART_PENDING", $"Repuesto pendiente de uso/devolucion: {s.RepuestoCodigo}"));
+        if (d.Summary.RequiereFirma && !d.Signatures.Any(s => Same(s.Scope, "OT"))) b.Add(new("SIGNATURE_REQUIRED", "La OT requiere firma general."));
+        return b;
     }
 
-    private async Task AddHistoryAsync(
-        string numeroOt,
-        WorkOrderLifecycleStatus previousStatus,
-        WorkOrderLifecycleStatus nextStatus,
-        UserAccessContext user,
-        string reason,
-        CancellationToken cancellationToken)
-    {
-        var rows = (await _dataProvider.ReadRowsAsync(HistorySchema, cancellationToken)).ToList();
-        rows.Add(HistoryRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["HistorialId"] = NewId("HISTOT"),
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["EstadoAnterior"] = previousStatus.ToString(),
-            ["EstadoNuevo"] = nextStatus.ToString(),
-            ["FechaUtc"] = FormatDate(DateTimeOffset.UtcNow),
-            ["UsuarioId"] = user.UserId,
-            ["Motivo"] = reason
-        }));
-        await _dataProvider.SaveRowsAsync(HistorySchema, rows, cancellationToken);
-    }
-
-    private async Task<DataRow?> FindAssetAsync(string assetCode, CancellationToken cancellationToken)
-    {
-        return (await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken))
-            .FirstOrDefault(row => Same(row.GetValue("Codigo"), assetCode));
-    }
-
-    private static DataRow? FindOrder(IReadOnlyCollection<DataRow> rows, string numeroOt)
-    {
-        return rows.FirstOrDefault(row => Same(row.GetValue("NumeroOT"), numeroOt));
-    }
-
-    private static void EnsureTaskExists(IReadOnlyCollection<DataRow> tasks, string numeroOt, string codigoTarea)
-    {
-        if (!tasks.Any(row => Same(row.GetValue("NumeroOT"), numeroOt) && Same(row.GetValue("CodigoTarea"), codigoTarea)))
-        {
-            throw new DomainException($"La tarea '{codigoTarea}' no existe en la OT.");
-        }
-    }
-
-    private static string ResolveFaena(string? requestedFaena, DataRow asset)
-    {
-        var assetFaena = asset.GetValue("FaenaCodigo");
-        if (!string.IsNullOrWhiteSpace(requestedFaena) && !Same(requestedFaena, assetFaena))
-        {
-            throw new DomainException("El activo seleccionado no pertenece a la faena indicada.");
-        }
-
-        return NormalizeCode(requestedFaena) ?? NormalizeCode(assetFaena) ?? string.Empty;
-    }
-
-    private static bool CanViewOrder(UserAccessContext user, WorkOrderSummaryResponse order, IReadOnlyCollection<DataRow> assignments)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.Management))
-        {
-            return true;
-        }
-
-        if (HasAnyRole(user, AuthRoles.Technician) && !HasAnyRole(user, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor))
-        {
-            return HasAssignedTechnician(assignments, order.NumeroOT, user.UserId);
-        }
-
-        return CanAccessFaena(user, order.FaenaCodigo);
-    }
-
-    private static void EnsureCanView(UserAccessContext user)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor, AuthRoles.Technician, AuthRoles.Management, AuthRoles.FaenaViewer))
-        {
-            return;
-        }
-
-        throw new UnauthorizedAccessException("No tiene permisos para ver OT.");
-    }
-
-    private static void EnsureCanPlan(UserAccessContext user)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor))
-        {
-            return;
-        }
-
-        throw new UnauthorizedAccessException("La planificacion de OT requiere planificador o supervisor.");
-    }
-
-    private static void EnsureCanPlanOrSupervisor(UserAccessContext user)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor))
-        {
-            return;
-        }
-
-        throw new UnauthorizedAccessException("La accion requiere planificador o supervisor.");
-    }
-
-    private static void EnsureCanClose(UserAccessContext user)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.MaintenanceSupervisor) ||
-            user.Permissions.Contains(AuthPermissions.CloseWorkOrders, StringComparer.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        throw new UnauthorizedAccessException("El cierre tecnico requiere supervisor de mantenimiento.");
-    }
-
-    private static void EnsureCanValidatePlanning(UserAccessContext user)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.Planner) ||
-            user.Permissions.Contains(AuthPermissions.FinalValidateWorkOrders, StringComparer.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        throw new UnauthorizedAccessException("La validacion final requiere planificacion.");
-    }
-
-    private static void EnsureCanPlanOrSupervisorOrAssigned(UserAccessContext user, WorkOrderDetailResponse order)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor))
-        {
-            return;
-        }
-
-        if (HasAnyRole(user, AuthRoles.Technician) &&
-            order.Technicians.Any(item => Same(item.TecnicoUserId, user.UserId)))
-        {
-            return;
-        }
-
-        throw new UnauthorizedAccessException("La accion requiere estar asignado a la OT.");
-    }
-
-    private static void EnsureTechnicianCanWork(UserAccessContext user, WorkOrderDetailResponse order, string taskCode, string technicianId)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor))
-        {
-            return;
-        }
-
-        if (!Same(user.UserId, technicianId))
-        {
-            throw new UnauthorizedAccessException("El tecnico solo puede registrar su propio trabajo.");
-        }
-
-        if (!order.Technicians.Any(item => Same(item.CodigoTarea, taskCode) && Same(item.TecnicoUserId, user.UserId)))
-        {
-            throw new UnauthorizedAccessException("El tecnico no esta asignado a esta tarea.");
-        }
-    }
-
-    private static void EnsureFaenaAccess(UserAccessContext user, string? faenaCodigo)
-    {
-        if (!CanAccessFaena(user, faenaCodigo))
-        {
-            throw new UnauthorizedAccessException("No tiene acceso a la faena de la OT.");
-        }
-    }
-
-    private static bool CanAccessFaena(UserAccessContext user, string? faenaCodigo)
-    {
-        return string.IsNullOrWhiteSpace(faenaCodigo)
-            || HasAnyRole(user, AuthRoles.Admin, AuthRoles.Management)
-            || (HasAnyRole(user, AuthRoles.Planner) && user.Faenas.Count == 0)
-            || user.Faenas.Contains(faenaCodigo, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static bool HasAssignedTechnician(IReadOnlyCollection<DataRow> assignments, string numeroOt, string? technicianId)
-    {
-        return !string.IsNullOrWhiteSpace(technicianId) &&
-               assignments.Any(row => Same(row.GetValue("NumeroOT"), numeroOt) && Same(row.GetValue("TecnicoUserId"), technicianId));
-    }
-
-    private static bool HasAnyRole(UserAccessContext user, params string[] roles)
-    {
-        return roles.Any(role => user.Roles.Contains(role, StringComparer.OrdinalIgnoreCase));
-    }
-
-    private static void EnsureOrderOpen(WorkOrderSummaryResponse order)
-    {
-        if (order.Estado is WorkOrderLifecycleStatus.ValidadaPlanificacion or WorkOrderLifecycleStatus.Anulada)
-        {
-            throw new DomainException("La OT ya no admite modificaciones.");
-        }
-    }
-
-    private static void EnsureStatus(WorkOrderLifecycleStatus current, params WorkOrderLifecycleStatus[] expected)
-    {
-        if (!expected.Contains(current))
-        {
-            throw new DomainException($"La OT esta en estado {current} y no admite esta accion.");
-        }
-    }
-
-    private async Task RecordAuditAsync(
-        UserAccessContext user,
-        string action,
-        string entityId,
-        DataRow? previous,
-        DataRow? updated,
-        string? faenaCodigo,
-        string? reason,
-        CancellationToken cancellationToken,
-        AuditSeverity severity = AuditSeverity.Medium)
-    {
-        await _auditService.RecordAsync(new AuditEventRequest(
-            user.UserId,
-            action,
-            AuditModules.WorkOrders,
-            "WorkOrder",
-            entityId,
-            previous is null ? null : Serialize(previous),
-            updated is null ? null : Serialize(updated),
-            faenaCodigo,
-            severity,
-            reason),
-            cancellationToken);
-    }
-
-    private static WorkOrderTaskResponse ToTask(DataRow row)
-    {
-        return new WorkOrderTaskResponse(
-            row.GetValue("NumeroOT") ?? string.Empty,
-            row.GetValue("CodigoTarea") ?? string.Empty,
-            row.GetValue("Descripcion") ?? string.Empty,
-            ParseDate(row.GetValue("FechaInicioProgramada")),
-            ParseDate(row.GetValue("FechaFinProgramada")),
-            ParseBool(row.GetValue("RequiereEvidencia")),
-            ParseBool(row.GetValue("RequiereHH"), true),
-            ParseBool(row.GetValue("ChecklistObligatorio")),
-            EmptyToNull(row.GetValue("Observaciones")));
-    }
-
-    private static WorkOrderTaskTechnicianResponse ToTechnician(DataRow row)
-    {
-        return new WorkOrderTaskTechnicianResponse(
-            row.GetValue("AsignacionId") ?? string.Empty,
-            row.GetValue("NumeroOT") ?? string.Empty,
-            row.GetValue("CodigoTarea") ?? string.Empty,
-            row.GetValue("TecnicoUserId") ?? string.Empty,
-            EmptyToNull(row.GetValue("TecnicoNombre")),
-            ParseDate(row.GetValue("AsignadoEnUtc")) ?? DateTimeOffset.MinValue,
-            row.GetValue("AsignadoPor") ?? string.Empty);
-    }
-
-    private static WorkOrderLaborResponse ToLabor(DataRow row)
-    {
-        return new WorkOrderLaborResponse(
-            row.GetValue("HHId") ?? string.Empty,
-            row.GetValue("NumeroOT") ?? string.Empty,
-            row.GetValue("CodigoTarea") ?? string.Empty,
-            row.GetValue("TecnicoUserId") ?? string.Empty,
-            ParseDecimal(row.GetValue("Horas")),
-            row.GetValue("Descripcion") ?? string.Empty,
-            ParseDate(row.GetValue("FechaTrabajo")) ?? DateTimeOffset.MinValue,
-            row.GetValue("RegistradoPor") ?? string.Empty,
-            ParseDate(row.GetValue("HoraInicio")),
-            ParseDate(row.GetValue("HoraTermino")),
-            EmptyToNull(row.GetValue("Comentario")),
-            ParseBool(row.GetValue("ValidadoSupervisor")),
-            EmptyToNull(row.GetValue("ValidadoPor")),
-            ParseDate(row.GetValue("ValidadoEnUtc")));
-    }
-
-    private static WorkOrderEvidenceResponse ToEvidence(DataRow row)
-    {
-        return new WorkOrderEvidenceResponse(
-            row.GetValue("EvidenciaId") ?? string.Empty,
-            row.GetValue("NumeroOT") ?? string.Empty,
-            EmptyToNull(row.GetValue("CodigoTarea")),
-            row.GetValue("Nombre") ?? string.Empty,
-            EmptyToNull(row.GetValue("ArchivoKey")),
-            EmptyToNull(row.GetValue("SharePointUrl")),
-            ParseBool(row.GetValue("CubreEvidenciaObligatoria"), true),
-            ParseDate(row.GetValue("CreadoEnUtc")) ?? DateTimeOffset.MinValue,
-            row.GetValue("CreadoPor") ?? string.Empty,
-            EmptyToNull(row.GetValue("Observaciones")),
-            ParseEnum(row.GetValue("TipoEvidencia"), WorkOrderEvidenceType.Archivo),
-            ParseBool(row.GetValue("EsFoto")),
-            ParseBool(row.GetValue("EsObligatoria")),
-            EmptyToNull(row.GetValue("StorageProvider")),
-            EmptyToNull(row.GetValue("LocalPath")),
-            EmptyToNull(row.GetValue("OfflineId")),
-            EmptyToNull(row.GetValue("SyncStatus")));
-    }
-
-    private static WorkOrderSparePartResponse ToSparePart(DataRow row)
-    {
-        return new WorkOrderSparePartResponse(
-            row.GetValue("ItemId") ?? string.Empty,
-            row.GetValue("NumeroOT") ?? string.Empty,
-            row.GetValue("CodigoTarea") ?? string.Empty,
-            row.GetValue("RepuestoCodigo") ?? string.Empty,
-            ParseDecimal(row.GetValue("Cantidad")),
-            row.GetValue("Unidad") ?? string.Empty,
-            EmptyToNull(row.GetValue("BodegaCodigo")),
-            ParseEnum(row.GetValue("Estado"), WorkOrderSparePartStatus.Solicitado),
-            ParseDecimal(row.GetValue("CantidadUtilizada")),
-            ParseDecimal(row.GetValue("CantidadDevuelta")),
-            EmptyToNull(row.GetValue("Observaciones")));
-    }
-
-    private static WorkOrderChecklistItemResponse ToChecklist(DataRow row)
-    {
-        return new WorkOrderChecklistItemResponse(
-            row.GetValue("ItemId") ?? string.Empty,
-            row.GetValue("NumeroOT") ?? string.Empty,
-            row.GetValue("CodigoTarea") ?? string.Empty,
-            row.GetValue("Item") ?? string.Empty,
-            ParseBool(row.GetValue("Obligatorio"), true),
-            ParseBool(row.GetValue("Completado")),
-            ParseDate(row.GetValue("CompletadoEnUtc")),
-            EmptyToNull(row.GetValue("CompletadoPor")),
-            EmptyToNull(row.GetValue("TemplateCode")),
-            ParseEnum(row.GetValue("TipoRespuesta"), WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica),
-            EmptyToNull(row.GetValue("Respuesta")),
-            ParseNullableDecimal(row.GetValue("ValorNumerico")),
-            EmptyToNull(row.GetValue("Texto")),
-            EmptyToNull(row.GetValue("EvidenciaId")),
-            ParseBool(row.GetValue("RequiereFoto")),
-            ParseBool(row.GetValue("RequiereArchivo")),
-            ParseBool(row.GetValue("RequiereFirma")),
-            EmptyToNull(row.GetValue("FirmaId")));
-    }
-
-    private static WorkOrderSignatureResponse ToSignature(DataRow row)
-    {
-        return new WorkOrderSignatureResponse(
-            row.GetValue("FirmaId") ?? string.Empty,
-            row.GetValue("NumeroOT") ?? string.Empty,
-            row.GetValue("UsuarioId") ?? string.Empty,
-            EmptyToNull(row.GetValue("SignatureFileKey")),
-            ParseDate(row.GetValue("FirmadoEnUtc")) ?? DateTimeOffset.MinValue,
-            EmptyToNull(row.GetValue("Comentario")),
-            EmptyToNull(row.GetValue("CodigoTarea")),
-            EmptyToNull(row.GetValue("Scope")) ?? "OT",
-            EmptyToNull(row.GetValue("SignatureImageDataUrl")));
-    }
-
-    private static WorkOrderStatusHistoryResponse ToHistory(DataRow row)
-    {
-        return new WorkOrderStatusHistoryResponse(
-            row.GetValue("HistorialId") ?? string.Empty,
-            row.GetValue("NumeroOT") ?? string.Empty,
-            ParseStatus(row.GetValue("EstadoAnterior")),
-            ParseStatus(row.GetValue("EstadoNuevo")),
-            ParseDate(row.GetValue("FechaUtc")) ?? DateTimeOffset.MinValue,
-            row.GetValue("UsuarioId") ?? string.Empty,
-            row.GetValue("Motivo") ?? string.Empty);
-    }
-
-    private static WorkOrderLifecycleStatus ParseStatus(string? value)
-    {
-        if (Enum.TryParse<WorkOrderLifecycleStatus>(value, ignoreCase: true, out var parsed))
-        {
-            return parsed;
-        }
-
-        return value?.Trim().ToLowerInvariant() switch
-        {
-            "draft" => WorkOrderLifecycleStatus.OTCreada,
-            "planned" or "assigned" => WorkOrderLifecycleStatus.Programada,
-            "inprogress" => WorkOrderLifecycleStatus.EnEjecucion,
-            "pendingevidence" or "pendinglabor" => WorkOrderLifecycleStatus.EnRevisionSupervisor,
-            "closed" => WorkOrderLifecycleStatus.CerradaTecnicamente,
-            "cancelled" => WorkOrderLifecycleStatus.Anulada,
-            _ => WorkOrderLifecycleStatus.OTCreada
-        };
-    }
-
-    private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback)
-        where TEnum : struct
-    {
-        return Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed) ? parsed : fallback;
-    }
-
-    private static DataRow WorkOrderRow(IReadOnlyDictionary<string, string?> values) => Row(WorkOrderColumns, values);
-    private static DataRow TaskRow(IReadOnlyDictionary<string, string?> values) => Row(TaskColumns, values);
-    private static DataRow TaskTechnicianRow(IReadOnlyDictionary<string, string?> values) => Row(TaskTechnicianColumns, values);
-    private static DataRow LaborRow(IReadOnlyDictionary<string, string?> values) => Row(LaborColumns, values);
-    private static DataRow EvidenceRow(IReadOnlyDictionary<string, string?> values) => Row(EvidenceColumns, values);
-    private static DataRow SparePartRow(IReadOnlyDictionary<string, string?> values) => Row(SparePartColumns, values);
-    private static DataRow ChecklistRow(IReadOnlyDictionary<string, string?> values) => Row(ChecklistColumns, values);
-    private static DataRow SignatureRow(IReadOnlyDictionary<string, string?> values) => Row(SignatureColumns, values);
-    private static DataRow HistoryRow(IReadOnlyDictionary<string, string?> values) => Row(HistoryColumns, values);
-
-    private static DataRow Row(IEnumerable<string> columns, IReadOnlyDictionary<string, string?> values)
-    {
-        return new DataRow(columns.ToDictionary(column => column, column => values.TryGetValue(column, out var value) ? value : null, StringComparer.OrdinalIgnoreCase));
-    }
-
-    private static Dictionary<string, string?> CopyRow(DataRow row, IEnumerable<string> columns)
-    {
-        return columns.ToDictionary(column => column, column => row.GetValue(column), StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static string NextWorkOrderNumber(IReadOnlyCollection<DataRow> rows)
-    {
-        var next = rows
-            .Select(row => row.GetValue("NumeroOT"))
-            .Select(value => ParseNumberSuffix(value, "OT-"))
-            .DefaultIfEmpty(0)
-            .Max() + 1;
-        return $"OT-{next:000000}";
-    }
-
-    private static string NextTaskCode(IReadOnlyCollection<DataRow> rows, string numeroOt)
-    {
-        var next = rows
-            .Where(row => Same(row.GetValue("NumeroOT"), numeroOt))
-            .Select(row => row.GetValue("CodigoTarea"))
-            .Select(value => ParseNumberSuffix(value, "T-"))
-            .DefaultIfEmpty(0)
-            .Max() + 1;
-        return $"T-{next:000}";
-    }
-
-    private static int ParseNumberSuffix(string? value, string prefix)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return 0;
-        }
-
-        var normalized = value.Replace(prefix, string.Empty, StringComparison.OrdinalIgnoreCase);
-        return int.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
-    }
-
-    private static string NewId(string prefix) => $"{prefix}-{Guid.NewGuid():N}"[..Math.Min(prefix.Length + 13, prefix.Length + 33)].ToUpperInvariant();
-
-    private static void ValidateRequired(string? value, string fieldName)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new DomainException($"El campo {fieldName} es obligatorio.");
-        }
-    }
-
-    private static string? NormalizeText(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string? NormalizeCode(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
-
-    private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
-
-    private static string FormatDate(DateTimeOffset value) => value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
-
-    private static string? FormatOptionalDate(DateTimeOffset? value) => value.HasValue ? FormatDate(value.Value) : null;
-
-    private static string FormatNumber(decimal value) => value.ToString(CultureInfo.InvariantCulture);
-
-    private static DateTimeOffset? ParseDate(string? value)
-    {
-        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed) ? parsed : null;
-    }
-
-    private static decimal ParseDecimal(string? value)
-    {
-        return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
-    }
-
-    private static decimal? ParseNullableDecimal(string? value)
-    {
-        return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
-    }
-
-    private static bool ParseBool(string? value, bool fallback = false)
-    {
-        return bool.TryParse(value, out var parsed) ? parsed : fallback;
-    }
-
-    private static bool Same(string? left, string? right) => string.Equals(left?.Trim(), right?.Trim(), StringComparison.OrdinalIgnoreCase);
-
-    private static string? Append(string? existing, string next)
-    {
-        return string.IsNullOrWhiteSpace(existing) ? next : $"{existing} | {next}";
-    }
-
-    private static string Serialize(DataRow row) => JsonSerializer.Serialize(row.Values);
-
-    private static decimal CalculateLaborHours(decimal? requestedHours, DateTimeOffset? start, DateTimeOffset? end)
-    {
-        if (start.HasValue || end.HasValue)
-        {
-            if (!start.HasValue || !end.HasValue)
-            {
-                throw new DomainException("Debe indicar hora inicio y hora termino para calcular HH.");
-            }
-
-            if (end.Value <= start.Value)
-            {
-                throw new DomainException("La hora termino debe ser posterior a la hora inicio.");
-            }
-
-            return Math.Round((decimal)(end.Value - start.Value).TotalHours, 2);
-        }
-
-        return requestedHours ?? 0;
-    }
-
-    private static string InferStorageProvider(RegisterEvidenceRequest request)
-    {
-        if (!string.IsNullOrWhiteSpace(request.SharePointUrl))
-        {
-            return "SharePoint";
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.LocalPath))
-        {
-            return "LocalSimulation";
-        }
-
-        return "ManualLink";
-    }
-
-    private static string? DefaultChecklistResponse(WorkOrderChecklistResponseType responseType)
-    {
-        return responseType switch
-        {
-            WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica => "Cumple",
-            WorkOrderChecklistResponseType.BuenoRegularMalo => "Bueno",
-            WorkOrderChecklistResponseType.SiNo => "Si",
-            _ => null
-        };
-    }
-
-    private static void ValidateChecklistCompletion(Dictionary<string, string?> values, UpdateChecklistItemRequest request)
-    {
-        if (!request.Completado)
-        {
-            return;
-        }
-
-        var responseType = ParseEnum(values.GetValueOrDefault("TipoRespuesta"), WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica);
-        var response = NormalizeText(request.Respuesta) ?? NormalizeText(values.GetValueOrDefault("Respuesta")) ?? DefaultChecklistResponse(responseType);
-        var text = NormalizeText(request.Texto) ?? NormalizeText(values.GetValueOrDefault("Texto"));
-        var evidenceId = NormalizeText(request.EvidenciaId) ?? NormalizeText(values.GetValueOrDefault("EvidenciaId"));
-        var signatureId = NormalizeText(request.FirmaId) ?? NormalizeText(values.GetValueOrDefault("FirmaId"));
-
-        if (responseType is WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica or WorkOrderChecklistResponseType.BuenoRegularMalo or WorkOrderChecklistResponseType.SiNo &&
-            string.IsNullOrWhiteSpace(response))
-        {
-            throw new DomainException("Debe registrar una respuesta de checklist.");
-        }
-
-        if (responseType == WorkOrderChecklistResponseType.Numerico &&
-            !request.ValorNumerico.HasValue &&
-            string.IsNullOrWhiteSpace(values.GetValueOrDefault("ValorNumerico")))
-        {
-            throw new DomainException("Debe registrar un valor numerico en el checklist.");
-        }
-
-        if (responseType == WorkOrderChecklistResponseType.Texto && string.IsNullOrWhiteSpace(text))
-        {
-            throw new DomainException("Debe registrar texto en el checklist.");
-        }
-
-        if ((responseType == WorkOrderChecklistResponseType.FotoObligatoria || ParseBool(values.GetValueOrDefault("RequiereFoto"))) &&
-            string.IsNullOrWhiteSpace(evidenceId))
-        {
-            throw new DomainException("Debe asociar evidencia fotografica al checklist.");
-        }
-
-        if ((responseType == WorkOrderChecklistResponseType.Archivo || ParseBool(values.GetValueOrDefault("RequiereArchivo"))) &&
-            string.IsNullOrWhiteSpace(evidenceId))
-        {
-            throw new DomainException("Debe asociar archivo al checklist.");
-        }
-
-        if ((responseType == WorkOrderChecklistResponseType.Firma || ParseBool(values.GetValueOrDefault("RequiereFirma"))) &&
-            string.IsNullOrWhiteSpace(signatureId))
-        {
-            throw new DomainException("Debe asociar firma al checklist.");
-        }
-    }
-
-    private static IReadOnlyCollection<ChecklistTemplateItem> ParseTemplateItems(string? rawItems)
-    {
-        if (string.IsNullOrWhiteSpace(rawItems))
-        {
-            return [];
-        }
-
-        try
-        {
-            var parsed = JsonSerializer.Deserialize<List<ChecklistTemplateItem>>(rawItems, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
-
-            if (parsed is not null && parsed.Count > 0)
-            {
-                return parsed.Where(item => !string.IsNullOrWhiteSpace(item.Item)).ToArray();
-            }
-        }
-        catch (JsonException)
-        {
-            // Non-JSON templates are supported as one item per line or semicolon.
-        }
-
-        return rawItems
-            .Split(["\r\n", "\n", ";"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(item => new ChecklistTemplateItem { Item = item })
-            .ToArray();
-    }
-
-    private sealed record WorkOrderData(
-        IReadOnlyList<DataRow> Orders,
-        IReadOnlyList<DataRow> Tasks,
-        IReadOnlyList<DataRow> Technicians,
-        IReadOnlyList<DataRow> Labor,
-        IReadOnlyList<DataRow> Evidences,
-        IReadOnlyList<DataRow> SpareParts,
-        IReadOnlyList<DataRow> Checklist,
-        IReadOnlyList<DataRow> Signatures,
-        IReadOnlyList<DataRow> History,
-        IReadOnlyList<DataRow> Assets);
-
-    private sealed class ChecklistTemplateItem
-    {
-        public string Item { get; init; } = string.Empty;
-
-        public WorkOrderChecklistResponseType TipoRespuesta { get; init; } = WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica;
-
-        public bool Obligatorio { get; init; } = true;
-
-        public bool RequiereFoto { get; init; }
-
-        public bool RequiereArchivo { get; init; }
-
-        public bool RequiereFirma { get; init; }
-    }
-
-    private static readonly string[] WorkOrderColumns =
-    [
-        "NumeroOT",
-        "ActivoCodigo",
-        "Estado",
-        "TipoMantenimiento",
-        "Descripcion",
-        "FechaProgramada",
-        "AvisoId",
-        "FaenaCodigo",
-        "Sistema",
-        "Subsistema",
-        "Componente",
-        "Prioridad",
-        "Criticidad",
-        "ClasificacionFalla",
-        "PlanPreventivoCodigo",
-        "EsPreventivaAutomatica",
-        "RequiereFirma",
-        "FechaInicioProgramada",
-        "FechaFinProgramada",
-        "CreadoPor",
-        "CreadoEnUtc",
-        "FechaInicioRealUtc",
-        "FechaFinalizacionTecnicoUtc",
-        "FinalizadoPor",
-        "FechaCierreSupervisorUtc",
-        "CerradoPor",
-        "FechaValidacionPlanificacionUtc",
-        "ValidadoPor",
-        "AnuladoPor",
-        "FechaAnulacionUtc",
-        "MotivoAnulacion",
-        "ActualizadoPor",
-        "ActualizadoEnUtc"
-    ];
-
-    private static readonly string[] TaskColumns =
-    [
-        "NumeroOT",
-        "CodigoTarea",
-        "Descripcion",
-        "RequiereEvidencia",
-        "RequiereHH",
-        "FechaInicioProgramada",
-        "FechaFinProgramada",
-        "ChecklistObligatorio",
-        "Observaciones"
-    ];
-
-    private static readonly string[] TaskTechnicianColumns =
-    [
-        "AsignacionId",
-        "NumeroOT",
-        "CodigoTarea",
-        "TecnicoUserId",
-        "TecnicoNombre",
-        "AsignadoEnUtc",
-        "AsignadoPor"
-    ];
-
-    private static readonly string[] LaborColumns =
-    [
-        "HHId",
-        "NumeroOT",
-        "CodigoTarea",
-        "TecnicoUserId",
-        "Horas",
-        "Descripcion",
-        "FechaTrabajo",
-        "HoraInicio",
-        "HoraTermino",
-        "RegistradoPor",
-        "Comentario",
-        "ValidadoSupervisor",
-        "ValidadoPor",
-        "ValidadoEnUtc"
-    ];
-
-    private static readonly string[] EvidenceColumns =
-    [
-        "EvidenciaId",
-        "NumeroOT",
-        "CodigoTarea",
-        "Nombre",
-        "ArchivoKey",
-        "SharePointUrl",
-        "CubreEvidenciaObligatoria",
-        "TipoEvidencia",
-        "EsFoto",
-        "EsObligatoria",
-        "StorageProvider",
-        "LocalPath",
-        "OfflineId",
-        "SyncStatus",
-        "CreadoEnUtc",
-        "CreadoPor",
-        "Observaciones"
-    ];
-
-    private static readonly string[] SparePartColumns =
-    [
-        "ItemId",
-        "NumeroOT",
-        "CodigoTarea",
-        "RepuestoCodigo",
-        "Cantidad",
-        "Unidad",
-        "BodegaCodigo",
-        "Estado",
-        "CantidadUtilizada",
-        "CantidadDevuelta",
-        "Observaciones"
-    ];
-
-    private static readonly string[] ChecklistColumns =
-    [
-        "ItemId",
-        "NumeroOT",
-        "CodigoTarea",
-        "Item",
-        "Obligatorio",
-        "Completado",
-        "CompletadoEnUtc",
-        "CompletadoPor",
-        "TemplateCode",
-        "TipoRespuesta",
-        "Respuesta",
-        "ValorNumerico",
-        "Texto",
-        "EvidenciaId",
-        "RequiereFoto",
-        "RequiereArchivo",
-        "RequiereFirma",
-        "FirmaId"
-    ];
-
-    private static readonly string[] SignatureColumns =
-    [
-        "FirmaId",
-        "NumeroOT",
-        "CodigoTarea",
-        "Scope",
-        "UsuarioId",
-        "SignatureFileKey",
-        "SignatureImageDataUrl",
-        "FirmadoEnUtc",
-        "Comentario"
-    ];
-
-    private static readonly string[] HistoryColumns =
-    [
-        "HistorialId",
-        "NumeroOT",
-        "EstadoAnterior",
-        "EstadoNuevo",
-        "FechaUtc",
-        "UsuarioId",
-        "Motivo"
-    ];
+    private static void EnsureCanView(UserAccessContext u) { if (AnyRole(u, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor, AuthRoles.Technician, AuthRoles.Management, AuthRoles.FaenaViewer)) return; throw new UnauthorizedAccessException("No tiene permisos para ver ordenes de trabajo."); }
+    private static void EnsureCanPlan(UserAccessContext u) { if (AnyRole(u, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor)) return; throw new UnauthorizedAccessException("La accion requiere planificador o supervisor."); }
+    private static void EnsurePlanSupervisorOrAssigned(UserAccessContext u, WorkOrderDetailResponse o) { if (AnyRole(u, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor) || o.Technicians.Any(t => Same(t.TecnicoUserId, u.UserId))) return; throw new UnauthorizedAccessException("No tiene permisos sobre esta OT."); }
+    private static bool CanViewOrder(UserAccessContext u, WorkOrderDetailResponse o) => AnyRole(u, AuthRoles.Admin, AuthRoles.Management) || u.Faenas.Contains(o.Summary.FaenaCodigo, StringComparer.OrdinalIgnoreCase) || o.Technicians.Any(t => Same(t.TecnicoUserId, u.UserId));
+    private static void EnsureFaena(UserAccessContext u, string? f) { if (string.IsNullOrWhiteSpace(f) || AnyRole(u, AuthRoles.Admin, AuthRoles.Management) || u.Faenas.Contains(f, StringComparer.OrdinalIgnoreCase)) return; throw new UnauthorizedAccessException("No tiene acceso a la faena de la OT."); }
+    private static void EnsureTechCanWork(UserAccessContext u, WorkOrderDetailResponse o, string? task, string tech) { if (AnyRole(u, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor) || Same(u.UserId, tech) || o.Technicians.Any(t => Same(t.CodigoTarea, task) && Same(t.TecnicoUserId, u.UserId))) return; throw new UnauthorizedAccessException("El tecnico no esta asignado a esta tarea."); }
+    private static bool AnyRole(UserAccessContext u, params string[] roles) => roles.Any(r => u.Roles.Contains(r, StringComparer.OrdinalIgnoreCase));
+    private static void EnsureOpen(WorkOrderEntity o) { var s = ParseEnum(o.Status.Code, WorkOrderLifecycleStatus.OTCreada); if (s is WorkOrderLifecycleStatus.ValidadaPlanificacion or WorkOrderLifecycleStatus.Anulada) throw new DomainException("La OT esta cerrada y no admite cambios."); }
+    private async Task Audit(UserAccessContext u, string action, string id, object? prev, object? next, string? faena, string? reason, CancellationToken ct) => await _auditService.RecordAsync(new AuditEventRequest(u.UserId, action, AuditModules.WorkOrders, "WorkOrder", id, prev is null ? null : Ser(prev), next is null ? null : Ser(next), faena, AuditSeverity.Medium, reason), ct);
+    private static void ValidateChecklist(WorkOrderChecklistEntity i, UpdateChecklistItemRequest r) { if (!r.Completado) return; var t = ParseEnum(i.ResponseType.Code, WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica); if (t == WorkOrderChecklistResponseType.Numerico && !r.ValorNumerico.HasValue && !i.NumericValue.HasValue) throw new DomainException("Debe registrar un valor numerico en el checklist."); if (t == WorkOrderChecklistResponseType.Texto && string.IsNullOrWhiteSpace(r.Texto) && string.IsNullOrWhiteSpace(i.TextValue)) throw new DomainException("Debe registrar texto en el checklist."); if ((t is WorkOrderChecklistResponseType.FotoObligatoria or WorkOrderChecklistResponseType.Archivo || i.RequiresPhoto || i.RequiresFile) && string.IsNullOrWhiteSpace(r.EvidenciaId) && !i.EvidenceId.HasValue) throw new DomainException("Debe asociar evidencia al checklist."); if ((t == WorkOrderChecklistResponseType.Firma || i.RequiresSignature) && string.IsNullOrWhiteSpace(r.FirmaId) && !i.SignatureId.HasValue) throw new DomainException("Debe asociar firma al checklist."); }
+    private static string? DefaultResp(WorkOrderChecklistResponseType t) => t switch { WorkOrderChecklistResponseType.CumpleNoCumpleNoAplica => "Cumple", WorkOrderChecklistResponseType.BuenoRegularMalo => "Bueno", WorkOrderChecklistResponseType.SiNo => "Si", _ => null };
+    private static decimal Hours(decimal? h, DateTimeOffset? s, DateTimeOffset? e) { if (s.HasValue || e.HasValue) { if (!s.HasValue || !e.HasValue) throw new DomainException("Debe indicar hora inicio y hora termino para calcular HH."); if (e.Value <= s.Value) throw new DomainException("La hora termino debe ser posterior a la hora inicio."); return Math.Round((decimal)(e.Value - s.Value).TotalHours, 2); } return h ?? 0; }
+    private static string Infer(RegisterEvidenceRequest r) => !string.IsNullOrWhiteSpace(r.SharePointUrl) ? "SharePoint" : !string.IsNullOrWhiteSpace(r.LocalPath) ? "LocalSimulation" : "ManualLink";
+    private static void ValidateRequired(string? v, string f) { if (string.IsNullOrWhiteSpace(v)) throw new DomainException($"El campo {f} es obligatorio."); }
+    private static string? N(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+    private static string? C(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim().ToUpperInvariant();
+    private static bool Same(string? l, string? r) => string.Equals(l?.Trim(), r?.Trim(), StringComparison.OrdinalIgnoreCase);
+    private static string? Append(string? e, string n) => string.IsNullOrWhiteSpace(e) ? n : $"{e} | {n}";
+    private static TEnum ParseEnum<TEnum>(string? v, TEnum fb) where TEnum : struct => Enum.TryParse<TEnum>(v, true, out var p) ? p : fb;
+    private static Guid? G(string? v) => Guid.TryParse(v, out var id) ? id : null;
+    private static string Ser(object v) => JsonSerializer.Serialize(v, new JsonSerializerOptions { ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles });
 }
+

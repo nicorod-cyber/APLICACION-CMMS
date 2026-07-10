@@ -1,4 +1,4 @@
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+﻿using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql;
@@ -27,6 +27,20 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<FileMetadataEntity> Files => Set<FileMetadataEntity>();
     public DbSet<DocumentAssetEntity> DocumentAssets => Set<DocumentAssetEntity>();
     public DbSet<DocumentFaenaEntity> DocumentFaenas => Set<DocumentFaenaEntity>();
+    public DbSet<WorkCatalogEntity> WorkCatalogs => Set<WorkCatalogEntity>();
+    public DbSet<WorkNotificationEntity> WorkNotifications => Set<WorkNotificationEntity>();
+    public DbSet<WorkOrderEntity> WorkOrders => Set<WorkOrderEntity>();
+    public DbSet<WorkOrderTaskEntity> WorkOrderTasks => Set<WorkOrderTaskEntity>();
+    public DbSet<WorkOrderTaskTechnicianEntity> WorkOrderTaskTechnicians => Set<WorkOrderTaskTechnicianEntity>();
+    public DbSet<WorkOrderLaborEntity> WorkOrderLabor => Set<WorkOrderLaborEntity>();
+    public DbSet<WorkOrderEvidenceEntity> WorkOrderEvidences => Set<WorkOrderEvidenceEntity>();
+    public DbSet<WorkOrderSparePartEntity> WorkOrderSpareParts => Set<WorkOrderSparePartEntity>();
+    public DbSet<ChecklistTemplateEntity> ChecklistTemplates => Set<ChecklistTemplateEntity>();
+    public DbSet<ChecklistTemplateItemEntity> ChecklistTemplateItems => Set<ChecklistTemplateItemEntity>();
+    public DbSet<WorkOrderChecklistEntity> WorkOrderChecklist => Set<WorkOrderChecklistEntity>();
+    public DbSet<WorkOrderSignatureEntity> WorkOrderSignatures => Set<WorkOrderSignatureEntity>();
+    public DbSet<WorkOrderStatusHistoryEntity> WorkOrderStatusHistory => Set<WorkOrderStatusHistoryEntity>();
+    public DbSet<DocumentWorkOrderEntity> DocumentWorkOrders => Set<DocumentWorkOrderEntity>();
     public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -35,3 +49,4 @@ public sealed class CmmsDbContext : DbContext
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(CmmsDbContext).Assembly);
     }
 }
+

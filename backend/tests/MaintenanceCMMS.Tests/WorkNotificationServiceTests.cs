@@ -1,8 +1,8 @@
-using MaintenanceCMMS.Application.Abstractions.Data;
-using MaintenanceCMMS.Application.Auditing;
+﻿using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Domain.Enums;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.WorkNotifications;
 using Xunit;
 
@@ -19,7 +19,7 @@ public sealed class WorkNotificationServiceTests
     [Fact]
     public async Task CreateAsync_CreatesWorkNotification()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
 
         var created = await fixture.Service.CreateAsync(Request(), Admin, CancellationToken.None);
 
@@ -32,7 +32,7 @@ public sealed class WorkNotificationServiceTests
     [Fact]
     public async Task ApproveAsync_ApprovesNotification()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(Request(), Admin, CancellationToken.None);
         await fixture.Service.EvaluateAsync(created.AvisoId, new WorkNotificationActionRequest("Evaluar condicion"), Admin, CancellationToken.None);
 
@@ -46,7 +46,7 @@ public sealed class WorkNotificationServiceTests
     [Fact]
     public async Task RejectAsync_RejectsNotificationWithReason()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(Request(), Admin, CancellationToken.None);
 
         var rejected = await fixture.Service.RejectAsync(created.AvisoId, new WorkNotificationActionRequest("Duplicado"), Admin, CancellationToken.None);
@@ -59,7 +59,7 @@ public sealed class WorkNotificationServiceTests
     [Fact]
     public async Task ConvertToWorkOrderAsync_CreatesWorkOrderAndClosesNotification()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(Request(), Admin, CancellationToken.None);
         await fixture.Service.ApproveAsync(created.AvisoId, new WorkNotificationActionRequest("Aprobado"), Admin, CancellationToken.None);
 
@@ -74,19 +74,17 @@ public sealed class WorkNotificationServiceTests
         Assert.Equal(WorkNotificationStatus.ConvertidoOT, conversion.Aviso.Estado);
         Assert.Equal(conversion.NumeroOT, conversion.Aviso.NumeroOT);
 
-        var workOrders = await fixture.Provider.ReadRowsAsync("ordenes_trabajo", CancellationToken.None);
-        var workOrder = Assert.Single(workOrders);
-        Assert.Equal("ACT-1", workOrder.GetValue("ActivoCodigo"));
-        Assert.Equal(created.AvisoId, workOrder.GetValue("AvisoId"));
+        var workOrder = Assert.Single(fixture.DbContext.WorkOrders);
+        Assert.Equal("ACT-1", workOrder.Asset.Code);
+        Assert.Equal(created.AvisoId, workOrder.Notification!.NotificationNumber);
     }
 
-    private static Fixture CreateFixture()
+    private static async Task<Fixture> CreateFixtureAsync()
     {
-        var provider = new InMemoryDataProvider();
-        var service = new WorkNotificationService(provider, new NullAuditService());
-        return new Fixture(provider, service);
+        var database = await PostgreSqlWorkTestFixture.CreateAsync();
+        var service = new WorkNotificationService(database.DbContext, new NullAuditService());
+        return new Fixture(database, database.DbContext, service);
     }
-
     private static CreateWorkNotificationRequest Request()
     {
         return new CreateWorkNotificationRequest(
@@ -106,52 +104,13 @@ public sealed class WorkNotificationServiceTests
 
     private static DateTimeOffset Day(int offset) => new(2026, 1, 1 + offset, 0, 0, 0, TimeSpan.Zero);
 
-    private sealed record Fixture(InMemoryDataProvider Provider, WorkNotificationService Service);
-
-    private sealed class InMemoryDataProvider : IDataProvider
+    private sealed record Fixture(
+        PostgreSqlWorkTestFixture Database,
+        CmmsDbContext DbContext,
+        WorkNotificationService Service) : IAsyncDisposable
     {
-        private readonly Dictionary<string, IReadOnlyList<DataRow>> _rows = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["avisos_trabajo"] = [],
-            ["ordenes_trabajo"] = [],
-            ["activos"] =
-            [
-                new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["Codigo"] = "ACT-1",
-                    ["Nombre"] = "Excavadora 01",
-                    ["FaenaCodigo"] = "FAE-1",
-                    ["TipoActivo"] = "Equipo movil",
-                    ["Estado"] = "Active"
-                })
-            ]
-        };
-
-        public string Name => "memory";
-
-        public DataProviderType ProviderType => DataProviderType.Excel;
-
-        public Task InitializeAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<DataProviderHealth> CheckHealthAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new DataProviderHealth("memory", true, "memory", [], []));
-
-        public Task<IReadOnlyList<DataRow>> ReadRowsAsync(string schemaName, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_rows.TryGetValue(schemaName, out var rows) ? rows : []);
-        }
-
-        public Task SaveRowsAsync(string schemaName, IReadOnlyCollection<DataRow> rows, CancellationToken cancellationToken)
-        {
-            _rows[schemaName] = rows.ToArray();
-            return Task.CompletedTask;
-        }
-
-        public Task<IReadOnlyList<T>> QueryAsync<T>(DataQuery query, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<T>>([]);
-
-        public Task SaveChangesAsync(UnitOfWorkChanges changes, CancellationToken cancellationToken) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => Database.DisposeAsync();
     }
-
     private sealed class NullAuditService : IAuditService
     {
         public Task<string> RecordAsync(AuditEventRequest auditEvent, CancellationToken cancellationToken) => Task.FromResult(Guid.NewGuid().ToString("N"));
@@ -159,3 +118,4 @@ public sealed class WorkNotificationServiceTests
         public Task<AuditQueryResult> QueryAsync(AuditQuery query, CancellationToken cancellationToken) => Task.FromResult(new AuditQueryResult(0, []));
     }
 }
+

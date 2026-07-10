@@ -184,6 +184,7 @@ public sealed class DocumentEntity : PostgreSqlEntity
     public List<DocumentVersionEntity> Versions { get; set; } = [];
     public List<DocumentAssetEntity> Assets { get; set; } = [];
     public List<DocumentFaenaEntity> Faenas { get; set; } = [];
+    public List<DocumentWorkOrderEntity> WorkOrders { get; set; } = [];
 }
 
 public sealed class DocumentVersionEntity : PostgreSqlEntity
@@ -263,3 +264,6 @@ public sealed class AuditLogEntity : PostgreSqlEntity
     public string? Detail { get; set; }
     public string? CorrelationId { get; set; }
 }
+
+
+

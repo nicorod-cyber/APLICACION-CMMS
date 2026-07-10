@@ -593,9 +593,9 @@ public sealed class DocumentService : IDocumentService
             .Include(document => document.DocumentType)
             .Include(document => document.Versions).ThenInclude(version => version.File)
             .Include(document => document.Assets).ThenInclude(link => link.Asset).ThenInclude(asset => asset.Faena)
-            .Include(document => document.Faenas).ThenInclude(link => link.Faena);
+            .Include(document => document.Faenas).ThenInclude(link => link.Faena)
+            .Include(document => document.WorkOrders).ThenInclude(link => link.WorkOrder).ThenInclude(workOrder => workOrder.Faena);
     }
-
     private async Task<DocumentEntity?> FindDocumentAsync(string id, bool tracking, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(id, out var documentId))
@@ -636,11 +636,6 @@ public sealed class DocumentService : IDocumentService
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        if (request.EntidadTipo == DocumentEntityType.OT)
-        {
-            throw new DomainException("La asociacion documental a OT queda preparada, pero requiere la tabla PostgreSQL de ordenes de trabajo para crear una FK real.");
-        }
-
         var entityCodes = (request.EntidadCodigos is { Count: > 0 } ? request.EntidadCodigos : [request.EntidadCodigo])
             .Where(code => !string.IsNullOrWhiteSpace(code))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -667,6 +662,27 @@ public sealed class DocumentService : IDocumentService
             return;
         }
 
+        if (request.EntidadTipo == DocumentEntityType.OT)
+        {
+            foreach (var workOrderNumber in entityCodes)
+            {
+                var workOrder = await ResolveWorkOrderAsync(workOrderNumber, user, cancellationToken);
+                _dbContext.DocumentWorkOrders.Add(new DocumentWorkOrderEntity
+                {
+                    Id = Guid.NewGuid(),
+                    DocumentId = document.Id,
+                    Document = document,
+                    WorkOrderId = workOrder.Id,
+                    WorkOrder = workOrder,
+                    IsActive = true,
+                    AssignedAtUtc = now,
+                    AssignedByUserId = user.UserId
+                });
+            }
+
+            return;
+        }
+
         foreach (var faenaCode in entityCodes)
         {
             var faena = await ResolveFaenaAsync(faenaCode, user, cancellationToken);
@@ -683,7 +699,6 @@ public sealed class DocumentService : IDocumentService
             });
         }
     }
-
     private async Task<AssetEntity> ResolveAssetAsync(string code, UserAccessContext user, CancellationToken cancellationToken)
     {
         var normalized = code.Trim();
@@ -718,6 +733,25 @@ public sealed class DocumentService : IDocumentService
         }
 
         return faena;
+    }
+
+    private async Task<WorkOrderEntity> ResolveWorkOrderAsync(string number, UserAccessContext user, CancellationToken cancellationToken)
+    {
+        var normalized = number.Trim();
+        var workOrder = await _dbContext.WorkOrders
+            .Include(item => item.Faena)
+            .FirstOrDefaultAsync(item => item.WorkOrderNumber == normalized, cancellationToken);
+        if (workOrder is null)
+        {
+            throw new DomainException($"No existe la OT '{number}'.");
+        }
+
+        if (!CanViewFaena(workOrder.Faena.Code, user))
+        {
+            throw new UnauthorizedAccessException("El usuario no tiene acceso a la OT solicitada.");
+        }
+
+        return workOrder;
     }
 
     private async Task AddNewVersionAsync(
@@ -810,9 +844,10 @@ public sealed class DocumentService : IDocumentService
     {
         var currentVersion = entity.Versions.OrderByDescending(version => version.IsCurrent).ThenByDescending(version => version.VersionNumber).FirstOrDefault();
         var activeAssets = entity.Assets.Where(link => link.IsActive).Select(link => link.Asset.Code).OrderBy(code => code, StringComparer.OrdinalIgnoreCase).ToArray();
+        var activeWorkOrders = entity.WorkOrders.Where(link => link.IsActive).Select(link => link.WorkOrder.WorkOrderNumber).OrderBy(code => code, StringComparer.OrdinalIgnoreCase).ToArray();
         var activeFaenas = entity.Faenas.Where(link => link.IsActive).Select(link => link.Faena.Code).OrderBy(code => code, StringComparer.OrdinalIgnoreCase).ToArray();
-        var entityType = activeAssets.Length > 0 ? DocumentEntityType.Activo : DocumentEntityType.Faena;
-        var entityCodes = activeAssets.Length > 0 ? activeAssets : activeFaenas;
+        var entityType = activeAssets.Length > 0 ? DocumentEntityType.Activo : activeWorkOrders.Length > 0 ? DocumentEntityType.OT : DocumentEntityType.Faena;
+        var entityCodes = activeAssets.Length > 0 ? activeAssets : activeWorkOrders.Length > 0 ? activeWorkOrders : activeFaenas;
         var rawStatus = ParseLifecycle(entity.Status);
         var effectiveStatus = ResolveStatus(rawStatus, entity.ExpiresOn, entity.DocumentType.AlertDays, currentVersion is not null);
         var blocksNow = entity.BlocksAvailability && effectiveStatus == DocumentLifecycleStatus.Vencido;
@@ -895,9 +930,11 @@ public sealed class DocumentService : IDocumentService
     {
         var activeAssets = document.Assets.Where(link => link.IsActive).ToArray();
         var activeFaenas = document.Faenas.Where(link => link.IsActive).ToArray();
+        var activeWorkOrders = document.WorkOrders.Where(link => link.IsActive).ToArray();
         var faenaCodes = activeAssets
             .Select(link => link.Asset.Faena.Code)
             .Concat(activeFaenas.Select(link => link.Faena.Code))
+            .Concat(activeWorkOrders.Select(link => link.WorkOrder.Faena.Code))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -913,7 +950,9 @@ public sealed class DocumentService : IDocumentService
 
         if (!string.IsNullOrWhiteSpace(query.EntidadCodigo))
         {
-            var entityCodes = activeAssets.Select(link => link.Asset.Code).Concat(activeFaenas.Select(link => link.Faena.Code));
+            var entityCodes = activeAssets.Select(link => link.Asset.Code)
+                .Concat(activeFaenas.Select(link => link.Faena.Code))
+                .Concat(activeWorkOrders.Select(link => link.WorkOrder.WorkOrderNumber));
             if (!entityCodes.Any(code => SameCode(code, query.EntidadCodigo)))
             {
                 return false;
@@ -922,7 +961,6 @@ public sealed class DocumentService : IDocumentService
 
         return true;
     }
-
     private static bool MatchesResponse(DocumentResponse document, DocumentQuery query)
     {
         if (!query.IncludeHistorical && document.EsHistorico)
@@ -964,6 +1002,7 @@ public sealed class DocumentService : IDocumentService
         var faenaCodes = document.Assets.Where(link => link.IsActive)
             .Select(link => link.Asset.Faena.Code)
             .Concat(document.Faenas.Where(link => link.IsActive).Select(link => link.Faena.Code))
+            .Concat(document.WorkOrders.Where(link => link.IsActive).Select(link => link.WorkOrder.Faena.Code))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -972,7 +1011,6 @@ public sealed class DocumentService : IDocumentService
             throw new UnauthorizedAccessException("El usuario no tiene acceso al documento solicitado.");
         }
     }
-
     private void EnsureCanManage(UserAccessContext user)
     {
         if (!_authorizationPolicyService.CanManageDocuments(user))
@@ -1144,3 +1182,7 @@ public sealed class DocumentService : IDocumentService
             : DocumentLifecycleStatus.PendienteCarga;
     }
 }
+
+
+
+

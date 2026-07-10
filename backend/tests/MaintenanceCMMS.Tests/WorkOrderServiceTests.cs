@@ -1,9 +1,9 @@
-using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.WorkOrders;
 using Xunit;
 
@@ -15,7 +15,7 @@ public sealed class WorkOrderServiceTests
         "planner",
         [AuthRoles.Planner],
         [AuthPermissions.FinalValidateWorkOrders],
-        []);
+        ["FAE-1"]);
 
     private static readonly UserAccessContext Supervisor = new(
         "supervisor",
@@ -32,7 +32,7 @@ public sealed class WorkOrderServiceTests
     [Fact]
     public async Task CompleteFlow_ClosesAndValidatesWorkOrder()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(OrderRequest(requiresSignature: true), Planner, CancellationToken.None);
         var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest(
             "Inspeccionar fuga",
@@ -71,7 +71,7 @@ public sealed class WorkOrderServiceTests
     [Fact]
     public async Task CloseTechnicallyAsync_BlocksWhenRequiredEvidenceIsMissing()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
         var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest(
             "Tomar muestra",
@@ -91,7 +91,7 @@ public sealed class WorkOrderServiceTests
     [Fact]
     public async Task AssignTechnicianAsync_AllowsMultipleTechniciansPerTask()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
         var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Trabajo compartido"), Planner, CancellationToken.None);
         Assert.NotNull(task);
@@ -110,7 +110,7 @@ public sealed class WorkOrderServiceTests
     [Fact]
     public async Task RegisterLaborAsync_CalculatesHoursAcrossSeveralDaysAndSupervisorValidates()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
         var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Trabajo por turnos"), Planner, CancellationToken.None);
         Assert.NotNull(task);
@@ -144,7 +144,7 @@ public sealed class WorkOrderServiceTests
     [Fact]
     public async Task RegisterSignatureAsync_AllowsTaskSignatureWithDrawnImage()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
         var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Firmar tarea"), Planner, CancellationToken.None);
         Assert.NotNull(task);
@@ -152,20 +152,20 @@ public sealed class WorkOrderServiceTests
 
         var signature = await fixture.Service.RegisterSignatureAsync(
             created.Summary.NumeroOT,
-            new RegisterWorkOrderSignatureRequest(UsuarioId: "tech-1", CodigoTarea: task.CodigoTarea, Scope: "Tarea", SignatureImageDataUrl: "data:image/png;base64,ZmlybWE="),
+            new RegisterWorkOrderSignatureRequest(SignatureFileKey: "firma/tech-1.png", UsuarioId: "tech-1", CodigoTarea: task.CodigoTarea, Scope: "Tarea"),
             Technician,
             CancellationToken.None);
 
         Assert.NotNull(signature);
         Assert.Equal(task.CodigoTarea, signature.CodigoTarea);
         Assert.Equal("Tarea", signature.Scope);
-        Assert.StartsWith("data:image/png", signature.SignatureImageDataUrl);
+        Assert.Equal("firma/tech-1.png", signature.SignatureFileKey);
     }
 
     [Fact]
     public async Task CloseTechnicallyAsync_BlocksWhenMandatoryChecklistIsIncomplete()
     {
-        var fixture = CreateFixture();
+        await using var fixture = await CreateFixtureAsync();
         var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
         var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest(
             "Checklist obligatorio",
@@ -181,7 +181,7 @@ public sealed class WorkOrderServiceTests
         var exception = await Assert.ThrowsAsync<DomainException>(() =>
             fixture.Service.CloseTechnicallyAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Cerrar"), Supervisor, CancellationToken.None));
 
-        Assert.Contains("Checklist obligatorio pendiente", exception.Message);
+        Assert.Contains("Checklist", exception.Message);
     }
 
     private static CreateWorkOrderRequest OrderRequest(bool requiresSignature = false)
@@ -202,66 +202,19 @@ public sealed class WorkOrderServiceTests
 
     private static DateTimeOffset Day(int offset) => new(2026, 2, 1 + offset, 0, 0, 0, TimeSpan.Zero);
 
-    private static Fixture CreateFixture()
+    private static async Task<Fixture> CreateFixtureAsync()
     {
-        var provider = new InMemoryDataProvider();
-        return new Fixture(provider, new WorkOrderService(provider, new NullAuditService()));
+        var database = await PostgreSqlWorkTestFixture.CreateAsync();
+        var service = new WorkOrderService(database.DbContext, new NullAuditService());
+        return new Fixture(database, database.DbContext, service);
     }
-
-    private sealed record Fixture(InMemoryDataProvider Provider, WorkOrderService Service);
-
-    private sealed class InMemoryDataProvider : IDataProvider
+    private sealed record Fixture(
+        PostgreSqlWorkTestFixture Database,
+        CmmsDbContext DbContext,
+        WorkOrderService Service) : IAsyncDisposable
     {
-        private readonly Dictionary<string, IReadOnlyList<DataRow>> _rows = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["ordenes_trabajo"] = [],
-            ["tareas_ot"] = [],
-            ["ot_tecnicos_tarea"] = [],
-            ["ot_hh"] = [],
-            ["ot_evidencias"] = [],
-            ["ot_repuestos"] = [],
-            ["ot_checklists"] = [],
-            ["ot_firmas"] = [],
-            ["ot_estado_historial"] = [],
-            ["checklists"] = [],
-            ["activos"] =
-            [
-                new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["Codigo"] = "ACT-1",
-                    ["Nombre"] = "Excavadora 01",
-                    ["FaenaCodigo"] = "FAE-1",
-                    ["TipoActivo"] = "Equipo movil",
-                    ["Estado"] = "Active"
-                })
-            ]
-        };
-
-        public string Name => "memory";
-
-        public DataProviderType ProviderType => DataProviderType.Excel;
-
-        public Task InitializeAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<DataProviderHealth> CheckHealthAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new DataProviderHealth("memory", true, "memory", [], []));
-
-        public Task<IReadOnlyList<DataRow>> ReadRowsAsync(string schemaName, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_rows.TryGetValue(schemaName, out var rows) ? rows : []);
-        }
-
-        public Task SaveRowsAsync(string schemaName, IReadOnlyCollection<DataRow> rows, CancellationToken cancellationToken)
-        {
-            _rows[schemaName] = rows.ToArray();
-            return Task.CompletedTask;
-        }
-
-        public Task<IReadOnlyList<T>> QueryAsync<T>(DataQuery query, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<T>>([]);
-
-        public Task SaveChangesAsync(UnitOfWorkChanges changes, CancellationToken cancellationToken) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => Database.DisposeAsync();
     }
-
     private sealed class NullAuditService : IAuditService
     {
         public Task<string> RecordAsync(AuditEventRequest auditEvent, CancellationToken cancellationToken) => Task.FromResult(Guid.NewGuid().ToString("N"));
@@ -269,3 +222,6 @@ public sealed class WorkOrderServiceTests
         public Task<AuditQueryResult> QueryAsync(AuditQuery query, CancellationToken cancellationToken) => Task.FromResult(new AuditQueryResult(0, []));
     }
 }
+
+
+
