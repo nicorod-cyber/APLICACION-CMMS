@@ -1,12 +1,12 @@
-using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Auditing;
-using MaintenanceCMMS.Infrastructure.Data.Excel;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 using MaintenanceCMMS.Infrastructure.Inventory;
-using MaintenanceCMMS.Infrastructure.Options;
 using MaintenanceCMMS.Infrastructure.Security;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -277,7 +277,7 @@ public sealed class InventoryServiceTests
         return new CreateWarehouseRequest(
             code,
             $"Bodega {code}",
-            "F001",
+            "FAE-1",
             type,
             "Patio norte",
             ["Rack A"]);
@@ -285,31 +285,18 @@ public sealed class InventoryServiceTests
 
     private static async Task<InventoryFixture> CreateFixtureAsync()
     {
-        var excelPath = Path.Combine(Path.GetTempPath(), "maintenance-cmms-inventory-tests", Guid.NewGuid().ToString("N"), "excel");
-        var provider = new ExcelDataProvider(
-            new ExcelSchemaRegistry(),
-            Options.Create(new DataProviderSettings
-            {
-                Provider = "Excel",
-                ExcelPath = excelPath
-            }));
-
-        await provider.InitializeAsync(CancellationToken.None);
-        await provider.SaveRowsAsync("faenas", [
-            new DataRow(new Dictionary<string, string?>
-            {
-                ["Codigo"] = "F001",
-                ["Nombre"] = "Faena Norte",
-                ["Empresa"] = "Empresa"
-            })
-        ], CancellationToken.None);
-
-        var auditService = new ExcelAuditService(provider, new AuditContextAccessor());
-        var service = new InventoryService(provider, auditService, new AuthorizationPolicyService());
-        return new InventoryFixture(provider, service);
+        var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        var db = fixture.DbContext;
+        await db.Database.ExecuteSqlRawAsync("CREATE SEQUENCE IF NOT EXISTS spare_part_number_seq START WITH 1; CREATE SEQUENCE IF NOT EXISTS stock_movement_number_seq START WITH 1; CREATE SEQUENCE IF NOT EXISTS stock_reservation_number_seq START WITH 1; CREATE SEQUENCE IF NOT EXISTS stock_transfer_number_seq START WITH 1;");
+        foreach (var type in Enum.GetNames<WarehouseType>()) db.Add(new InventoryCatalogEntity { Category = "WarehouseType", Code = type, Name = type });
+        foreach (var type in Enum.GetNames<StockMovementType>()) db.Add(new InventoryCatalogEntity { Category = "MovementType", Code = type, Name = type });
+        db.Add(new InventoryCatalogEntity { Category = "Unit", Code = "UN", Name = "UN" });
+        db.Add(new InventoryCatalogEntity { Category = "SparePartCategory", Code = "Chancadores", Name = "Chancadores" });
+        await db.SaveChangesAsync();
+        var service = new InventoryService(db, new PostgreSqlAuditService(db, new AuditContextAccessor()), new AuthorizationPolicyService());
+        return new InventoryFixture(fixture, service);
     }
-
-    private sealed record InventoryFixture(
-        ExcelDataProvider Provider,
-        IInventoryService Service);
+    private sealed record InventoryFixture(PostgreSqlWorkTestFixture Provider, IInventoryService Service);
 }
+
+
