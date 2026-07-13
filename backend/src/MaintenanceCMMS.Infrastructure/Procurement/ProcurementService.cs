@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using MaintenanceCMMS.Application.Abstractions.Data;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Inventory;
@@ -18,16 +19,16 @@ public sealed class ProcurementService : IProcurementService
     private const string ReceiptsSchema = "recepciones_abastecimiento";
     private const string MaterialRequestsSchema = "solicitudes_repuestos";
 
-    private readonly IDataProvider _dataProvider;
+    private readonly CmmsDbContext _dbContext;
     private readonly IInventoryService _inventoryService;
     private readonly IAuditService _auditService;
 
     public ProcurementService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IInventoryService inventoryService,
         IAuditService auditService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _inventoryService = inventoryService;
         _auditService = auditService;
     }
@@ -38,7 +39,7 @@ public sealed class ProcurementService : IProcurementService
         CancellationToken cancellationToken)
     {
         EnsureCanView(user);
-        return (await _dataProvider.ReadRowsAsync(SuppliersSchema, cancellationToken))
+        return (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken))
             .Select(ToSupplier)
             .Where(item => query.IncludeInactive || item.Activo)
             .Where(item => string.IsNullOrWhiteSpace(query.Search) || Contains(item.Rut, query.Search) || Contains(item.Nombre, query.Search) || Contains(item.Contacto, query.Search))
@@ -52,7 +53,7 @@ public sealed class ProcurementService : IProcurementService
         CancellationToken cancellationToken)
     {
         EnsureCanView(user);
-        return (await _dataProvider.ReadRowsAsync(SuppliersSchema, cancellationToken))
+        return (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken))
             .Select(ToSupplier)
             .FirstOrDefault(item => Same(item.Rut, rut));
     }
@@ -65,7 +66,7 @@ public sealed class ProcurementService : IProcurementService
         EnsureCanManage(user);
         ValidateSupplier(request);
 
-        var rows = (await _dataProvider.ReadRowsAsync(SuppliersSchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken)).ToList();
         if (rows.Any(row => Same(row.GetValue("Rut"), request.Rut)))
         {
             throw new DomainException($"Ya existe el proveedor '{request.Rut}'.");
@@ -73,7 +74,7 @@ public sealed class ProcurementService : IProcurementService
 
         var rowToCreate = SupplierRow(request);
         rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(SuppliersSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(SuppliersSchema, rows, cancellationToken);
         await RecordAuditAsync(user, "procurement.supplier_created", "Supplier", request.Rut, null, rowToCreate, null, request.Observaciones, cancellationToken);
         return ToSupplier(rowToCreate);
     }
@@ -87,7 +88,7 @@ public sealed class ProcurementService : IProcurementService
         EnsureCanManage(user);
         ValidateSupplier(request);
 
-        var rows = (await _dataProvider.ReadRowsAsync(SuppliersSchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken)).ToList();
         var index = rows.FindIndex(row => Same(row.GetValue("Rut"), rut));
         if (index < 0)
         {
@@ -102,7 +103,7 @@ public sealed class ProcurementService : IProcurementService
         var previous = rows[index];
         var updated = SupplierRow(request);
         rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(SuppliersSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(SuppliersSchema, rows, cancellationToken);
         await RecordAuditAsync(user, "procurement.supplier_updated", "Supplier", request.Rut, previous, updated, null, request.Observaciones, cancellationToken);
         return ToSupplier(updated);
     }
@@ -115,7 +116,7 @@ public sealed class ProcurementService : IProcurementService
         EnsureCanView(user);
         var suppliers = await SupplierDictionaryAsync(cancellationToken);
 
-        return (await _dataProvider.ReadRowsAsync(RequestsSchema, cancellationToken))
+        return (await _dbContext.ReadOperationalRowsAsync(RequestsSchema, cancellationToken))
             .Select(row => ToRequest(row, suppliers))
             .Where(item => query.IncludeClosed || item.Estado is not (ProcurementRequestStatus.Cerrada or ProcurementRequestStatus.Cancelada))
             .Where(item => !query.Status.HasValue || item.Estado == query.Status)
@@ -136,7 +137,7 @@ public sealed class ProcurementService : IProcurementService
     {
         EnsureCanView(user);
         var suppliers = await SupplierDictionaryAsync(cancellationToken);
-        var row = (await _dataProvider.ReadRowsAsync(RequestsSchema, cancellationToken))
+        var row = (await _dbContext.ReadOperationalRowsAsync(RequestsSchema, cancellationToken))
             .FirstOrDefault(item => Same(item.GetValue("SolicitudId"), id));
         if (row is null)
         {
@@ -172,7 +173,7 @@ public sealed class ProcurementService : IProcurementService
         ValidateRequired(request.Motivo, nameof(request.Motivo));
         EnsurePositive(quantity);
 
-        var rows = (await _dataProvider.ReadRowsAsync(RequestsSchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(RequestsSchema, cancellationToken)).ToList();
         var id = NextRequestId(rows);
         var fechaSolicitudTecnica = request.FechaSolicitudTecnica
             ?? ParseDate(materialRequest?.GetValue("SolicitadoEnUtc"))
@@ -209,7 +210,7 @@ public sealed class ProcurementService : IProcurementService
         });
 
         rows.Add(row);
-        await _dataProvider.SaveRowsAsync(RequestsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(RequestsSchema, rows, cancellationToken);
         await RecordAuditAsync(user, "procurement.request_created", "ProcurementRequest", id, null, row, faena, request.Motivo, cancellationToken);
         return ToRequest(row, await SupplierDictionaryAsync(cancellationToken));
     }
@@ -244,7 +245,7 @@ public sealed class ProcurementService : IProcurementService
             values["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow);
             values["Observaciones"] = Append(values.GetValueOrDefault("Observaciones"), $"OC {request.OcNumero}: {request.Reason}");
 
-            var purchaseOrderRows = (await _dataProvider.ReadRowsAsync(PurchaseOrdersSchema, cancellationToken)).ToList();
+            var purchaseOrderRows = (await _dbContext.ReadOperationalRowsAsync(PurchaseOrdersSchema, cancellationToken)).ToList();
             var purchaseOrderRow = PurchaseOrderRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
                 ["OrdenCompraId"] = $"OCREF-{Guid.NewGuid():N}"[..16].ToUpperInvariant(),
@@ -262,7 +263,7 @@ public sealed class ProcurementService : IProcurementService
                 ["CreadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow)
             });
             purchaseOrderRows.Add(purchaseOrderRow);
-            await _dataProvider.SaveRowsAsync(PurchaseOrdersSchema, purchaseOrderRows, cancellationToken);
+            await _dbContext.SaveOperationalRowsAsync(PurchaseOrdersSchema, purchaseOrderRows, cancellationToken);
             return ("procurement.purchase_order_linked", request.Reason);
         });
 
@@ -343,7 +344,7 @@ public sealed class ProcurementService : IProcurementService
             values["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow);
             values["Observaciones"] = Append(values.GetValueOrDefault("Observaciones"), $"Recepcion {request.CantidadRecibida} {current.Unidad}: {request.Reason}");
 
-            var receiptRows = (await _dataProvider.ReadRowsAsync(ReceiptsSchema, cancellationToken)).ToList();
+            var receiptRows = (await _dbContext.ReadOperationalRowsAsync(ReceiptsSchema, cancellationToken)).ToList();
             receiptRows.Add(ReceiptRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
                 ["RecepcionId"] = $"REC-{Guid.NewGuid():N}"[..16].ToUpperInvariant(),
@@ -365,7 +366,7 @@ public sealed class ProcurementService : IProcurementService
                 ["UsuarioId"] = user.UserId,
                 ["Motivo"] = request.Reason
             }));
-            await _dataProvider.SaveRowsAsync(ReceiptsSchema, receiptRows, cancellationToken);
+            await _dbContext.SaveOperationalRowsAsync(ReceiptsSchema, receiptRows, cancellationToken);
             return ("procurement.reception_registered", request.Reason);
         });
     }
@@ -416,7 +417,7 @@ public sealed class ProcurementService : IProcurementService
             values["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow);
             values["Observaciones"] = Append(values.GetValueOrDefault("Observaciones"), $"Entrega {request.CantidadEntregada} {current.Unidad}: {request.Reason}");
 
-            var receiptRows = (await _dataProvider.ReadRowsAsync(ReceiptsSchema, cancellationToken)).ToList();
+            var receiptRows = (await _dbContext.ReadOperationalRowsAsync(ReceiptsSchema, cancellationToken)).ToList();
             receiptRows.Add(ReceiptRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
                 ["RecepcionId"] = $"DESP-{Guid.NewGuid():N}"[..16].ToUpperInvariant(),
@@ -435,7 +436,7 @@ public sealed class ProcurementService : IProcurementService
                 ["UsuarioId"] = user.UserId,
                 ["Motivo"] = request.Reason
             }));
-            await _dataProvider.SaveRowsAsync(ReceiptsSchema, receiptRows, cancellationToken);
+            await _dbContext.SaveOperationalRowsAsync(ReceiptsSchema, receiptRows, cancellationToken);
             return ("procurement.delivery_registered", request.Reason);
         });
     }
@@ -447,7 +448,7 @@ public sealed class ProcurementService : IProcurementService
         Func<ProcurementRequestResponse, Dictionary<string, string?>, Task<(string Action, string? Reason)>> mutate)
     {
         var suppliers = await SupplierDictionaryAsync(cancellationToken);
-        var rows = (await _dataProvider.ReadRowsAsync(RequestsSchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(RequestsSchema, cancellationToken)).ToList();
         var index = rows.FindIndex(row => Same(row.GetValue("SolicitudId"), id));
         if (index < 0)
         {
@@ -461,21 +462,21 @@ public sealed class ProcurementService : IProcurementService
         var (action, reason) = await mutate(current, values);
         var updated = RequestRow(values);
         rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(RequestsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(RequestsSchema, rows, cancellationToken);
         await RecordAuditAsync(user, action, "ProcurementRequest", current.SolicitudId, previous, updated, current.FaenaCodigo, reason, cancellationToken, AuditSeverity.High);
         return ToRequest(updated, await SupplierDictionaryAsync(cancellationToken));
     }
 
     private async Task<Dictionary<string, SupplierResponse>> SupplierDictionaryAsync(CancellationToken cancellationToken)
     {
-        return (await _dataProvider.ReadRowsAsync(SuppliersSchema, cancellationToken))
+        return (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken))
             .Select(ToSupplier)
             .ToDictionary(item => item.Rut, StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task<DataRow?> FindMaterialRequestAsync(string requestNumber, CancellationToken cancellationToken)
     {
-        return (await _dataProvider.ReadRowsAsync(MaterialRequestsSchema, cancellationToken))
+        return (await _dbContext.ReadOperationalRowsAsync(MaterialRequestsSchema, cancellationToken))
             .FirstOrDefault(row => Same(row.GetValue("NumeroSolicitud"), requestNumber));
     }
 

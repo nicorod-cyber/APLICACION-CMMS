@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using MaintenanceCMMS.Application.Abstractions.Data;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Scheduling;
@@ -18,16 +19,16 @@ public sealed class SchedulingService : ISchedulingService
     private const string WorkOrdersSchema = "ordenes_trabajo";
     private const string AssetsSchema = "activos";
 
-    private readonly IDataProvider _dataProvider;
+    private readonly CmmsDbContext _dbContext;
     private readonly IWorkOrderService _workOrderService;
     private readonly IAuditService _auditService;
 
     public SchedulingService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IWorkOrderService workOrderService,
         IAuditService auditService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _workOrderService = workOrderService;
         _auditService = auditService;
     }
@@ -63,7 +64,7 @@ public sealed class SchedulingService : ISchedulingService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
-        var rows = await _dataProvider.ReadRowsAsync(WorkshopsSchema, cancellationToken);
+        var rows = await _dbContext.ReadOperationalRowsAsync(WorkshopsSchema, cancellationToken);
         return rows
             .Select(ToWorkshop)
             .Where(item => item.Activo)
@@ -89,7 +90,7 @@ public sealed class SchedulingService : ISchedulingService
         }
 
         EnsureFaenaAccess(user, request.FaenaCodigo);
-        var rows = (await _dataProvider.ReadRowsAsync(WorkshopsSchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(WorkshopsSchema, cancellationToken)).ToList();
         var index = rows.FindIndex(row => Same(row.GetValue("TallerCodigo"), request.TallerCodigo));
         var previous = index >= 0 ? rows[index] : null;
         var updated = WorkshopRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
@@ -113,7 +114,7 @@ public sealed class SchedulingService : ISchedulingService
             rows.Add(updated);
         }
 
-        await _dataProvider.SaveRowsAsync(WorkshopsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(WorkshopsSchema, rows, cancellationToken);
         await RecordAuditAsync(user, previous is null ? "scheduling.workshop_created" : "scheduling.workshop_updated", request.TallerCodigo, previous, updated, request.FaenaCodigo, request.Reason, cancellationToken);
         return ToWorkshop(updated);
     }
@@ -186,7 +187,7 @@ public sealed class SchedulingService : ISchedulingService
             .ToArray();
 
         await _workOrderService.ScheduleAsync(numeroOt, new ScheduleWorkOrderRequest(request.FechaInicio, request.Reason, request.FechaFin), user, cancellationToken);
-        await _dataProvider.SaveRowsAsync(ScheduleSchema, scheduleRows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(ScheduleSchema, scheduleRows, cancellationToken);
 
         var alerts = warnings.Length > 0
             ? await SaveGeneratedAlertsAsync(candidateData, candidateItems, loads, user, cancellationToken)
@@ -210,7 +211,7 @@ public sealed class SchedulingService : ISchedulingService
             throw new DomainException("Una OT no puede depender de si misma.");
         }
 
-        var rows = (await _dataProvider.ReadRowsAsync(DependenciesSchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(DependenciesSchema, cancellationToken)).ToList();
         if (rows.Any(row => Same(row.GetValue("PredecessorNumeroOT"), request.PredecessorNumeroOT) && Same(row.GetValue("SuccessorNumeroOT"), request.SuccessorNumeroOT)))
         {
             throw new DomainException("La dependencia ya existe.");
@@ -226,7 +227,7 @@ public sealed class SchedulingService : ISchedulingService
         });
 
         rows.Add(rowToCreate);
-        await _dataProvider.SaveRowsAsync(DependenciesSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(DependenciesSchema, rows, cancellationToken);
         await RecordAuditAsync(user, "scheduling.dependency_added", rowToCreate.GetValue("DependenciaId") ?? string.Empty, null, rowToCreate, null, request.Motivo, cancellationToken);
         return new ScheduleDependencyResponse(
             rowToCreate.GetValue("DependenciaId") ?? string.Empty,
@@ -274,19 +275,19 @@ public sealed class SchedulingService : ISchedulingService
             }
         }
 
-        await _dataProvider.SaveRowsAsync(AlertsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(AlertsSchema, rows, cancellationToken);
         return alerts;
     }
 
     private async Task<SchedulingData> ReadDataAsync(CancellationToken cancellationToken)
     {
         return new SchedulingData(
-            await _dataProvider.ReadRowsAsync(WorkshopsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(ScheduleSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(DependenciesSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(AlertsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken));
+            await _dbContext.ReadOperationalRowsAsync(WorkshopsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(ScheduleSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(DependenciesSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(AlertsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(WorkOrdersSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(AssetsSchema, cancellationToken));
     }
 
     private static IReadOnlyCollection<ScheduleItemResponse> BuildItems(SchedulingData data, IReadOnlyCollection<WorkshopResponse> workshops)

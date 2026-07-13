@@ -3,6 +3,7 @@ using System;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
 {
     [DbContext(typeof(CmmsDbContext))]
-    partial class CmmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260713142806_MaterialRequestsPostgreSql")]
+    partial class MaterialRequestsPostgreSql
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2261,46 +2264,6 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
                         .IsUnique();
 
                     b.ToTable("notificacion_destinatarios", (string)null);
-                });
-
-            modelBuilder.Entity("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.OperationalDataSetEntity", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)")
-                        .HasColumnName("codigo");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("created_at_utc");
-
-                    b.Property<string>("Payload")
-                        .IsRequired()
-                        .HasColumnType("jsonb")
-                        .HasColumnName("contenido");
-
-                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("updated_at_utc");
-
-                    b.Property<uint>("Version")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("xid")
-                        .HasColumnName("xmin");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Code")
-                        .IsUnique();
-
-                    b.ToTable("conjuntos_datos_operacionales", (string)null);
                 });
 
             modelBuilder.Entity("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.PdfTemplateEntity", b =>

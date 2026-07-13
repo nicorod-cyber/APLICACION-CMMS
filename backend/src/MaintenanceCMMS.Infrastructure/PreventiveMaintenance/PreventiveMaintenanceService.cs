@@ -1,5 +1,6 @@
 using System.Globalization;
 using MaintenanceCMMS.Application.Abstractions.Data;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Application.Alerts;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
@@ -20,18 +21,18 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
     private const decimal AnomalousHourJump = 500;
     private const decimal AnomalousKmJump = 5000;
 
-    private readonly IDataProvider _dataProvider;
+    private readonly CmmsDbContext _dbContext;
     private readonly IWorkOrderService _workOrderService;
     private readonly IAlertService _alertService;
     private readonly IAuditService _auditService;
 
     public PreventiveMaintenanceService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IWorkOrderService workOrderService,
         IAlertService alertService,
         IAuditService auditService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _workOrderService = workOrderService;
         _alertService = alertService;
         _auditService = auditService;
@@ -133,7 +134,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
             rows.Add(row);
         }
 
-        await _dataProvider.SaveRowsAsync(PlansSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(PlansSchema, rows, cancellationToken);
         await RecordAuditAsync(user, previous is null ? "preventive.plan_created" : "preventive.plan_updated", request.Codigo, previous, row, request.Reason, cancellationToken);
         return ToPlanResponse(row, assetRow);
     }
@@ -215,7 +216,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
 
         var rows = data.Readings.ToList();
         rows.Add(row);
-        await _dataProvider.SaveRowsAsync(ReadingsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(ReadingsSchema, rows, cancellationToken);
         await RecordAuditAsync(user, "preventive.reading_registered", row.GetValue("ReadingId")!, null, row, request.MotivoCorreccion, cancellationToken);
         return ToReadingResponse(row, asset);
     }
@@ -377,7 +378,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         var updated = PlanRow(values);
         rows[index] = updated;
 
-        await _dataProvider.SaveRowsAsync(PlansSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(PlansSchema, rows, cancellationToken);
         await AddHistoryAsync(planCode, previous.GetValue("ActivoCodigo") ?? string.Empty, ParseStatus(previous.GetValue("Estado")), PreventiveStatus.Reprogramado, user, request.Reason!, null, cancellationToken);
         await RecordAuditAsync(user, "preventive.plan_reprogrammed", planCode, previous, updated, request.Reason, cancellationToken);
         return ToPlanResponse(updated, assetRow);
@@ -460,7 +461,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
             planResponses.Add(ToPlanResponse(planRow, FindAsset(data.Assets, planRow.GetValue("ActivoCodigo"))));
         }
 
-        var history = (await _dataProvider.ReadRowsAsync(HistorySchema, cancellationToken))
+        var history = (await _dbContext.ReadOperationalRowsAsync(HistorySchema, cancellationToken))
             .Select(ToHistoryResponse)
             .OrderByDescending(item => item.FechaUtc)
             .Take(200)
@@ -571,7 +572,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
 
     private async Task SaveEvaluationAsync(PreventiveDueResponse item, CancellationToken cancellationToken)
     {
-        var rows = (await _dataProvider.ReadRowsAsync(EvaluationsSchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(EvaluationsSchema, cancellationToken)).ToList();
         rows.Add(new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["EvaluacionId"] = NewId("EVAL"),
@@ -587,7 +588,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
             ["Mensaje"] = item.Mensaje,
             ["FechaEvaluacionUtc"] = FormatDate(DateTimeOffset.UtcNow)
         }));
-        await _dataProvider.SaveRowsAsync(EvaluationsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(EvaluationsSchema, rows, cancellationToken);
     }
 
     private async Task UpdatePlanStateAsync(
@@ -600,7 +601,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         CancellationToken cancellationToken,
         bool updatePlanOnlyWhenSpecificAsset = false)
     {
-        var rows = (await _dataProvider.ReadRowsAsync(PlansSchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(PlansSchema, cancellationToken)).ToList();
         var index = rows.FindIndex(row => Same(row.GetValue("Codigo"), planCode));
         if (index < 0)
         {
@@ -621,7 +622,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         values["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow);
         var updated = PlanRow(values);
         rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(PlansSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(PlansSchema, rows, cancellationToken);
         if (previousStatus != nextStatus)
         {
             await AddHistoryAsync(planCode, assetCode, previousStatus, nextStatus, user, reason, numeroOt, cancellationToken);
@@ -637,7 +638,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         string? numeroOt,
         CancellationToken cancellationToken)
     {
-        var evaluations = await _dataProvider.ReadRowsAsync(EvaluationsSchema, cancellationToken);
+        var evaluations = await _dbContext.ReadOperationalRowsAsync(EvaluationsSchema, cancellationToken);
         var previous = evaluations
             .Where(row => Same(row.GetValue("PlanCodigo"), planCode) && Same(row.GetValue("ActivoCodigo"), assetCode))
             .OrderByDescending(row => ParseDate(row.GetValue("FechaEvaluacionUtc")) ?? DateTimeOffset.MinValue)
@@ -660,7 +661,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         string? numeroOt,
         CancellationToken cancellationToken)
     {
-        var rows = (await _dataProvider.ReadRowsAsync(HistorySchema, cancellationToken)).ToList();
+        var rows = (await _dbContext.ReadOperationalRowsAsync(HistorySchema, cancellationToken)).ToList();
         rows.Add(new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["HistoryId"] = NewId("HIS"),
@@ -673,7 +674,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
             ["Motivo"] = reason,
             ["NumeroOT"] = NormalizeCode(numeroOt)
         }));
-        await _dataProvider.SaveRowsAsync(HistorySchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(HistorySchema, rows, cancellationToken);
     }
 
     private async Task<bool> GenerateAlertSafeAsync(
@@ -715,11 +716,11 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
     private async Task<PreventiveData> ReadDataAsync(CancellationToken cancellationToken)
     {
         return new PreventiveData(
-            await _dataProvider.ReadRowsAsync(PlansSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(ReadingsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(EvaluationsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken));
+            await _dbContext.ReadOperationalRowsAsync(PlansSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(ReadingsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(EvaluationsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(AssetsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(WorkOrdersSchema, cancellationToken));
     }
 
     private IEnumerable<AssetInfo> MatchAssets(DataRow planRow, IReadOnlyCollection<DataRow> assets)

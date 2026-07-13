@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using MaintenanceCMMS.Application.Abstractions.Data;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Availability;
@@ -20,12 +21,12 @@ public sealed class AvailabilityService : IAvailabilityService
     private const string DocumentsSchema = "documentos";
     private const string WorkOrdersSchema = "ordenes_trabajo";
 
-    private readonly IDataProvider _dataProvider;
+    private readonly CmmsDbContext _dbContext;
     private readonly IAuditService _auditService;
 
-    public AvailabilityService(IDataProvider dataProvider, IAuditService auditService)
+    public AvailabilityService(CmmsDbContext dbContext, IAuditService auditService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _auditService = auditService;
     }
 
@@ -167,7 +168,7 @@ public sealed class AvailabilityService : IAvailabilityService
             rows.Add(rowToSave);
         }
 
-        await _dataProvider.SaveRowsAsync(ContractsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(ContractsSchema, rows, cancellationToken);
         await RecordAuditAsync(user, previous is null ? "availability.contract_created" : "availability.contract_updated", request.ContractCode, previous, rowToSave, request.Reason, request.FaenaCodigo, cancellationToken);
 
         return ToContract(rowToSave) with { Assets = BuildAssignmentResponses(data with { Contracts = rows }, request.ContractCode) };
@@ -218,7 +219,7 @@ public sealed class AvailabilityService : IAvailabilityService
             rows.Add(rowToSave);
         }
 
-        await _dataProvider.SaveRowsAsync(AssignmentsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(AssignmentsSchema, rows, cancellationToken);
         await RecordAuditAsync(user, previous is null ? "availability.asset_assigned" : "availability.asset_assignment_updated", request.ActivoCodigo, previous, rowToSave, request.Reason, contract.FaenaCodigo, cancellationToken);
         return ToAssignmentResponse(rowToSave, asset);
     }
@@ -282,7 +283,7 @@ public sealed class AvailabilityService : IAvailabilityService
 
         var rows = data.Events.ToList();
         rows.Add(row);
-        await _dataProvider.SaveRowsAsync(EventsSchema, rows, cancellationToken);
+        await _dbContext.SaveOperationalRowsAsync(EventsSchema, rows, cancellationToken);
         await RecordAuditAsync(user, "availability.event_registered", row.GetValue("EventId")!, null, row, request.Comentario, contract.FaenaCodigo, cancellationToken);
         return ToEventResponse(row, asset);
     }
@@ -474,13 +475,13 @@ public sealed class AvailabilityService : IAvailabilityService
     private async Task<AvailabilityData> ReadDataAsync(CancellationToken cancellationToken)
     {
         return new AvailabilityData(
-            await _dataProvider.ReadRowsAsync(ContractsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(AssignmentsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(EventsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(AssetsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(FaenasSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(DocumentsSchema, cancellationToken),
-            await _dataProvider.ReadRowsAsync(WorkOrdersSchema, cancellationToken));
+            await _dbContext.ReadOperationalRowsAsync(ContractsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(AssignmentsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(EventsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(AssetsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(FaenasSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(DocumentsSchema, cancellationToken),
+            await _dbContext.ReadOperationalRowsAsync(WorkOrdersSchema, cancellationToken));
     }
 
     private IReadOnlyCollection<AvailabilityContractAssetResponse> BuildAssignmentResponses(
