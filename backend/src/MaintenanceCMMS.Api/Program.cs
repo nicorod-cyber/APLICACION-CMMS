@@ -11,6 +11,7 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Availability;
 using MaintenanceCMMS.Application.Documents;
+using MaintenanceCMMS.Application.Costs;
 using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Application.Inventory;
@@ -3929,6 +3930,26 @@ api.MapGet("/system/excel-schemas", (IExcelSchemaRegistry schemaRegistry) =>
     })
     .WithName("GetExcelSchemas");
 
+var costsApi = api.MapGroup("/costs").RequireAuthorization();
+costsApi.MapGet("/", async (DateTimeOffset? desde, DateTimeOffset? hasta, string? otNumero, string? activoCodigo, string? faenaCodigo, string? contratoCodigo, string? proveedorRut, CostCategory? categoria, ClaimsPrincipal user, ICostManagementService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.ListAsync(new CostQuery(desde,hasta,otNumero,activoCodigo,faenaCodigo,contratoCodigo,proveedorRut,categoria), UserAccessContext.FromClaims(user), ct)); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message,statusCode:403); }
+});
+costsApi.MapPost("/", async (CreateCostRequest request, ClaimsPrincipal user, ICostManagementService service, CancellationToken ct) =>
+{
+    try { var result=await service.CreateAsync(request,UserAccessContext.FromClaims(user),ct); return Results.Created($"/api/costs/{result.Numero}",result); }
+    catch (DomainException ex) { return Results.BadRequest(new { message=ex.Message }); } catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}
+});
+costsApi.MapPut("/{number}", async (string number, UpdateCostRequest request, ClaimsPrincipal user, ICostManagementService service, CancellationToken ct) =>
+{ try { var result=await service.UpdateAsync(number,request,UserAccessContext.FromClaims(user),ct);return result is null?Results.NotFound():Results.Ok(result); } catch(DomainException ex){return Results.BadRequest(new{message=ex.Message});}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);} });
+costsApi.MapGet("/dashboard", async (DateTimeOffset? desde,DateTimeOffset? hasta,string? faenaCodigo,ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=> {try{return Results.Ok(await service.DashboardAsync(new CostQuery(desde,hasta,FaenaCodigo:faenaCodigo),UserAccessContext.FromClaims(user),ct));}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
+costsApi.MapGet("/work-orders/{number}",async(string number,ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{return Results.Ok(await service.GetWorkOrderCostsAsync(number,UserAccessContext.FromClaims(user),ct));}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
+costsApi.MapGet("/labor-rates",async(ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{return Results.Ok(await service.ListRatesAsync(UserAccessContext.FromClaims(user),ct));}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
+costsApi.MapPut("/labor-rates",async(UpsertLaborRateRequest request,ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{return Results.Ok(await service.UpsertRateAsync(request,UserAccessContext.FromClaims(user),ct));}catch(DomainException ex){return Results.BadRequest(new{message=ex.Message});}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
+costsApi.MapGet("/payment-statements",async(ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{return Results.Ok(await service.ListPaymentsAsync(UserAccessContext.FromClaims(user),ct));}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
+costsApi.MapPost("/payment-statements",async(CreatePaymentStatementRequest request,ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{return Results.Ok(await service.CreatePaymentAsync(request,UserAccessContext.FromClaims(user),ct));}catch(DomainException ex){return Results.BadRequest(new{message=ex.Message});}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
+costsApi.MapPost("/payment-statements/{number}/status",async(string number,ChangePaymentStatusRequest request,ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{var result=await service.ChangePaymentStatusAsync(number,request,UserAccessContext.FromClaims(user),ct);return result is null?Results.NotFound():Results.Ok(result);}catch(DomainException ex){return Results.BadRequest(new{message=ex.Message});}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
 app.Run();
 
 static string GetActorId(ClaimsPrincipal user)

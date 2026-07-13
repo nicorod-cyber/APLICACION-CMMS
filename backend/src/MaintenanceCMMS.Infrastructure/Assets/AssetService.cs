@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
@@ -370,7 +370,8 @@ public sealed class AssetService : IAssetService
             throw new UnauthorizedAccessException("El usuario no tiene permiso para ver costos.");
         }
 
-        return new AssetCostSummary(asset.Codigo, 0, "CLP", []);
+        var costs = await _dbContext.CostEntries.AsNoTracking().Where(item => item.Asset!.Code == asset.Codigo).OrderByDescending(item => item.OccurredAtUtc).Select(item => new AssetCostLine("Costos", item.Category, item.Amount, item.Currency, item.CostNumber)).ToArrayAsync(cancellationToken);
+        return new AssetCostSummary(asset.Codigo, costs.Sum(item => item.Amount), "CLP", costs);
     }
 
     public async Task<AssetAvailabilityResponse?> GetAvailabilityAsync(

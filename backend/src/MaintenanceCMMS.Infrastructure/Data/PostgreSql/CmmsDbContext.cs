@@ -64,6 +64,9 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<NotificationRecipientEntity> NotificationRecipients => Set<NotificationRecipientEntity>();
     public DbSet<NotificationAttemptEntity> NotificationAttempts => Set<NotificationAttemptEntity>();
     public DbSet<OperationalDataSetEntity> OperationalDataSets => Set<OperationalDataSetEntity>();
+    public DbSet<LaborRateEntity> LaborRates => Set<LaborRateEntity>();
+    public DbSet<CostEntryEntity> CostEntries => Set<CostEntryEntity>();
+    public DbSet<PaymentStatementEntity> PaymentStatements => Set<PaymentStatementEntity>();
     public DbSet<MaterialRequestEntity> MaterialRequests => Set<MaterialRequestEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)

@@ -4,6 +4,7 @@ import {
   Bell,
   Boxes,
   CalendarDays,
+  DollarSign,
   ClipboardList,
   FileText,
   GitBranch,

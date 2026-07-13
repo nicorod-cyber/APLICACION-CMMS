@@ -8,6 +8,7 @@ import { AlertsPage } from "../features/alerts/AlertsPage";
 import { AuditPage } from "../features/audit/AuditPage";
 import { AvailabilityPage } from "../features/availability/AvailabilityPage";
 import { DocumentsPage } from "../features/documents/DocumentsPage";
+import { CostsPage } from "../features/costs/CostsPage";
 import { ImportsPage } from "../features/imports/ImportsPage";
 import { InventoryPage } from "../features/inventory/InventoryPage";
 import { MaterialRequestsPage } from "../features/material-requests/MaterialRequestsPage";
@@ -108,6 +109,8 @@ export const router = createBrowserRouter([
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <AvailabilityPage />
               </ProtectedRoute>
+            ) : item.path === "/costos" ? (
+              <ProtectedRoute roles={item.roles} permissions={item.permissions}><CostsPage /></ProtectedRoute>
             ) : item.path === "/programacion" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <SchedulingPage />
