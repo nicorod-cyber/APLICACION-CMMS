@@ -57,6 +57,10 @@ public static class DependencyInjection
         IConfiguration configuration)
     {
         var dataProviderSettings = ResolveDataProviderSettings(configuration);
+        if (string.IsNullOrWhiteSpace(dataProviderSettings.PostgreSqlConnectionString))
+        {
+            throw new InvalidOperationException("PostgreSQL connection string is required.");
+        }
 
         services.AddSingleton(dataProviderSettings);
         services.Configure<DataProviderSettings>(options =>
@@ -169,7 +173,7 @@ public static class DependencyInjection
             provider = configuration["DataProvider"];
         }
 
-        provider = string.IsNullOrWhiteSpace(provider) ? "Excel" : provider;
+        provider = string.IsNullOrWhiteSpace(provider) ? "PostgreSql" : provider;
 
         var legacyExcelPath = configuration["DataProviders:Excel:BasePath"];
         var legacySqlServerName = configuration["DataProviders:SqlServer:ConnectionStringName"];

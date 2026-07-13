@@ -65,7 +65,7 @@ export function LoginPage() {
             </div>
           </div>
 
-          <p className="text-sm text-slate-500 dark:text-slate-400">Excel-first. SQL-ready.</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Gestión de mantenimiento industrial.</p>
         </section>
 
         <section className="flex items-center px-6 py-8 md:px-10">

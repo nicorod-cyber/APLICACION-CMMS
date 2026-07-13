@@ -183,10 +183,10 @@ var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
-    var dataProvider = scope.ServiceProvider.GetRequiredService<IDataProvider>();
-    await dataProvider.InitializeAsync(CancellationToken.None);
+    var dbContext = scope.ServiceProvider.GetRequiredService<CmmsDbContext>();
+    await dbContext.Database.MigrateAsync(CancellationToken.None);
 
-    if (dataProvider.ProviderType == DataProviderType.PostgreSql &&
+    if (
         builder.Configuration.GetValue("Database:SeedDevelopment", app.Environment.IsDevelopment()))
     {
         var developmentSeeder = scope.ServiceProvider.GetService<IPostgreSqlDevelopmentSeeder>();

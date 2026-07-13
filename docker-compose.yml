@@ -8,11 +8,9 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
       DataProvider__Provider: PostgreSql
-      DataProvider__ExcelPath: /app/data/excel
       DataProvider__SqlServerConnectionString: ""
       DataProvider__PostgreSqlConnectionString: Host=postgres;Port=5432;Database=${POSTGRES_DB:-cmms};Username=${POSTGRES_APP_USER:-cmms_app};Password=${POSTGRES_APP_PASSWORD:-cmms_app_password}
       Database__SeedDevelopment: "true"
-      DataProviders__Excel__BasePath: /app/data/excel
       Jwt__Issuer: MaintenanceCMMS
       Jwt__Audience: MaintenanceCMMS.Clients
       Jwt__Secret: dev-local-maintenance-cmms-jwt-secret-change-me-2026
@@ -37,7 +35,6 @@ services:
       Pdf__TemplatePath: /app/data/templates
       Imports__StoragePath: /app/data/imports
     volumes:
-      - ./data/excel:/app/data/excel:ro
       - ./data/imports:/app/data/imports
       - ./data/templates:/app/data/templates
       - ./data/sharepoint-simulated:/app/data/sharepoint-simulated
