@@ -306,16 +306,42 @@ public sealed class FileMetadataConfiguration : IEntityTypeConfiguration<FileMet
         builder.ConfigureBase();
         builder.Property(entity => entity.FileKey).HasColumnName("file_key").HasMaxLength(240).IsRequired();
         builder.Property(entity => entity.FileName).HasColumnName("nombre").HasMaxLength(300).IsRequired();
+        builder.Property(entity => entity.StoredFileName).HasColumnName("nombre_almacenado").HasMaxLength(300).IsRequired();
+        builder.Property(entity => entity.Extension).HasColumnName("extension").HasMaxLength(32).IsRequired();
         builder.Property(entity => entity.Provider).HasColumnName("proveedor").HasMaxLength(80).IsRequired();
+        builder.Property(entity => entity.StorageMode).HasColumnName("modo_almacenamiento").HasMaxLength(80).IsRequired();
+        builder.Property(entity => entity.Purpose).HasColumnName("proposito").HasMaxLength(80).IsRequired();
+        builder.Property(entity => entity.Module).HasColumnName("modulo").HasMaxLength(120).IsRequired();
+        builder.Property(entity => entity.EntityType).HasColumnName("tipo_entidad").HasMaxLength(120).IsRequired();
+        builder.Property(entity => entity.EntityId).HasColumnName("entidad_id").HasMaxLength(240).IsRequired();
+        builder.Property(entity => entity.FaenaCode).HasColumnName("faena_codigo").HasMaxLength(80);
+        builder.Property(entity => entity.AssetCode).HasColumnName("activo_codigo").HasMaxLength(80);
+        builder.Property(entity => entity.WorkOrderNumber).HasColumnName("numero_ot").HasMaxLength(80);
         builder.Property(entity => entity.LogicalUri).HasColumnName("uri_logica").HasMaxLength(1000).IsRequired();
         builder.Property(entity => entity.LogicalPath).HasColumnName("ruta_logica").HasMaxLength(1000);
+        builder.Property(entity => entity.PhysicalLocation).HasColumnName("ubicacion_fisica").HasMaxLength(2000);
         builder.Property(entity => entity.MimeType).HasColumnName("tipo_mime").HasMaxLength(160);
         builder.Property(entity => entity.SizeBytes).HasColumnName("tamano_bytes");
         builder.Property(entity => entity.Checksum).HasColumnName("checksum").HasMaxLength(200);
         builder.Property(entity => entity.Status).HasColumnName("estado").HasMaxLength(40).IsRequired();
+        builder.Property(entity => entity.FileVersion).HasColumnName("version_archivo").IsRequired();
+        builder.Property(entity => entity.IsDeleted).HasColumnName("eliminado").IsRequired();
+        builder.Property(entity => entity.DeletedAtUtc).HasColumnName("eliminado_at_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.DeletedByUserId).HasColumnName("eliminado_por_usuario_id").HasMaxLength(120);
         builder.Property(entity => entity.MetadataJson).HasColumnName("metadata").HasColumnType("jsonb");
         builder.Property(entity => entity.AuthorUserId).HasColumnName("autor_usuario_id").HasMaxLength(120);
         builder.HasIndex(entity => entity.FileKey).IsUnique();
+        builder.HasIndex(entity => entity.LogicalUri);
+        builder.HasIndex(entity => entity.Provider);
+        builder.HasIndex(entity => entity.Checksum);
+        builder.HasIndex(entity => entity.CreatedAtUtc);
+        builder.HasIndex(entity => new { entity.EntityType, entity.EntityId, entity.IsDeleted });
+        builder.ToTable(table =>
+        {
+            table.HasCheckConstraint("ck_archivos_tamano_no_negativo", "tamano_bytes IS NULL OR tamano_bytes >= 0");
+            table.HasCheckConstraint("ck_archivos_proveedor", "proveedor IN ('ManualLink','LocalSimulation','GraphApiReady')");
+            table.HasCheckConstraint("ck_archivos_estado", "estado IN ('Stored','ManualLink','PendingManualLink','GraphApiReady','InvalidPath','Deleted')");
+        });
     }
 }
 

@@ -76,12 +76,12 @@ public static class DependencyInjection
         services.Configure<ImportStorageOptions>(configuration.GetSection("Imports"));
 
         services.AddSingleton<IExcelSchemaRegistry, ExcelSchemaRegistry>();
+        services.AddDbContext<CmmsDbContext>(options =>
+        {
+            options.UseNpgsql(dataProviderSettings.PostgreSqlConnectionString);
+        });
         if (ResolveProviderType(dataProviderSettings.Provider) == DataProviderType.PostgreSql)
         {
-            services.AddDbContext<CmmsDbContext>(options =>
-            {
-                options.UseNpgsql(dataProviderSettings.PostgreSqlConnectionString);
-            });
             services.AddScoped<IPostgreSqlDevelopmentSeeder, PostgreSqlDevelopmentSeeder>();
         }
 
@@ -133,6 +133,8 @@ public static class DependencyInjection
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IPdfService, PdfService>();
         services.AddScoped<IPdfTemplateService, PdfTemplateService>();
+        services.AddScoped<IAlertsExcelImportService, AlertsExcelImportService>();
+        services.AddScoped<IFileMetadataExcelImportService, FileMetadataExcelImportService>();
         services.AddScoped<SharePointManualLinkService>();
         services.AddScoped<LocalSharePointSimulationService>();
         services.AddScoped<GraphSharePointService>();

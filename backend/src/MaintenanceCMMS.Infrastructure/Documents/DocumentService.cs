@@ -805,25 +805,35 @@ public sealed class DocumentService : IDocumentService
     {
         var key = EmptyToNull(fileKey) ?? EmptyToNull(sharePointUrl) ?? Guid.NewGuid().ToString("N");
         var uri = EmptyToNull(sharePointUrl) ?? key;
+        var fileName = EmptyToNull(originalName) ?? Path.GetFileName(key) ?? key;
+        var provider = uri.StartsWith("http", StringComparison.OrdinalIgnoreCase) || uri.StartsWith("sharepoint:", StringComparison.OrdinalIgnoreCase)
+            ? "ManualLink"
+            : "LocalSimulation";
+
         return new FileMetadataEntity
         {
             Id = Guid.NewGuid(),
             FileKey = key,
-            FileName = EmptyToNull(originalName) ?? Path.GetFileName(key) ?? key,
-            Provider = uri.StartsWith("http", StringComparison.OrdinalIgnoreCase) || uri.StartsWith("sharepoint:", StringComparison.OrdinalIgnoreCase)
-                ? "SharePoint"
-                : "Local",
+            FileName = fileName,
+            StoredFileName = fileName,
+            Extension = Path.GetExtension(fileName).TrimStart('.').ToLowerInvariant(),
+            Provider = provider,
+            StorageMode = provider,
+            Purpose = "Document",
+            Module = "Documents",
+            EntityType = "Document",
+            EntityId = key,
             LogicalUri = uri,
             LogicalPath = key,
             MimeType = EmptyToNull(mimeType),
             SizeBytes = sizeBytes,
             Checksum = EmptyToNull(checksum),
-            Status = "vigente",
+            Status = "Stored",
+            FileVersion = 1,
             AuthorUserId = user.UserId,
             MetadataJson = JsonSerializer.Serialize(new { binaryStoredInPostgreSql = false })
         };
     }
-
     private static DocumentTypeResponse ToTypeResponse(DocumentTypeEntity entity)
     {
         return new DocumentTypeResponse(

@@ -7,6 +7,7 @@ TestResults/
 
 # Dependencies
 node_modules/
+.codex-tmp/
 
 # Local environment
 .env

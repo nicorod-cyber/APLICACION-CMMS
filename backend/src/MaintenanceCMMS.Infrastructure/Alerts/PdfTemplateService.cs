@@ -1,46 +1,38 @@
-using System.Globalization;
-using MaintenanceCMMS.Application.Abstractions.Data;
+using System.Text.RegularExpressions;
 using MaintenanceCMMS.Application.Alerts;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Options;
-using Microsoft.Extensions.Options;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Alerts;
 
 public sealed class PdfTemplateService : IPdfTemplateService
 {
-    private const string PdfTemplatesSchema = "pdf_templates";
-
-    private readonly IDataProvider _dataProvider;
+    private static readonly Regex PlaceholderPattern = new("{{\\s*([A-Za-z][A-Za-z0-9_]{0,80})\\s*}}", RegexOptions.Compiled);
+    private readonly CmmsDbContext _dbContext;
     private readonly IAuditService _auditService;
     private readonly IAuthorizationPolicyService _authorizationPolicyService;
-    private readonly PdfOptions _options;
 
     public PdfTemplateService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IAuditService auditService,
-        IAuthorizationPolicyService authorizationPolicyService,
-        IOptions<PdfOptions> options)
+        IAuthorizationPolicyService authorizationPolicyService)
     {
-        _dataProvider = dataProvider;
+        _dbContext = dbContext;
         _auditService = auditService;
         _authorizationPolicyService = authorizationPolicyService;
-        _options = options.Value;
     }
 
     public async Task<IReadOnlyCollection<PdfTemplateResponse>> ListAsync(CancellationToken cancellationToken)
     {
-        var rows = await EnsureTemplatesAsync(cancellationToken);
-        return rows.Select(ToResponse).OrderBy(template => template.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        await EnsureDefaultTemplateAsync(cancellationToken);
+        return (await _dbContext.PdfTemplates.AsNoTracking().OrderBy(item => item.Name).ToArrayAsync(cancellationToken)).Select(ToResponse).ToArray();
     }
 
-    public async Task<PdfTemplateResponse?> UpdateAsync(
-        string id,
-        UpdatePdfTemplateRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<PdfTemplateResponse?> UpdateAsync(string id, UpdatePdfTemplateRequest request, UserAccessContext user, CancellationToken cancellationToken)
     {
         EnsureCanConfigure(user);
         DomainGuard.AgainstEmpty(request.Name, nameof(request.Name));
@@ -48,222 +40,71 @@ public sealed class PdfTemplateService : IPdfTemplateService
         DomainGuard.AgainstEmpty(request.SubjectTemplate, nameof(request.SubjectTemplate));
         DomainGuard.AgainstEmpty(request.HtmlTemplate, nameof(request.HtmlTemplate));
         DomainGuard.AgainstEmpty(request.Reason ?? string.Empty, "reason");
+        ValidatePlaceholders(request.SubjectTemplate); ValidatePlaceholders(request.HtmlTemplate);
 
-        var rows = (await EnsureTemplatesAsync(cancellationToken)).ToList();
-        var index = FindIndex(rows, id);
-        if (index < 0)
-        {
-            return null;
-        }
-
-        var previous = rows[index];
-        var updated = TemplateRow(
-            previous.GetValue("TemplateId") ?? id,
-            request.Name,
-            request.EventType,
-            request.SubjectTemplate,
-            request.HtmlTemplate,
-            request.Active,
-            DateTimeOffset.UtcNow);
-
-        rows[index] = updated;
-        await _dataProvider.SaveRowsAsync(PdfTemplatesSchema, rows, cancellationToken);
-        await WriteTemplateFileAsync(ToResponse(updated), cancellationToken);
-        await _auditService.RecordAsync(new AuditEventRequest(
-            user.UserId,
-            "pdf_template.updated",
-            AuditModules.Pdfs,
-            "PdfTemplate",
-            id,
-            previous.GetValue("HtmlTemplate"),
-            updated.GetValue("HtmlTemplate"),
-            Severity: AuditSeverity.Medium,
-            Reason: request.Reason), cancellationToken);
-
-        return ToResponse(updated);
+        var template = await _dbContext.PdfTemplates.SingleOrDefaultAsync(item => item.Code == id, cancellationToken);
+        if (template is null) return null;
+        var previous = template.HtmlTemplate;
+        template.Name = request.Name.Trim(); template.EventType = request.EventType.Trim(); template.SubjectTemplate = request.SubjectTemplate.Trim(); template.HtmlTemplate = request.HtmlTemplate.Trim(); template.IsActive = request.Active; template.TemplateVersion++; template.UpdatedAtUtc = DateTimeOffset.UtcNow; template.UpdatedByUserId = user.UserId;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await _auditService.RecordAsync(new AuditEventRequest(user.UserId, "pdf_template.updated", AuditModules.Pdfs, "PdfTemplate", template.Code, previous, template.HtmlTemplate, Severity: AuditSeverity.Medium, Reason: request.Reason), cancellationToken);
+        return ToResponse(template);
     }
 
-    public async Task<PdfPreviewResponse?> PreviewAsync(
-        PdfPreviewRequest request,
-        CancellationToken cancellationToken)
+    public async Task<PdfPreviewResponse?> PreviewAsync(PdfPreviewRequest request, CancellationToken cancellationToken)
     {
-        var templates = await ListAsync(cancellationToken);
-        var template = templates.FirstOrDefault(item => SameCode(item.TemplateId, request.TemplateId));
-        if (template is null)
-        {
-            return null;
-        }
-
-        var data = DefaultPreviewData(request.Data);
-        var html = RenderTemplate(template.HtmlTemplate, data);
-        var text = html.Replace("<", " <").Replace(">", "> ");
-        return new PdfPreviewResponse(template.TemplateId, html, text);
+        var template = await _dbContext.PdfTemplates.AsNoTracking().SingleOrDefaultAsync(item => item.Code == request.TemplateId, cancellationToken);
+        if (template is null) return null;
+        var html = RenderTemplate(template.HtmlTemplate, DefaultPreviewData(request.Data));
+        return new PdfPreviewResponse(template.Code, html, html.Replace("<", " <").Replace(">", "> "));
     }
 
-    internal async Task<IReadOnlyCollection<DataRow>> EnsureTemplatesAsync(CancellationToken cancellationToken)
+    internal async Task<PdfTemplateEntity> ResolveActiveAsync(string code, CancellationToken cancellationToken)
     {
-        var rows = (await _dataProvider.ReadRowsAsync(PdfTemplatesSchema, cancellationToken)).ToList();
-        if (rows.Count > 0)
-        {
-            return rows;
-        }
-
-        rows.AddRange(DefaultTemplates());
-        await _dataProvider.SaveRowsAsync(PdfTemplatesSchema, rows, cancellationToken);
-        foreach (var template in rows.Select(ToResponse))
-        {
-            await WriteTemplateFileAsync(template, cancellationToken);
-        }
-
-        return rows;
+        await EnsureDefaultTemplateAsync(cancellationToken);
+        return await _dbContext.PdfTemplates.SingleOrDefaultAsync(item => item.Code == code && item.IsActive, cancellationToken)
+            ?? await _dbContext.PdfTemplates.SingleAsync(item => item.Code == "alert-default" && item.IsActive, cancellationToken);
     }
 
     internal static string RenderTemplate(string template, IReadOnlyDictionary<string, string?> data)
     {
-        var result = template;
-        foreach (var item in data)
-        {
-            result = result.Replace($"{{{{{item.Key}}}}}", item.Value ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return result;
+        return PlaceholderPattern.Replace(template, match => data.TryGetValue(match.Groups[1].Value, out var value) ? value ?? string.Empty : match.Value);
     }
 
-    private async Task WriteTemplateFileAsync(PdfTemplateResponse template, CancellationToken cancellationToken)
+    private async Task EnsureDefaultTemplateAsync(CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(_options.TemplatePath);
-        var path = Path.Combine(_options.TemplatePath, $"{SanitizeFileName(template.TemplateId)}.html");
-        await File.WriteAllTextAsync(path, template.HtmlTemplate, cancellationToken);
+        if (await _dbContext.PdfTemplates.AnyAsync(item => item.Code == "alert-default", cancellationToken)) return;
+        _dbContext.PdfTemplates.Add(new PdfTemplateEntity
+        {
+            Code = "alert-default", Name = "Alerta CMMS", EventType = "alert", SubjectTemplate = "[CMMS] {{Title}}",
+            HtmlTemplate = "<html><body><h1>{{Title}}</h1><p><strong>Severidad:</strong> {{Severity}}</p><p><strong>Origen:</strong> {{Source}}</p><p><strong>Entidad:</strong> {{EntityId}}</p><p><strong>Faena:</strong> {{FaenaCodigo}}</p><p>{{Message}}</p><p><small>Generado: {{CreatedAtUtc}}</small></p></body></html>",
+            IsActive = true, TemplateVersion = 1, CreatedByUserId = "system"
+        });
+        await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
     private void EnsureCanConfigure(UserAccessContext user)
     {
-        if (!_authorizationPolicyService.CanConfigureAlerts(user))
-        {
-            throw new UnauthorizedAccessException("El usuario no tiene permiso para configurar plantillas.");
-        }
+        if (!_authorizationPolicyService.CanConfigureAlerts(user)) throw new UnauthorizedAccessException("El usuario no tiene permiso para configurar plantillas.");
     }
 
-    private static IReadOnlyDictionary<string, string?> DefaultPreviewData(IReadOnlyDictionary<string, string?>? data)
+    internal static bool PlaceholdersAreValid(string template)
     {
-        return new Dictionary<string, string?>(data ?? new Dictionary<string, string?>(), StringComparer.OrdinalIgnoreCase)
-        {
-            ["Title"] = data?.GetValueOrDefault("Title") ?? "Documento por vencer",
-            ["Message"] = data?.GetValueOrDefault("Message") ?? "El documento vence dentro del plazo configurado.",
-            ["Severity"] = data?.GetValueOrDefault("Severity") ?? "Warning",
-            ["Source"] = data?.GetValueOrDefault("Source") ?? "Documentos",
-            ["EntityId"] = data?.GetValueOrDefault("EntityId") ?? "EQ-001",
-            ["FaenaCodigo"] = data?.GetValueOrDefault("FaenaCodigo") ?? "F001",
-            ["CreatedAtUtc"] = data?.GetValueOrDefault("CreatedAtUtc") ?? DateTimeOffset.UtcNow.ToString("O")
-        };
+        if (template.Contains("{{", StringComparison.Ordinal) && PlaceholderPattern.Matches(template).Count == 0) return false;
+        var stripped = PlaceholderPattern.Replace(template, string.Empty);
+        return !stripped.Contains("{{", StringComparison.Ordinal) && !stripped.Contains("}}", StringComparison.Ordinal);
     }
-
-    private static IReadOnlyCollection<DataRow> DefaultTemplates()
+    private static void ValidatePlaceholders(string template)
     {
-        const string html = """
-            <html>
-              <body>
-                <h1>{{Title}}</h1>
-                <p><strong>Severidad:</strong> {{Severity}}</p>
-                <p><strong>Origen:</strong> {{Source}}</p>
-                <p><strong>Entidad:</strong> {{EntityId}}</p>
-                <p><strong>Faena:</strong> {{FaenaCodigo}}</p>
-                <p>{{Message}}</p>
-                <p><small>Generado: {{CreatedAtUtc}}</small></p>
-              </body>
-            </html>
-            """;
-
-        return
-        [
-            TemplateRow(
-                "alert-default",
-                "Alerta CMMS",
-                "alert",
-                "[CMMS] {{Title}}",
-                html,
-                true,
-                DateTimeOffset.UtcNow)
-        ];
+        if (template.Contains("{{", StringComparison.Ordinal) && PlaceholderPattern.Matches(template).Count == 0) throw new DomainException("La plantilla contiene placeholders invalidos.");
+        var stripped = PlaceholderPattern.Replace(template, string.Empty);
+        if (stripped.Contains("{{", StringComparison.Ordinal) || stripped.Contains("}}", StringComparison.Ordinal)) throw new DomainException("La plantilla contiene placeholders invalidos.");
     }
 
-    private static DataRow TemplateRow(
-        string id,
-        string name,
-        string eventType,
-        string subjectTemplate,
-        string htmlTemplate,
-        bool active,
-        DateTimeOffset updatedAtUtc)
+    private static IReadOnlyDictionary<string, string?> DefaultPreviewData(IReadOnlyDictionary<string, string?>? data) => new Dictionary<string, string?>(data ?? new Dictionary<string, string?>(), StringComparer.OrdinalIgnoreCase)
     {
-        return new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["TemplateId"] = id.Trim(),
-            ["Name"] = name.Trim(),
-            ["EventType"] = eventType.Trim(),
-            ["SubjectTemplate"] = subjectTemplate.Trim(),
-            ["HtmlTemplate"] = htmlTemplate.Trim(),
-            ["Active"] = active ? "true" : "false",
-            ["UpdatedAtUtc"] = updatedAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
-        });
-    }
+        ["Title"] = data?.GetValueOrDefault("Title") ?? "Documento por vencer", ["Message"] = data?.GetValueOrDefault("Message") ?? "El documento vence dentro del plazo configurado.", ["Severity"] = data?.GetValueOrDefault("Severity") ?? "Warning", ["Source"] = data?.GetValueOrDefault("Source") ?? "Documentos", ["EntityId"] = data?.GetValueOrDefault("EntityId") ?? "EQ-001", ["FaenaCodigo"] = data?.GetValueOrDefault("FaenaCodigo") ?? "F001", ["CreatedAtUtc"] = data?.GetValueOrDefault("CreatedAtUtc") ?? DateTimeOffset.UtcNow.ToString("O")
+    };
 
-    private static PdfTemplateResponse ToResponse(DataRow row)
-    {
-        return new PdfTemplateResponse(
-            row.GetValue("TemplateId")?.Trim() ?? string.Empty,
-            row.GetValue("Name")?.Trim() ?? string.Empty,
-            row.GetValue("EventType")?.Trim() ?? "alert",
-            row.GetValue("SubjectTemplate")?.Trim() ?? "[CMMS] {{Title}}",
-            row.GetValue("HtmlTemplate")?.Trim() ?? string.Empty,
-            ParseBool(row.GetValue("Active"), true),
-            ParseDateTime(row.GetValue("UpdatedAtUtc")) ?? DateTimeOffset.UtcNow);
-    }
-
-    private static int FindIndex(IReadOnlyList<DataRow> rows, string id)
-    {
-        for (var index = 0; index < rows.Count; index++)
-        {
-            if (SameCode(rows[index].GetValue("TemplateId"), id))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    private static DateTimeOffset? ParseDateTime(string? value)
-    {
-        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var result)
-            ? result
-            : null;
-    }
-
-    private static bool ParseBool(string? value, bool defaultValue = false)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return defaultValue;
-        }
-
-        return value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-               value.Equals("si", StringComparison.OrdinalIgnoreCase) ||
-               value.Equals("1", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool SameCode(string? left, string? right)
-    {
-        return string.Equals(left?.Trim(), right?.Trim(), StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string SanitizeFileName(string value)
-    {
-        foreach (var invalid in Path.GetInvalidFileNameChars())
-        {
-            value = value.Replace(invalid, '-');
-        }
-
-        return value;
-    }
-}
+    private static PdfTemplateResponse ToResponse(PdfTemplateEntity item) => new(item.Code, item.Name, item.EventType, item.SubjectTemplate, item.HtmlTemplate, item.IsActive, item.UpdatedAtUtc ?? item.CreatedAtUtc);
+}

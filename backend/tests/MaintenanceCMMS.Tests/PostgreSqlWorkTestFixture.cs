@@ -40,6 +40,13 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         return new PostgreSqlWorkTestFixture(databaseName, dbContext);
     }
 
+    public CmmsDbContext NewContext()
+    {
+        var options = new DbContextOptionsBuilder<CmmsDbContext>()
+            .UseNpgsql($"Host=localhost;Port=5432;Database={DatabaseName};Username=cmms_app;Password=cmms_app_password")
+            .Options;
+        return new CmmsDbContext(options);
+    }
     private static async Task SeedAsync(CmmsDbContext db)
     {
         foreach (var value in Enum.GetNames<WorkNotificationType>()) AddCatalog(db, "WorkNotificationType", value);

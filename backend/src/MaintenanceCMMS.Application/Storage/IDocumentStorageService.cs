@@ -49,4 +49,17 @@ public interface IDocumentStorageService
     Task<DocumentStorageDownload?> DownloadAsync(
         string fileKey,
         CancellationToken cancellationToken);
+
+    Task<DocumentStorageDeleteResult> DeleteAsync(
+        string fileKey,
+        string deletedBy,
+        bool deletePhysicalContent,
+        CancellationToken cancellationToken);
+}
+
+public interface IFileMetadataExcelImportService
+{
+    Task<FileMetadataExcelImportResult> ImportAsync(
+        FileMetadataExcelImportRequest request,
+        CancellationToken cancellationToken);
 }

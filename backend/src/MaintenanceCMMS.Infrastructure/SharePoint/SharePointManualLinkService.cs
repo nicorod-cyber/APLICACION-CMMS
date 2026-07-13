@@ -1,4 +1,4 @@
-using MaintenanceCMMS.Application.Abstractions.Data;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Domain.Common;
@@ -10,10 +10,10 @@ namespace MaintenanceCMMS.Infrastructure.SharePoint;
 public sealed class SharePointManualLinkService : SharePointStorageBase
 {
     public SharePointManualLinkService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IAuditService auditService,
         IOptions<SharePointOptions> options)
-        : base(dataProvider, auditService, options.Value)
+        : base(dbContext, auditService, options.Value)
     {
     }
 

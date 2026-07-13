@@ -17,7 +17,7 @@ public sealed class ExcelImportWorkflowTests
     [Fact]
     public async Task UploadAsync_ReturnsErrors_WhenRequiredColumnsAreMissing()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.UploadAsync(new ExcelImportUploadCommand(
             "activos",
@@ -34,7 +34,7 @@ public sealed class ExcelImportWorkflowTests
     [Fact]
     public async Task UploadAsync_DetectsDuplicatedNaturalKeys()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.UploadAsync(new ExcelImportUploadCommand(
             "faenas",
@@ -50,7 +50,7 @@ public sealed class ExcelImportWorkflowTests
     [Fact]
     public async Task ApproveAsync_AppliesRowsToOfficialMaster()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
         var upload = await fixture.Service.UploadAsync(new ExcelImportUploadCommand(
             "faenas",
             "faenas.xlsx",
@@ -69,7 +69,7 @@ public sealed class ExcelImportWorkflowTests
     [Fact]
     public async Task ApproveAsync_AppliesExtendedFaenaColumns()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
         var upload = await fixture.Service.UploadAsync(new ExcelImportUploadCommand(
             "faenas",
             "plantilla_faenas.xlsx",
@@ -95,7 +95,7 @@ public sealed class ExcelImportWorkflowTests
     [Fact]
     public async Task RejectAsync_ClosesImportWithoutApplyingRows()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
         var upload = await fixture.Service.UploadAsync(new ExcelImportUploadCommand(
             "faenas",
             "faenas.xlsx",
@@ -114,7 +114,7 @@ public sealed class ExcelImportWorkflowTests
     [Fact]
     public async Task ApproveAsync_RejectsSimulationWithoutSavingOfficialData()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
         var upload = await fixture.Service.UploadAsync(new ExcelImportUploadCommand(
             "faenas",
             "faenas.xlsx",
@@ -148,7 +148,8 @@ public sealed class ExcelImportWorkflowTests
             Provider = "LocalSimulation",
             LocalPath = Path.Combine(Path.GetTempPath(), "maintenance-cmms-import-tests", Guid.NewGuid().ToString("N"), "sharepoint")
         });
-        var storageService = new LocalSharePointSimulationService(provider, auditService, sharePointOptions);
+        var database = await PostgreSqlWorkTestFixture.CreateAsync();
+        var storageService = new LocalSharePointSimulationService(database.DbContext, auditService, sharePointOptions);
         var service = new ExcelImportWorkflowService(
             provider,
             new ExcelSchemaRegistry(),
@@ -159,7 +160,7 @@ public sealed class ExcelImportWorkflowTests
                 StoragePath = importPath
             }));
 
-        return new ImportFixture(provider, service);
+        return new ImportFixture(database, provider, service);
     }
 
     private static byte[] CreateWorkbook(string[] headers, string[][] rows)
@@ -186,6 +187,10 @@ public sealed class ExcelImportWorkflowTests
     }
 
     private sealed record ImportFixture(
+        PostgreSqlWorkTestFixture Database,
         ExcelDataProvider Provider,
-        IExcelImportWorkflowService Service);
+        IExcelImportWorkflowService Service) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => Database.DisposeAsync();
+    }
 }

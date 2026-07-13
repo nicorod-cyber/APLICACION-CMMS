@@ -1,4 +1,4 @@
-using MaintenanceCMMS.Application.Abstractions.Data;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Domain.Common;
@@ -10,10 +10,10 @@ namespace MaintenanceCMMS.Infrastructure.SharePoint;
 public sealed class LocalSharePointSimulationService : SharePointStorageBase
 {
     public LocalSharePointSimulationService(
-        IDataProvider dataProvider,
+        CmmsDbContext dbContext,
         IAuditService auditService,
         IOptions<SharePointOptions> options)
-        : base(dataProvider, auditService, options.Value)
+        : base(dbContext, auditService, options.Value)
     {
     }
 
@@ -49,32 +49,47 @@ public sealed class LocalSharePointSimulationService : SharePointStorageBase
         var fileKey = BuildUniqueFileKey(relativeFolder, safeName);
         var localPath = Path.Combine(ResolveLocalRoot(), fileKey.Replace('/', Path.DirectorySeparatorChar));
         var directory = Path.GetDirectoryName(localPath) ?? ResolveLocalRoot();
-
         Directory.CreateDirectory(directory);
         await File.WriteAllBytesAsync(localPath, request.Content, cancellationToken);
 
-        return await SaveMetadataAsync(
-            fileKey,
-            safeName,
-            string.IsNullOrWhiteSpace(request.ContentType) ? "application/octet-stream" : request.ContentType,
-            Mode,
-            request.Purpose,
-            DocumentStorageStatus.Stored,
-            request.Module,
-            request.EntityType,
-            request.EntityId,
-            request.FaenaCodigo,
-            request.ActivoCodigo,
-            request.OtNumero,
-            relativeFolder,
-            localPath,
-            BuildVirtualUrl(fileKey),
-            request.Content.LongLength,
-            request.UploadedBy,
-            request.Metadata,
-            cancellationToken);
-    }
+        try
+        {
+            return await SaveMetadataAsync(
+                fileKey,
+                safeName,
+                string.IsNullOrWhiteSpace(request.ContentType) ? "application/octet-stream" : request.ContentType,
+                Mode,
+                request.Purpose,
+                DocumentStorageStatus.Stored,
+                request.Module,
+                request.EntityType,
+                request.EntityId,
+                request.FaenaCodigo,
+                request.ActivoCodigo,
+                request.OtNumero,
+                relativeFolder,
+                localPath,
+                BuildVirtualUrl(fileKey),
+                request.Content.LongLength,
+                request.UploadedBy,
+                request.Metadata,
+                cancellationToken,
+                ComputeChecksum(request.Content));
+        }
+        catch
+        {
+            try
+            {
+                if (File.Exists(localPath)) File.Delete(localPath);
+            }
+            catch
+            {
+                // The original database exception remains the operational failure; the orphan is discoverable by storage monitoring.
+            }
 
+            throw;
+        }
+    }
     public override async Task<DocumentStorageInfo> SaveManualLinkAsync(
         ManualDocumentLinkRequest request,
         CancellationToken cancellationToken)

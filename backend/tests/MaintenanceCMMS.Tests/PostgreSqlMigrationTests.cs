@@ -176,6 +176,80 @@ public sealed class PostgreSqlMigrationTests
             Assert.Single(System.Text.RegularExpressions.Regex.Matches(script, $"CREATE TABLE(?: IF NOT EXISTS)? \\\"?{table}\\\"?"));
         }
     }
+    [Fact]
+    public async Task MigrateFromEmptyDatabase_CreatesFileMetadataColumnsAndIndexes()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        await database.Context.Database.MigrateAsync();
+
+        foreach (var column in new[] { "nombre_almacenado", "extension", "modo_almacenamiento", "proposito", "tipo_entidad", "entidad_id", "ubicacion_fisica", "version_archivo", "eliminado" })
+        {
+            Assert.True(await database.ColumnExistsAsync("archivos", column));
+        }
+
+        foreach (var index in new[] { "IX_archivos_checksum", "IX_archivos_created_at_utc", "IX_archivos_proveedor", "IX_archivos_tipo_entidad_entidad_id_eliminado", "IX_archivos_uri_logica" })
+        {
+            Assert.True(await database.IndexExistsAsync(index));
+        }
+    }
+
+    [Fact]
+    public async Task MigrateFromTechnicalHierarchy_PreservesLegacyFileMetadata()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        var migrator = database.Context.Database.GetService<IMigrator>();
+        await migrator.MigrateAsync(database.TechnicalHierarchyMigrationId);
+        await database.Context.Database.ExecuteSqlRawAsync("""
+            INSERT INTO archivos (id, created_at_utc, file_key, nombre, proveedor, uri_logica, estado)
+            VALUES (gen_random_uuid(), NOW(), 'legacy/file.pdf', 'file.pdf', 'LocalSimulation', '/api/sharepoint/download?fileKey=legacy%2Ffile.pdf', 'vigente');
+            """);
+
+        await database.Context.Database.MigrateAsync();
+
+        var file = await database.Context.Files.SingleAsync(item => item.FileKey == "legacy/file.pdf");
+        Assert.Equal("file.pdf", file.StoredFileName);
+        Assert.Equal("pdf", file.Extension);
+        Assert.Equal("Stored", file.Status);
+        Assert.Equal(1, file.FileVersion);
+    }
+
+    [Fact]
+    public async Task RollbackToTechnicalHierarchy_RemovesOnlyFileMetadataColumns()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        await database.Context.Database.MigrateAsync();
+        await database.Context.Database.GetService<IMigrator>().MigrateAsync(database.TechnicalHierarchyMigrationId);
+
+        Assert.False(await database.ColumnExistsAsync("archivos", "nombre_almacenado"));
+        Assert.False(await database.ColumnExistsAsync("archivos", "modo_almacenamiento"));
+        Assert.True(await database.ExistsAsync("archivos"));
+        Assert.True(await database.ExistsAsync("nodos_tecnicos"));
+        Assert.True(await database.ExistsAsync("repuestos"));
+    }
+    [Fact]
+    public async Task MigrateFromEmptyDatabase_CreatesPhaseBAlertObjects()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        await database.Context.Database.MigrateAsync();
+        foreach (var table in new[] { "plantillas_pdf", "reglas_alerta", "regla_alerta_destinatarios", "alertas", "notificaciones", "notificacion_destinatarios", "notificacion_intentos" })
+        {
+            Assert.True(await database.ExistsAsync(table));
+        }
+    }
+
+    [Fact]
+    public async Task RollbackToFileMetadata_RemovesOnlyPhaseBObjects()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        await database.Context.Database.MigrateAsync();
+        await database.Context.Database.GetService<IMigrator>().MigrateAsync("20260711041342_FileMetadataPostgreSql");
+        foreach (var table in new[] { "plantillas_pdf", "reglas_alerta", "regla_alerta_destinatarios", "alertas", "notificaciones", "notificacion_destinatarios", "notificacion_intentos" })
+        {
+            Assert.False(await database.ExistsAsync(table));
+        }
+        Assert.True(await database.ExistsAsync("archivos"));
+        Assert.True(await database.ExistsAsync("nodos_tecnicos"));
+    }
     private sealed class MigrationDatabase : IAsyncDisposable
     {
         private MigrationDatabase(string name, CmmsDbContext context)
@@ -188,6 +262,7 @@ public sealed class PostgreSqlMigrationTests
         public CmmsDbContext Context { get; }
         public string WorkMigrationId => "202607090003_WorkNotificationsAndOrdersPostgreSql";
         public string InventoryMigrationId => "20260710134248_InventoryDomainPostgreSql";
+        public string TechnicalHierarchyMigrationId => "20260710164638_TechnicalHierarchyDomainPostgreSql";
         public static async Task<MigrationDatabase> CreateAsync()
         {
             var name = $"cmms_migration_tests_{Guid.NewGuid():N}";
@@ -229,6 +304,26 @@ public sealed class PostgreSqlMigrationTests
             return (bool)(await command.ExecuteScalarAsync())!;
         }
 
+        public async Task<bool> ColumnExistsAsync(string table, string column)
+        {
+            await using var command = Context.Database.GetDbConnection().CreateCommand();
+            if (command.Connection!.State != System.Data.ConnectionState.Open) await command.Connection.OpenAsync();
+            command.CommandText = "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = @table AND column_name = @column)";
+            var tableParameter = command.CreateParameter(); tableParameter.ParameterName = "table"; tableParameter.Value = table;
+            var columnParameter = command.CreateParameter(); columnParameter.ParameterName = "column"; columnParameter.Value = column;
+            command.Parameters.Add(tableParameter); command.Parameters.Add(columnParameter);
+            return (bool)(await command.ExecuteScalarAsync())!;
+        }
+
+        public async Task<bool> IndexExistsAsync(string index)
+        {
+            await using var command = Context.Database.GetDbConnection().CreateCommand();
+            if (command.Connection!.State != System.Data.ConnectionState.Open) await command.Connection.OpenAsync();
+            command.CommandText = "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = @index)";
+            var parameter = command.CreateParameter(); parameter.ParameterName = "index"; parameter.Value = index;
+            command.Parameters.Add(parameter);
+            return (bool)(await command.ExecuteScalarAsync())!;
+        }
         public async ValueTask DisposeAsync()
         {
             await Context.DisposeAsync();

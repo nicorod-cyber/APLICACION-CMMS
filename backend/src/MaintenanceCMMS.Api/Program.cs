@@ -3653,6 +3653,36 @@ pdfApi.MapPost("/{id}/preview", async (
 var importsApi = api.MapGroup("/imports")
     .RequireAuthorization("Importaciones");
 
+importsApi.MapPost("/alerts", async (
+        AlertsExcelImportRequest request,
+        IAlertsExcelImportService importService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await importService.ImportAsync(request, cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    })
+    .WithName("ImportAlertsFromExcel");
+importsApi.MapPost("/sharepoint-files", async (
+        FileMetadataExcelImportRequest request,
+        IFileMetadataExcelImportService importService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await importService.ImportAsync(request, cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    })
+    .WithName("ImportSharePointFileMetadata");
 importsApi.MapPost("/upload", async (
         HttpRequest request,
         ClaimsPrincipal user,

@@ -206,13 +206,28 @@ public sealed class FileMetadataEntity : PostgreSqlEntity
 {
     public string FileKey { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
+    public string StoredFileName { get; set; } = string.Empty;
+    public string Extension { get; set; } = string.Empty;
     public string Provider { get; set; } = string.Empty;
+    public string StorageMode { get; set; } = string.Empty;
+    public string Purpose { get; set; } = string.Empty;
+    public string Module { get; set; } = string.Empty;
+    public string EntityType { get; set; } = string.Empty;
+    public string EntityId { get; set; } = string.Empty;
+    public string? FaenaCode { get; set; }
+    public string? AssetCode { get; set; }
+    public string? WorkOrderNumber { get; set; }
     public string LogicalUri { get; set; } = string.Empty;
     public string? LogicalPath { get; set; }
+    public string? PhysicalLocation { get; set; }
     public string? MimeType { get; set; }
     public long? SizeBytes { get; set; }
     public string? Checksum { get; set; }
     public string Status { get; set; } = "vigente";
+    public int FileVersion { get; set; } = 1;
+    public bool IsDeleted { get; set; }
+    public DateTimeOffset? DeletedAtUtc { get; set; }
+    public string? DeletedByUserId { get; set; }
     public string? MetadataJson { get; set; }
     public string? AuthorUserId { get; set; }
 }

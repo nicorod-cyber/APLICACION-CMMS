@@ -24,7 +24,7 @@ public sealed class AlertServiceTests
     [Fact]
     public async Task GenerateAsync_CreatesAlertAndNotification()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var alert = await fixture.AlertService.GenerateAsync(AlertRequest("document-expiring", "DOC-1"), Admin, CancellationToken.None);
         var notifications = await fixture.AlertService.ListNotificationsAsync(Admin, CancellationToken.None);
@@ -37,7 +37,7 @@ public sealed class AlertServiceTests
     [Fact]
     public async Task DevelopmentEmailService_ReturnsSentWithoutExternalServer()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var alert = await fixture.AlertService.GenerateAsync(AlertRequest("document-expiring", "DOC-2"), Admin, CancellationToken.None);
         var notification = await fixture.AlertService.SendTestAsync(
@@ -54,7 +54,7 @@ public sealed class AlertServiceTests
     [Fact]
     public async Task PdfService_GeneratesPdfFile()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.PdfService.RenderAsync(new PdfRenderRequest(
             "alert-default",
@@ -69,7 +69,7 @@ public sealed class AlertServiceTests
     [Fact]
     public async Task GenerateAsync_RepeatsCriticalOpenAlertUntilResolved()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var first = await fixture.AlertService.GenerateAsync(AlertRequest("document-expired", "DOC-3"), Admin, CancellationToken.None);
         var second = await fixture.AlertService.GenerateAsync(AlertRequest("document-expired", "DOC-3"), Admin, CancellationToken.None);
@@ -88,24 +88,16 @@ public sealed class AlertServiceTests
             "El documento requiere revision.",
             "Documentos",
             causeKey,
-            "F001",
+            "FAE-1",
             "Activo",
-            "EQ-001");
+            "ACT-1");
     }
 
     private static async Task<AlertFixture> CreateFixtureAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "maintenance-cmms-alert-tests", Guid.NewGuid().ToString("N"));
-        var provider = new ExcelDataProvider(
-            new ExcelSchemaRegistry(),
-            Options.Create(new DataProviderSettings
-            {
-                Provider = "Excel",
-                ExcelPath = Path.Combine(root, "excel")
-            }));
-
-        await provider.InitializeAsync(CancellationToken.None);
-        var auditService = new ExcelAuditService(provider, new AuditContextAccessor());
+        var database = await PostgreSqlWorkTestFixture.CreateAsync();
+        var auditService = new PostgreSqlAuditService(database.DbContext, new AuditContextAccessor());
         var authorization = new AuthorizationPolicyService();
         var mailOptions = Options.Create(new MailOptions
         {
@@ -124,15 +116,19 @@ public sealed class AlertServiceTests
         });
 
         var emailService = new EmailService(mailOptions);
-        var storageService = new LocalSharePointSimulationService(provider, auditService, sharePointOptions);
+        var storageService = new LocalSharePointSimulationService(database.DbContext, auditService, sharePointOptions);
         var pdfService = new PdfService(pdfOptions, storageService);
-        var templateService = new PdfTemplateService(provider, auditService, authorization, pdfOptions);
-        var alertService = new AlertService(provider, auditService, authorization, emailService, pdfService, templateService);
+        var templateService = new PdfTemplateService(database.DbContext, auditService, authorization);
+        var alertService = new AlertService(database.DbContext, auditService, authorization, emailService, pdfService, templateService);
 
-        return new AlertFixture(alertService, pdfService);
+        return new AlertFixture(database, alertService, pdfService);
     }
 
     private sealed record AlertFixture(
+        PostgreSqlWorkTestFixture Database,
         IAlertService AlertService,
-        IPdfService PdfService);
+        IPdfService PdfService) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => Database.DisposeAsync();
+    }
 }

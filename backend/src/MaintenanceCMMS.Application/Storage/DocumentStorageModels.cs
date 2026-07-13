@@ -21,7 +21,8 @@ public enum DocumentStorageStatus
     ManualLink = 1,
     PendingManualLink = 2,
     GraphApiReady = 3,
-    InvalidPath = 4
+    InvalidPath = 4,
+    Deleted = 5
 }
 
 public sealed record DocumentStorageProviderInfo(
@@ -126,3 +127,20 @@ public sealed record DocumentStorageDownload(
     string FileName,
     string ContentType,
     byte[] Content);
+
+public sealed record DocumentStorageDeleteResult(
+    bool Deleted,
+    bool PhysicalContentDeleted,
+    bool RetainedBecauseReferenced);
+
+public sealed record FileMetadataExcelImportRequest(string ExcelPath);
+
+public sealed record FileMetadataExcelImportResult(
+    int RowsRead,
+    int Inserted,
+    int Updated,
+    int Skipped,
+    int Duplicates,
+    int Errors,
+    IReadOnlyCollection<string> Warnings,
+    IReadOnlyCollection<string> ReferencesNotFound);

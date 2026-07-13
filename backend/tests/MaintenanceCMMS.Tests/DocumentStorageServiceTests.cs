@@ -14,7 +14,7 @@ public sealed class DocumentStorageServiceTests
     [Fact]
     public async Task LocalSimulation_SavesFileAndMetadata()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var stored = await fixture.LocalStorage.SaveDocumentAsync(new DocumentStorageSaveRequest(
             "Documents",
@@ -41,7 +41,7 @@ public sealed class DocumentStorageServiceTests
     [Fact]
     public async Task LocalSimulation_GeneratesValidFolderRoute()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var validation = await fixture.LocalStorage.ValidatePathAsync(new DocumentStoragePathRequest(
             "Documents",
@@ -57,7 +57,7 @@ public sealed class DocumentStorageServiceTests
     [Fact]
     public async Task ManualLink_SavesMetadataWithoutLocalFile()
     {
-        var fixture = await CreateFixtureAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var stored = await fixture.ManualStorage.SaveManualLinkAsync(new ManualDocumentLinkRequest(
             "Documents",
@@ -79,29 +79,25 @@ public sealed class DocumentStorageServiceTests
     private static async Task<StorageFixture> CreateFixtureAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "maintenance-cmms-storage-tests", Guid.NewGuid().ToString("N"));
-        var provider = new ExcelDataProvider(
-            new ExcelSchemaRegistry(),
-            Options.Create(new DataProviderSettings
-            {
-                Provider = "Excel",
-                ExcelPath = Path.Combine(root, "excel")
-            }));
-
-        await provider.InitializeAsync(CancellationToken.None);
-        var auditService = new ExcelAuditService(provider, new AuditContextAccessor());
+        var database = await PostgreSqlWorkTestFixture.CreateAsync();
+        var auditService = new PostgreSqlAuditService(database.DbContext, new AuditContextAccessor());
         var sharePointOptions = Options.Create(new SharePointOptions
         {
             Provider = "LocalSimulation",
             LocalPath = Path.Combine(root, "sharepoint")
         });
 
-        var localStorage = new LocalSharePointSimulationService(provider, auditService, sharePointOptions);
-        var manualStorage = new SharePointManualLinkService(provider, auditService, sharePointOptions);
-
-        return new StorageFixture(localStorage, manualStorage);
+        return new StorageFixture(
+            database,
+            new LocalSharePointSimulationService(database.DbContext, auditService, sharePointOptions),
+            new SharePointManualLinkService(database.DbContext, auditService, sharePointOptions));
     }
 
     private sealed record StorageFixture(
+        PostgreSqlWorkTestFixture Database,
         LocalSharePointSimulationService LocalStorage,
-        SharePointManualLinkService ManualStorage);
+        SharePointManualLinkService ManualStorage) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => Database.DisposeAsync();
+    }
 }

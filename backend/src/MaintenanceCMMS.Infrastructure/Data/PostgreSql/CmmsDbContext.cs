@@ -56,6 +56,13 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<TechnicalNodeFamilyEntity> TechnicalNodeFamilies => Set<TechnicalNodeFamilyEntity>();
     public DbSet<TechnicalNodeAssetEntity> TechnicalNodeAssets => Set<TechnicalNodeAssetEntity>();
     public DbSet<TechnicalNodeAliasEntity> TechnicalNodeAliases => Set<TechnicalNodeAliasEntity>();
+    public DbSet<PdfTemplateEntity> PdfTemplates => Set<PdfTemplateEntity>();
+    public DbSet<AlertRuleEntity> AlertRules => Set<AlertRuleEntity>();
+    public DbSet<AlertRuleRecipientEntity> AlertRuleRecipients => Set<AlertRuleRecipientEntity>();
+    public DbSet<AlertEntity> Alerts => Set<AlertEntity>();
+    public DbSet<NotificationEntity> Notifications => Set<NotificationEntity>();
+    public DbSet<NotificationRecipientEntity> NotificationRecipients => Set<NotificationRecipientEntity>();
+    public DbSet<NotificationAttemptEntity> NotificationAttempts => Set<NotificationAttemptEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
