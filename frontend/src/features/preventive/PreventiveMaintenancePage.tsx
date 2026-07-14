@@ -344,7 +344,7 @@ export function PreventiveMaintenancePage() {
         </form>
 
         <form className="panel stack" onSubmit={saveReading}>
-          <div className="section-heading"><h2>Lectura</h2><span>Un �nico valor; la unidad proviene del activo</span></div>
+          <div className="section-heading"><h2>Lectura</h2><span>Un único valor; la unidad proviene del activo</span></div>
           <div className="form-grid xl:grid-cols-2">
             <label>Activo<select value={readingForm.activoCodigo} onChange={(event) => setReadingForm({ ...readingForm, activoCodigo: event.target.value })} required><option value="">Selecciona activo</option>{assets.map((asset) => <option key={asset.codigo} value={asset.codigo}>{asset.nombre} - {asset.codigo}</option>)}</select></label>
             <label>Fecha<input type="datetime-local" value={readingForm.fechaLectura} onChange={(event) => setReadingForm({ ...readingForm, fechaLectura: event.target.value })} required /></label>
@@ -410,8 +410,8 @@ export function PreventiveMaintenancePage() {
           <div className="section-heading"><h2>Lecturas recientes</h2><span>{readings.length}</span></div>
           <div className="data-table">
             <table>
-              <thead><tr><th>Activo</th><th>Fecha</th><th>Valor</th><th>Unidad</th><th>Validaci�n</th></tr></thead>
-              <tbody>{readings.slice(0, 12).map((item) => <tr key={item.id}><td><strong>{item.activoNombre ?? item.activoCodigo}</strong><small>{item.faenaCodigo}</small></td><td>{formatDateTime(item.fechaLecturaUtc)}</td><td>{item.valor}</td><td>{item.unidad}</td><td>{item.esAnomala ? item.mensajeValidacion : item.esCorreccion ? "Correcci�n" : "OK"}</td></tr>)}</tbody>
+              <thead><tr><th>Activo</th><th>Fecha</th><th>Valor</th><th>Unidad</th><th>Validación</th></tr></thead>
+              <tbody>{readings.slice(0, 12).map((item) => <tr key={item.id}><td><strong>{item.activoNombre ?? item.activoCodigo}</strong><small>{item.faenaCodigo}</small></td><td>{formatDateTime(item.fechaLecturaUtc)}</td><td>{item.valor}</td><td>{item.unidad}</td><td>{item.esAnomala ? item.mensajeValidacion : item.esCorreccion ? "Corrección" : "OK"}</td></tr>)}</tbody>
             </table>
           </div>
         </section>
