@@ -1,6 +1,8 @@
 using System.Globalization;
 using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 using MaintenanceCMMS.Application.Alerts;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
@@ -13,10 +15,8 @@ namespace MaintenanceCMMS.Infrastructure.PreventiveMaintenance;
 public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
 {
     private const string PlansSchema = "planes_preventivos";
-    private const string ReadingsSchema = "preventivo_lecturas";
     private const string EvaluationsSchema = "preventivo_evaluaciones";
     private const string HistorySchema = "preventivo_historial";
-    private const string AssetsSchema = "activos";
     private const string WorkOrdersSchema = "ordenes_trabajo";
     private const decimal AnomalousHourJump = 500;
     private const decimal AnomalousKmJump = 5000;
@@ -76,9 +76,13 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
             throw new DomainException("Debe configurar al menos una frecuencia por horas, km o calendario.");
         }
 
+        if (request.FrecuenciaHoras.HasValue && request.FrecuenciaKm.HasValue)
+        {
+            throw new DomainException("Un plan no puede mezclar frecuencia por horas y kilometros.");
+        }
         var data = await ReadDataAsync(cancellationToken);
         var assetRow = FindAsset(data.Assets, request.ActivoCodigo);
-        var asset = assetRow is null ? null : ToAssetInfo(assetRow);
+        var asset = assetRow;
         if (!string.IsNullOrWhiteSpace(request.ActivoCodigo) && asset is null)
         {
             throw new DomainException($"El activo '{request.ActivoCodigo}' no existe.");
@@ -87,8 +91,17 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         if (asset is not null)
         {
             EnsureFaenaAccess(user, asset.FaenaCodigo);
+            EnsurePlanMeasurementCompatibility(request.FrecuenciaHoras.HasValue, request.FrecuenciaKm.HasValue, asset);
         }
-
+        else
+        {
+            foreach (var candidate in data.Assets.Where(x => Same(x.Familia, request.FamiliaEquipo) &&
+                                                            (string.IsNullOrWhiteSpace(request.Marca) || Same(x.Marca, request.Marca)) &&
+                                                            (string.IsNullOrWhiteSpace(request.Modelo) || Same(x.Modelo, request.Modelo))))
+            {
+                EnsurePlanMeasurementCompatibility(request.FrecuenciaHoras.HasValue, request.FrecuenciaKm.HasValue, candidate);
+            }
+        }
         var rows = data.Plans.ToList();
         var index = rows.FindIndex(row => Same(row.GetValue("Codigo"), request.Codigo));
         var previous = index >= 0 ? rows[index] : null;
@@ -147,11 +160,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         EnsureCanView(user);
         var data = await ReadDataAsync(cancellationToken);
         return data.Readings
-            .Select(row =>
-            {
-                var assetRow = FindAsset(data.Assets, row.GetValue("ActivoCodigo"));
-                return ToReadingResponse(row, assetRow is null ? null : ToAssetInfo(assetRow));
-            })
+            .Select(reading => ToReadingResponse(reading, FindAsset(data.Assets, reading.ActivoCodigo)))
             .Where(item => string.IsNullOrWhiteSpace(query.ActivoCodigo) || Same(item.ActivoCodigo, query.ActivoCodigo))
             .Where(item => string.IsNullOrWhiteSpace(query.FaenaCodigo) || Same(item.FaenaCodigo, query.FaenaCodigo))
             .Where(item => !query.From.HasValue || item.FechaLectura >= query.From.Value)
@@ -168,59 +177,41 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
     {
         EnsureCanRegisterReading(user);
         ValidateRequired(request.ActivoCodigo, nameof(request.ActivoCodigo));
-        if (!request.Horometro.HasValue && !request.Kilometraje.HasValue)
+        if (request.Valor < 0) throw new DomainException("La lectura no puede ser negativa.");
+
+        var asset = await _dbContext.Assets
+            .Include(x => x.Faena).Include(x => x.Family).Include(x => x.AssetTypeDefinition)
+            .SingleOrDefaultAsync(x => x.Code == NormalizeCode(request.ActivoCodigo), cancellationToken)
+            ?? throw new DomainException($"El activo '{request.ActivoCodigo}' no existe.");
+        var assetInfo = ToAssetInfo(asset);
+        EnsureFaenaAccess(user, assetInfo.FaenaCodigo);
+        if (assetInfo.TipoMedicionUso is null) throw new DomainException("El activo no tiene medicion de uso.");
+
+        var all = await _dbContext.AssetReadings
+            .Where(x => x.AssetId == asset.Id)
+            .OrderBy(x => x.ReadAtUtc).ThenBy(x => x.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+        var replaced = all.Where(x => x.CorrectedReadingId.HasValue).Select(x => x.CorrectedReadingId!.Value).ToHashSet();
+        var previous = all.Where(x => !replaced.Contains(x.Id)).LastOrDefault();
+        if (previous is not null && request.Valor < previous.Value)
+            throw new DomainException("Una lectura normal no puede disminuir. Registre una correccion desde el recurso de lecturas del activo.");
+
+        var reading = new AssetReadingEntity
         {
-            throw new DomainException("Debe indicar horometro, kilometraje o ambos.");
-        }
-
-        var data = await ReadDataAsync(cancellationToken);
-        var assetRow = FindAsset(data.Assets, request.ActivoCodigo) ??
-                    throw new DomainException($"El activo '{request.ActivoCodigo}' no existe.");
-        var asset = ToAssetInfo(assetRow);
-        EnsureFaenaAccess(user, asset.FaenaCodigo);
-
-        var latest = LatestReading(data.Readings, asset.Codigo);
-        var latestResponse = latest is null ? null : ToReadingResponse(latest, asset);
-        var isCorrection = IsLowerReading(request.Horometro, latestResponse?.Horometro) ||
-                           IsLowerReading(request.Kilometraje, latestResponse?.Kilometraje);
-        if (isCorrection)
-        {
-            if (!request.AutorizarCorreccion || !CanManage(user))
-            {
-                throw new DomainException("No se permite registrar una lectura menor sin correccion autorizada.");
-            }
-
-            ValidateRequired(request.MotivoCorreccion, nameof(request.MotivoCorreccion));
-        }
-
-        var anomalyMessages = new List<string>();
-        AddAnomalyMessage(anomalyMessages, "horometro", request.Horometro, latestResponse?.Horometro, AnomalousHourJump);
-        AddAnomalyMessage(anomalyMessages, "kilometraje", request.Kilometraje, latestResponse?.Kilometraje, AnomalousKmJump);
-        var isAnomalous = anomalyMessages.Count > 0;
-        var row = ReadingRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["ReadingId"] = NewId("LEC"),
-            ["ActivoCodigo"] = NormalizeCode(request.ActivoCodigo),
-            ["Horometro"] = FormatOptionalNumber(request.Horometro),
-            ["Kilometraje"] = FormatOptionalNumber(request.Kilometraje),
-            ["FechaLectura"] = FormatDate(request.FechaLectura),
-            ["UsuarioId"] = user.UserId,
-            ["Evidencia"] = NormalizeText(request.Evidencia),
-            ["EsCorreccion"] = isCorrection ? "true" : "false",
-            ["EsAnomala"] = isAnomalous ? "true" : "false",
-            ["MensajeValidacion"] = anomalyMessages.Count == 0 ? null : string.Join(" | ", anomalyMessages),
-            ["MotivoCorreccion"] = NormalizeText(request.MotivoCorreccion),
-            ["AutorizadoPor"] = isCorrection ? user.UserId : null,
-            ["CreadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow)
-        });
-
-        var rows = data.Readings.ToList();
-        rows.Add(row);
-        await _dbContext.SaveOperationalRowsAsync(ReadingsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "preventive.reading_registered", row.GetValue("ReadingId")!, null, row, request.MotivoCorreccion, cancellationToken);
-        return ToReadingResponse(row, asset);
+            AssetId = asset.Id,
+            ReadAtUtc = request.FechaLectura,
+            Value = request.Valor,
+            Source = ReadingSource(request.Origen),
+            RegisteredByUserId = user.UserId,
+            EvidenceReference = NormalizeText(request.Evidencia),
+            Observations = NormalizeText(request.Observaciones)
+        };
+        _dbContext.AssetReadings.Add(reading);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        var response = ToReadingResponse(ToAssetReadingInfo(reading, assetInfo), assetInfo);
+        await RecordAuditAsync(user, "preventive.reading_registered", response.ReadingId, null, null, null, cancellationToken);
+        return response;
     }
-
     public async Task<PreventiveDashboardResponse> EvaluateAsync(
         PreventiveEvaluationQuery query,
         UserAccessContext user,
@@ -271,7 +262,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         }
 
         var warnings = new List<string>();
-        var plan = ToPlanResponse(planRow, asset.ToDataRow());
+        var plan = ToPlanResponse(planRow, asset);
         var workOrder = await _workOrderService.CreatePreventiveAsync(new CreatePreventiveWorkOrderRequest(
             asset.Codigo,
             $"Preventivo {plan.Nombre}",
@@ -362,7 +353,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
 
         var previous = rows[index];
         var assetRow = FindAsset(data.Assets, previous.GetValue("ActivoCodigo"));
-        var asset = assetRow is null ? null : ToAssetInfo(assetRow);
+        var asset = assetRow;
         if (asset is not null)
         {
             EnsureFaenaAccess(user, asset.FaenaCodigo);
@@ -490,17 +481,17 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         bool forced,
         DateTimeOffset? evaluationDate = null)
     {
-        var plan = ToPlanResponse(planRow, asset.ToDataRow());
+        var plan = ToPlanResponse(planRow, asset);
         var now = evaluationDate ?? DateTimeOffset.UtcNow;
         var latest = LatestReading(data.Readings, asset.Codigo);
-        var latestReading = latest is null ? null : ToReadingResponse(latest, asset);
+        var latestValue = latest?.Valor;
         var states = new List<TriggerEvaluation>();
 
         if (plan.FrecuenciaHoras.HasValue)
         {
             var baseValue = plan.UltimaEjecucionHoras ?? 0;
             var next = plan.ProximaHora ?? baseValue + plan.FrecuenciaHoras.Value;
-            var current = latestReading?.Horometro ?? baseValue;
+            var current = latestValue ?? baseValue;
             states.Add(EvaluateMeter("horas", next - current, plan.ToleranciaHoras, plan.FrecuenciaHoras.Value));
         }
 
@@ -508,7 +499,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         {
             var baseValue = plan.UltimaEjecucionKm ?? 0;
             var next = plan.ProximoKm ?? baseValue + plan.FrecuenciaKm.Value;
-            var current = latestReading?.Kilometraje ?? baseValue;
+            var current = latestValue ?? baseValue;
             states.Add(EvaluateMeter("km", next - current, plan.ToleranciaKm, plan.FrecuenciaKm.Value));
         }
 
@@ -715,15 +706,25 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
 
     private async Task<PreventiveData> ReadDataAsync(CancellationToken cancellationToken)
     {
-        return new PreventiveData(
-            await _dbContext.ReadOperationalRowsAsync(PlansSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(ReadingsSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(EvaluationsSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(AssetsSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(WorkOrdersSchema, cancellationToken));
+        var plansTask = _dbContext.ReadOperationalRowsAsync(PlansSchema, cancellationToken);
+        var evaluationsTask = _dbContext.ReadOperationalRowsAsync(EvaluationsSchema, cancellationToken);
+        var workOrdersTask = _dbContext.ReadOperationalRowsAsync(WorkOrdersSchema, cancellationToken);
+        var assets = await _dbContext.Assets.AsNoTracking()
+            .Include(x => x.Faena).Include(x => x.Family).Include(x => x.AssetTypeDefinition)
+            .Select(x => new AssetInfo(x.Id, x.Code, x.Name, x.Faena == null ? string.Empty : x.Faena.Code,
+                x.Family == null ? null : x.Family.Code, x.Brand, x.Model, x.UsageMeasurementType))
+            .ToArrayAsync(cancellationToken);
+        var assetById = assets.ToDictionary(x => x.Id);
+        var rows = await _dbContext.AssetReadings.AsNoTracking()
+            .OrderBy(x => x.ReadAtUtc).ThenBy(x => x.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+        var replaced = rows.Where(x => x.CorrectedReadingId.HasValue).Select(x => x.CorrectedReadingId!.Value).ToHashSet();
+        var readings = rows.Where(x => !replaced.Contains(x.Id) && assetById.ContainsKey(x.AssetId))
+            .Select(x => ToAssetReadingInfo(x, assetById[x.AssetId]))
+            .ToArray();
+        return new PreventiveData(await plansTask, readings, await evaluationsTask, assets, await workOrdersTask);
     }
-
-    private IEnumerable<AssetInfo> MatchAssets(DataRow planRow, IReadOnlyCollection<DataRow> assets)
+    private IEnumerable<AssetInfo> MatchAssets(DataRow planRow, IReadOnlyCollection<AssetInfo> assets)
     {
         var activoCodigo = NormalizeCode(planRow.GetValue("ActivoCodigo"));
         var family = NormalizeText(planRow.GetValue("FamiliaEquipo"));
@@ -731,11 +732,11 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         var model = NormalizeText(planRow.GetValue("Modelo"));
 
         return assets
-            .Select(ToAssetInfo)
             .Where(asset => string.IsNullOrWhiteSpace(activoCodigo) || Same(asset.Codigo, activoCodigo))
             .Where(asset => string.IsNullOrWhiteSpace(family) || Same(asset.Familia, family))
             .Where(asset => string.IsNullOrWhiteSpace(brand) || Same(asset.Marca, brand))
-            .Where(asset => string.IsNullOrWhiteSpace(model) || Same(asset.Modelo, model));
+            .Where(asset => string.IsNullOrWhiteSpace(model) || Same(asset.Modelo, model))
+            .Where(asset => IsPlanMeasurementCompatible(planRow, asset));
     }
 
     private static DataRow? FindOpenPreventiveWorkOrder(IReadOnlyCollection<DataRow> rows, string? planCode, string assetCode)
@@ -755,9 +756,8 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
                 status.Equals(WorkOrderLifecycleStatus.Anulada.ToString(), StringComparison.OrdinalIgnoreCase));
     }
 
-    private static PreventivePlanResponse ToPlanResponse(DataRow row, DataRow? asset)
+    private static PreventivePlanResponse ToPlanResponse(DataRow row, AssetInfo? assetInfo)
     {
-        var assetInfo = asset is null ? null : ToAssetInfo(asset);
         var frequency = ParseFrequency(row);
         return new PreventivePlanResponse(
             row.GetValue("Codigo") ?? string.Empty,
@@ -789,25 +789,23 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
             ParseBool(row.GetValue("Activo"), true));
     }
 
-    private static PreventiveReadingResponse ToReadingResponse(DataRow row, AssetInfo? asset)
+    private static PreventiveReadingResponse ToReadingResponse(AssetReadingInfo reading, AssetInfo? asset)
     {
-        var faenaCodigo = asset?.FaenaCodigo ?? string.Empty;
         return new PreventiveReadingResponse(
-            row.GetValue("ReadingId") ?? string.Empty,
-            row.GetValue("ActivoCodigo") ?? string.Empty,
+            reading.Id,
+            reading.ActivoCodigo,
             asset?.Nombre,
-            faenaCodigo,
-            ParseNullableDecimal(row.GetValue("Horometro")),
-            ParseNullableDecimal(row.GetValue("Kilometraje")),
-            ParseDate(row.GetValue("FechaLectura")) ?? DateTimeOffset.MinValue,
-            row.GetValue("UsuarioId") ?? string.Empty,
-            EmptyToNull(row.GetValue("Evidencia")),
-            ParseBool(row.GetValue("EsCorreccion")),
-            ParseBool(row.GetValue("EsAnomala")),
-            EmptyToNull(row.GetValue("MensajeValidacion")),
-            EmptyToNull(row.GetValue("AutorizadoPor")));
+            asset?.FaenaCodigo ?? string.Empty,
+            reading.Valor,
+            Unit(reading.TipoMedicionUso),
+            reading.FechaLectura,
+            reading.UsuarioId,
+            reading.Evidencia,
+            reading.EsCorreccion,
+            reading.EsAnomala,
+            reading.MensajeValidacion,
+            reading.AutorizadoPor);
     }
-
     private static PreventiveHistoryResponse ToHistoryResponse(DataRow row)
     {
         return new PreventiveHistoryResponse(
@@ -822,35 +820,22 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
             EmptyToNull(row.GetValue("NumeroOT")));
     }
 
-    private static AssetInfo ToAssetInfo(DataRow row)
-    {
-        return new AssetInfo(
-            row.GetValue("Codigo") ?? string.Empty,
-            row.GetValue("Nombre"),
-            row.GetValue("FaenaCodigo") ?? string.Empty,
-            EmptyToNull(row.GetValue("Familia")),
-            EmptyToNull(row.GetValue("Marca")),
-            EmptyToNull(row.GetValue("Modelo")));
-    }
+    private static AssetInfo ToAssetInfo(AssetEntity asset) => new(
+        asset.Id, asset.Code, asset.Name, asset.Faena?.Code ?? string.Empty,
+        asset.Family?.Code, asset.Brand, asset.Model, asset.UsageMeasurementType);
 
-    private static DataRow? FindAsset(IEnumerable<DataRow> rows, string? assetCode)
-    {
-        if (string.IsNullOrWhiteSpace(assetCode))
-        {
-            return null;
-        }
+    private static AssetReadingInfo ToAssetReadingInfo(AssetReadingEntity reading, AssetInfo asset) => new(
+        reading.Id.ToString("D"), asset.Codigo, reading.Value, reading.ReadAtUtc,
+        reading.RegisteredByUserId ?? string.Empty, reading.EvidenceReference, reading.IsCorrection,
+        reading.IsAnomalous, reading.ValidationMessage, reading.AuthorizedByUserId, asset.TipoMedicionUso);
 
-        return rows.FirstOrDefault(row => Same(row.GetValue("Codigo"), assetCode));
-    }
+    private static AssetInfo? FindAsset(IEnumerable<AssetInfo> rows, string? assetCode) =>
+        string.IsNullOrWhiteSpace(assetCode) ? null : rows.FirstOrDefault(row => Same(row.Codigo, assetCode));
 
-    private static DataRow? LatestReading(IEnumerable<DataRow> rows, string assetCode)
-    {
-        return rows
-            .Where(row => Same(row.GetValue("ActivoCodigo"), assetCode))
-            .OrderByDescending(row => ParseDate(row.GetValue("FechaLectura")) ?? DateTimeOffset.MinValue)
-            .FirstOrDefault();
-    }
-
+    private static AssetReadingInfo? LatestReading(IEnumerable<AssetReadingInfo> rows, string assetCode) => rows
+        .Where(row => Same(row.ActivoCodigo, assetCode))
+        .OrderByDescending(row => row.FechaLectura)
+        .FirstOrDefault();
     private async Task RecordAuditAsync(
         UserAccessContext user,
         string action,
@@ -948,6 +933,26 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
             .ToArray();
     }
 
+    private static string Unit(string? measurement) => measurement == "HOROMETRO" ? "horas" : "kilometros";
+
+    private static string ReadingSource(string? source)
+    {
+        var normalized = NormalizeCode(source);
+        return normalized is "MANUAL" or "ORDEN_TRABAJO" or "IMPORTACION" or "SAP" or "TELEMETRIA"
+            ? normalized
+            : throw new DomainException("Origen de lectura invalido.");
+    }
+    private static void EnsurePlanMeasurementCompatibility(bool usesHours, bool usesKilometres, AssetInfo asset)
+    {
+        if (usesHours && !string.Equals(asset.TipoMedicionUso, "HOROMETRO", StringComparison.Ordinal))
+            throw new DomainException($"El activo {asset.Codigo} no admite frecuencia por horas.");
+        if (usesKilometres && !string.Equals(asset.TipoMedicionUso, "KILOMETRAJE", StringComparison.Ordinal))
+            throw new DomainException($"El activo {asset.Codigo} no admite frecuencia por kilometros.");
+    }
+
+    private static bool IsPlanMeasurementCompatible(DataRow plan, AssetInfo asset) =>
+        (!ParseNullableDecimal(plan.GetValue("FrecuenciaHoras")).HasValue || string.Equals(asset.TipoMedicionUso, "HOROMETRO", StringComparison.Ordinal)) &&
+        (!ParseNullableDecimal(plan.GetValue("FrecuenciaKm")).HasValue || string.Equals(asset.TipoMedicionUso, "KILOMETRAJE", StringComparison.Ordinal));
     private static PreventiveFrequencyType ResolveFrequencyType(UpsertPreventivePlanRequest request)
     {
         var count = new[] { request.FrecuenciaHoras.HasValue, request.FrecuenciaKm.HasValue, request.FrecuenciaDias.HasValue }.Count(BooleanTrue);
@@ -1048,7 +1053,6 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
 
     private static DataRow PlanRow(IReadOnlyDictionary<string, string?> values) => Row(PlanColumns, values);
 
-    private static DataRow ReadingRow(IReadOnlyDictionary<string, string?> values) => Row(ReadingColumns, values);
 
     private static DataRow Row(IEnumerable<string> columns, IReadOnlyDictionary<string, string?> values)
     {
@@ -1178,52 +1182,35 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
         "ActualizadoPor"
     ];
 
-    private static readonly string[] ReadingColumns =
-    [
-        "ReadingId",
-        "ActivoCodigo",
-        "Horometro",
-        "Kilometraje",
-        "FechaLectura",
-        "UsuarioId",
-        "Evidencia",
-        "EsCorreccion",
-        "EsAnomala",
-        "MensajeValidacion",
-        "MotivoCorreccion",
-        "AutorizadoPor",
-        "CreadoEnUtc"
-    ];
-
     private sealed record PreventiveData(
         IReadOnlyCollection<DataRow> Plans,
-        IReadOnlyCollection<DataRow> Readings,
+        IReadOnlyCollection<AssetReadingInfo> Readings,
         IReadOnlyCollection<DataRow> Evaluations,
-        IReadOnlyCollection<DataRow> Assets,
+        IReadOnlyCollection<AssetInfo> Assets,
         IReadOnlyCollection<DataRow> WorkOrders);
 
     private sealed record AssetInfo(
+        Guid Id,
         string Codigo,
         string? Nombre,
         string FaenaCodigo,
         string? Familia,
         string? Marca,
-        string? Modelo)
-    {
-        public DataRow ToDataRow()
-        {
-            return new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Codigo"] = Codigo,
-                ["Nombre"] = Nombre,
-                ["FaenaCodigo"] = FaenaCodigo,
-                ["Familia"] = Familia,
-                ["Marca"] = Marca,
-                ["Modelo"] = Modelo
-            });
-        }
-    }
+        string? Modelo,
+        string? TipoMedicionUso);
 
+    private sealed record AssetReadingInfo(
+        string Id,
+        string ActivoCodigo,
+        decimal Valor,
+        DateTimeOffset FechaLectura,
+        string UsuarioId,
+        string? Evidencia,
+        bool EsCorreccion,
+        bool EsAnomala,
+        string? MensajeValidacion,
+        string? AutorizadoPor,
+        string? TipoMedicionUso);
     private sealed record TriggerEvaluation(
         PreventiveStatus Status,
         string? Kind,

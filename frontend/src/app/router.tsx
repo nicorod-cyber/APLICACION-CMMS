@@ -3,6 +3,7 @@ import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { ProtectedRoute } from "../features/auth/ProtectedRoute";
 import { AssetsPage } from "../features/assets/AssetsPage";
+import { OperationalUnitsPage } from "../features/operational-units/OperationalUnitsPage";
 import { UsersAdminPage } from "../features/admin/UsersAdminPage";
 import { AlertsPage } from "../features/alerts/AlertsPage";
 import { AuditPage } from "../features/audit/AuditPage";
@@ -65,7 +66,10 @@ export const router = createBrowserRouter([
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <AssetsPage />
               </ProtectedRoute>
-            ) : item.path === "/documentos" ? (
+            ) : item.path === "/unidades-operativas" ? (
+              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
+                <OperationalUnitsPage />
+              </ProtectedRoute>            ) : item.path === "/documentos" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <DocumentsPage />
               </ProtectedRoute>

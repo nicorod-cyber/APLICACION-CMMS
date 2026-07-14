@@ -87,10 +87,30 @@ public sealed class AssetOperationalStateEntity : PostgreSqlEntity
     public bool IsActive { get; set; } = true;
 }
 
-public sealed class EquipmentFamilyEntity : PostgreSqlEntity
+public sealed class AssetTypeEntity : PostgreSqlEntity
 {
     public string Code { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public bool IsMobile { get; set; }
+    public bool IsMountable { get; set; }
+    public bool CanBeCarrier { get; set; }
+    public bool ControlsMaintenance { get; set; } = true;
+    public bool ParticipatesInAvailability { get; set; } = true;
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class EquipmentFamilyEntity : PostgreSqlEntity
+{
+    public Guid AssetTypeId { get; set; }
+    public AssetTypeEntity AssetType { get; set; } = null!;
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string? ReferenceBrand { get; set; }
+    public string? ReferenceModel { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
@@ -98,23 +118,28 @@ public sealed class AssetEntity : PostgreSqlEntity
 {
     public string Code { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public Guid FaenaId { get; set; }
-    public FaenaEntity Faena { get; set; } = null!;
-    public Guid FamilyId { get; set; }
-    public EquipmentFamilyEntity Family { get; set; } = null!;
+    public Guid AssetTypeId { get; set; }
+    public AssetTypeEntity AssetTypeDefinition { get; set; } = null!;
+    public Guid? FaenaId { get; set; }
+    public FaenaEntity? Faena { get; set; }
+    public Guid? FamilyId { get; set; }
+    public EquipmentFamilyEntity? Family { get; set; }
+    public Guid? TechnicalLocationId { get; set; }
+    public TechnicalLocationEntity? TechnicalLocation { get; set; }
     public Guid OperationalStateId { get; set; }
     public AssetOperationalStateEntity OperationalState { get; set; } = null!;
-    public string RecordStatus { get; set; } = "vigente";
-    public string AssetType { get; set; } = string.Empty;
-    public string? TechnicalLocationCode { get; set; }
     public string? Brand { get; set; }
     public string? Model { get; set; }
-    public string? Plate { get; set; }
     public string? SerialNumber { get; set; }
     public string? Ownership { get; set; }
     public string? Criticality { get; set; }
-    public string? DocumentStatus { get; set; }
-    public bool TechnicalSheetValidated { get; set; }
+    public short? ManufacturingYear { get; set; }
+    public DateOnly? AcquisitionDate { get; set; }
+    public DateOnly? CommissioningDate { get; set; }
+    public DateOnly? DecommissioningDate { get; set; }
+    public string? UsageMeasurementType { get; set; }
+    public string? Observations { get; set; }
+
 }
 
 public sealed class AssetStateEventEntity : PostgreSqlEntity
@@ -278,6 +303,161 @@ public sealed class AuditLogEntity : PostgreSqlEntity
     public bool Success { get; set; } = true;
     public string? Detail { get; set; }
     public string? CorrelationId { get; set; }
+}
+
+
+
+
+
+public sealed class AssetAttributeDefinitionEntity : PostgreSqlEntity
+{
+    public Guid AssetTypeId { get; set; }
+    public AssetTypeEntity AssetType { get; set; } = null!;
+    public Guid? EquipmentFamilyId { get; set; }
+    public EquipmentFamilyEntity? EquipmentFamily { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string DataType { get; set; } = "TEXTO";
+    public string? Unit { get; set; }
+    public bool IsRequired { get; set; }
+    public bool IsIdentifier { get; set; }
+    public bool IsUnique { get; set; }
+    public bool IsSearchable { get; set; }
+    public bool IsFilterable { get; set; }
+    public bool ShowInList { get; set; }
+    public decimal? MinimumValue { get; set; }
+    public decimal? MaximumValue { get; set; }
+    public string? ValidationPattern { get; set; }
+    public string? OptionsJson { get; set; }
+    public string? DisplayGroup { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class AssetAttributeValueEntity : PostgreSqlEntity
+{
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public Guid AttributeDefinitionId { get; set; }
+    public AssetAttributeDefinitionEntity AttributeDefinition { get; set; } = null!;
+    public string? TextValue { get; set; }
+    public decimal? NumericValue { get; set; }
+    public bool? BooleanValue { get; set; }
+    public DateOnly? DateValue { get; set; }
+    public string? Observations { get; set; }
+}
+
+public sealed class AssetReadingEntity : PostgreSqlEntity
+{
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public DateTimeOffset ReadAtUtc { get; set; }
+    public decimal Value { get; set; }
+    public string Source { get; set; } = "MANUAL";
+    public Guid? WorkOrderId { get; set; }
+    public WorkOrderEntity? WorkOrder { get; set; }
+    public string? RegisteredByUserId { get; set; }
+    public string? EvidenceReference { get; set; }
+    public string? Observations { get; set; }
+    public bool IsCorrection { get; set; }
+    public Guid? CorrectedReadingId { get; set; }
+    public AssetReadingEntity? CorrectedReading { get; set; }
+    public string? CorrectionReason { get; set; }
+    public string? AuthorizedByUserId { get; set; }
+    public bool IsAnomalous { get; set; }
+    public string? ValidationMessage { get; set; }
+}
+
+public sealed class AssetDocumentRequirementEntity : PostgreSqlEntity
+{
+    public Guid AssetTypeId { get; set; }
+    public AssetTypeEntity AssetType { get; set; } = null!;
+    public Guid? EquipmentFamilyId { get; set; }
+    public EquipmentFamilyEntity? EquipmentFamily { get; set; }
+    public Guid DocumentTypeId { get; set; }
+    public DocumentTypeEntity DocumentType { get; set; } = null!;
+    public bool IsMandatory { get; set; }
+    public bool IsCritical { get; set; }
+    public bool BlocksAvailability { get; set; }
+    public bool RequiresExpirationDate { get; set; }
+    public int? AlertDays { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class OperationalUnitTypeEntity : PostgreSqlEntity
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool ParticipatesInAvailability { get; set; } = true;
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class OperationalUnitEntity : PostgreSqlEntity
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public Guid OperationalUnitTypeId { get; set; }
+    public OperationalUnitTypeEntity OperationalUnitType { get; set; } = null!;
+    public Guid? FaenaId { get; set; }
+    public FaenaEntity? Faena { get; set; }
+    public Guid? TechnicalLocationId { get; set; }
+    public TechnicalLocationEntity? TechnicalLocation { get; set; }
+    public Guid OperationalStateId { get; set; }
+    public AssetOperationalStateEntity OperationalState { get; set; } = null!;
+    public string? Criticality { get; set; }
+    public DateOnly? CommissioningDate { get; set; }
+    public DateOnly? DecommissioningDate { get; set; }
+    public string? Observations { get; set; }
+}
+
+public sealed class OperationalUnitComponentRoleEntity : PostgreSqlEntity
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class OperationalUnitCompositionRuleEntity : PostgreSqlEntity
+{
+    public Guid OperationalUnitTypeId { get; set; }
+    public OperationalUnitTypeEntity OperationalUnitType { get; set; } = null!;
+    public Guid ComponentRoleId { get; set; }
+    public OperationalUnitComponentRoleEntity ComponentRole { get; set; } = null!;
+    public int MinimumQuantity { get; set; }
+    public int MaximumQuantity { get; set; }
+    public bool IsMandatory { get; set; }
+    public bool IsActive { get; set; } = true;
+    public List<OperationalUnitCompositionRuleAllowedAssetEntity> AllowedAssets { get; set; } = [];
+}
+
+public sealed class OperationalUnitCompositionRuleAllowedAssetEntity : PostgreSqlEntity
+{
+    public Guid OperationalUnitCompositionRuleId { get; set; }
+    public OperationalUnitCompositionRuleEntity OperationalUnitCompositionRule { get; set; } = null!;
+    public Guid? AssetTypeId { get; set; }
+    public AssetTypeEntity? AssetType { get; set; }
+    public Guid? EquipmentFamilyId { get; set; }
+    public EquipmentFamilyEntity? EquipmentFamily { get; set; }
+}
+
+public sealed class OperationalUnitComponentEntity : PostgreSqlEntity
+{
+    public Guid OperationalUnitId { get; set; }
+    public OperationalUnitEntity OperationalUnit { get; set; } = null!;
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public Guid ComponentRoleId { get; set; }
+    public OperationalUnitComponentRoleEntity ComponentRole { get; set; } = null!;
+    public DateTimeOffset InstalledAtUtc { get; set; }
+    public DateTimeOffset? RemovedAtUtc { get; set; }
+    public Guid? InstallationWorkOrderId { get; set; }
+    public WorkOrderEntity? InstallationWorkOrder { get; set; }
+    public Guid? RemovalWorkOrderId { get; set; }
+    public WorkOrderEntity? RemovalWorkOrder { get; set; }
+    public string? Observations { get; set; }
 }
 
 

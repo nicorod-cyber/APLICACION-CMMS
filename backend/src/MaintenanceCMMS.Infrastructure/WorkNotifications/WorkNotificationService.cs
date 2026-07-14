@@ -1,4 +1,4 @@
-﻿using System.Data;
+using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using MaintenanceCMMS.Application.Auditing;
@@ -36,6 +36,7 @@ public sealed class WorkNotificationService : IWorkNotificationService
             .Where(item => !query.Priority.HasValue || item.Prioridad == query.Priority)
             .Where(item => string.IsNullOrWhiteSpace(query.FaenaCodigo) || Same(item.FaenaCodigo, query.FaenaCodigo))
             .Where(item => string.IsNullOrWhiteSpace(query.ActivoCodigo) || Same(item.ActivoCodigo, query.ActivoCodigo))
+            .Where(item => string.IsNullOrWhiteSpace(query.UnidadOperativaCodigo) || Same(item.UnidadOperativaCodigo, query.UnidadOperativaCodigo))
             .Where(item => !query.SupervisorInbox || item.Estado is WorkNotificationStatus.Creado or WorkNotificationStatus.EnEvaluacion or WorkNotificationStatus.Aprobado)
             .Where(item => CanAccessFaena(user, item.FaenaCodigo))
             .OrderByDescending(item => item.Prioridad)
@@ -58,7 +59,9 @@ public sealed class WorkNotificationService : IWorkNotificationService
         ValidateCreate(request);
         var asset = await FindAssetAsync(request.ActivoCodigo, cancellationToken);
         if (!string.IsNullOrWhiteSpace(request.ActivoCodigo) && asset is null) throw new DomainException($"El activo '{request.ActivoCodigo}' no existe.");
-        var faena = await ResolveFaenaAsync(request.FaenaCodigo, asset, cancellationToken);
+        var operationalUnit = await FindOperationalUnitAsync(request.UnidadOperativaCodigo, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(request.UnidadOperativaCodigo) && operationalUnit is null) throw new DomainException($"La unidad operativa '{request.UnidadOperativaCodigo}' no existe.");
+        var faena = await ResolveFaenaAsync(request.FaenaCodigo, asset, operationalUnit, cancellationToken);
         EnsureFaenaAccess(user, faena.Code);
         var now = DateTimeOffset.UtcNow;
         var entity = new WorkNotificationEntity
@@ -71,6 +74,8 @@ public sealed class WorkNotificationService : IWorkNotificationService
             Faena = faena,
             AssetId = asset?.Id,
             Asset = asset,
+            OperationalUnitId = operationalUnit?.Id,
+            OperationalUnit = operationalUnit,
             System = NormalizeText(request.Sistema),
             Subsystem = NormalizeText(request.Subsistema),
             Component = NormalizeText(request.Componente),
@@ -113,7 +118,7 @@ public sealed class WorkNotificationService : IWorkNotificationService
         var current = ToResponse(notification);
         EnsureStatus(current, WorkNotificationStatus.Aprobado);
         if (notification.WorkOrderId.HasValue) throw new DomainException("El aviso ya fue convertido a OT.");
-        if (notification.Asset is null) throw new DomainException("El aviso requiere activo para convertirse a OT.");
+        if (notification.Asset is null && notification.OperationalUnit is null) throw new DomainException("El aviso requiere activo o unidad operativa para convertirse a OT.");
         var now = DateTimeOffset.UtcNow;
         var maintenanceType = NormalizeText(request.TipoMantenimiento) ?? ResolveMaintenanceType(current.Tipo);
         var status = await CatalogAsync("WorkOrderLifecycleStatus", WorkOrderLifecycleStatus.OTCreada.ToString(), cancellationToken);
@@ -121,8 +126,10 @@ public sealed class WorkNotificationService : IWorkNotificationService
         {
             Id = Guid.NewGuid(),
             WorkOrderNumber = await NextNumberAsync("work_order_number_seq", "OT", cancellationToken),
-            AssetId = notification.AssetId!.Value,
+            AssetId = notification.AssetId,
             Asset = notification.Asset,
+            OperationalUnitId = notification.OperationalUnitId,
+            OperationalUnit = notification.OperationalUnit,
             FaenaId = notification.FaenaId,
             Faena = notification.Faena,
             StatusId = status.Id,
@@ -143,6 +150,14 @@ public sealed class WorkNotificationService : IWorkNotificationService
             UpdatedByUserAtUtc = now
         };
         _dbContext.WorkOrders.Add(workOrder);
+        if (notification.Asset is not null)
+        {
+            _dbContext.WorkOrderAssets.Add(new WorkOrderAssetEntity
+            {
+                Id = Guid.NewGuid(), WorkOrder = workOrder, WorkOrderId = workOrder.Id, Asset = notification.Asset, AssetId = notification.Asset.Id, Role = "PRINCIPAL",
+                AssetCodeSnapshot = notification.Asset.Code, AssetNameSnapshot = notification.Asset.Name, AddedAtUtc = now, AddedByUserId = user.UserId
+            });
+        }
         _dbContext.WorkOrderStatusHistory.Add(new WorkOrderStatusHistoryEntity
         {
             Id = Guid.NewGuid(), WorkOrder = workOrder, PreviousStatusId = status.Id, NewStatusId = status.Id, OccurredAtUtc = now, UserId = user.UserId, Reason = "OT creada desde aviso"
@@ -192,7 +207,7 @@ public sealed class WorkNotificationService : IWorkNotificationService
     }
 
     private IQueryable<WorkNotificationEntity> BaseQuery() => _dbContext.WorkNotifications.AsSplitQuery()
-        .Include(e => e.Status).Include(e => e.Type).Include(e => e.Faena).Include(e => e.Asset)
+        .Include(e => e.Status).Include(e => e.Type).Include(e => e.Faena).Include(e => e.Asset).Include(e => e.OperationalUnit)
         .Include(e => e.Priority).Include(e => e.Criticality).Include(e => e.FailureClassification).Include(e => e.WorkOrder);
 
     private Task<WorkNotificationEntity?> FindAsync(string id, bool tracking, CancellationToken ct)
@@ -216,10 +231,18 @@ public sealed class WorkNotificationService : IWorkNotificationService
         return await _dbContext.Assets.Include(e => e.Faena).FirstOrDefaultAsync(e => e.Code == NormalizeCode(assetCode), ct);
     }
 
-    private async Task<FaenaEntity> ResolveFaenaAsync(string? requestedFaena, AssetEntity? asset, CancellationToken ct)
+    private async Task<OperationalUnitEntity?> FindOperationalUnitAsync(string? unitCode, CancellationToken ct)
     {
-        if (asset is not null && string.IsNullOrWhiteSpace(requestedFaena)) return asset.Faena;
-        if (asset is not null && !Same(requestedFaena, asset.Faena.Code)) throw new DomainException("El activo seleccionado no pertenece a la faena indicada.");
+        if (string.IsNullOrWhiteSpace(unitCode)) return null;
+        return await _dbContext.OperationalUnits.Include(e => e.Faena).FirstOrDefaultAsync(e => e.Code == NormalizeCode(unitCode), ct);
+    }
+
+    private async Task<FaenaEntity> ResolveFaenaAsync(string? requestedFaena, AssetEntity? asset, OperationalUnitEntity? operationalUnit, CancellationToken ct)
+    {
+        var targetFaena = asset?.Faena ?? operationalUnit?.Faena;
+        if (asset is not null && operationalUnit?.Faena is not null && !Same(asset.Faena.Code, operationalUnit.Faena.Code)) throw new DomainException("El activo y la unidad operativa deben pertenecer a la misma faena.");
+        if (targetFaena is not null && string.IsNullOrWhiteSpace(requestedFaena)) return targetFaena;
+        if (targetFaena is not null && !Same(requestedFaena, targetFaena.Code)) throw new DomainException("Los objetivos seleccionados no pertenecen a la faena indicada.");
         var code = NormalizeCode(requestedFaena);
         var faena = await _dbContext.Faenas.FirstOrDefaultAsync(e => e.Code == code, ct);
         return faena ?? throw new DomainException($"La faena '{requestedFaena}' no existe.");
@@ -242,6 +265,7 @@ public sealed class WorkNotificationService : IWorkNotificationService
         ParseEnum(e.Type.Code, WorkNotificationType.Falla),
         e.Faena.Code,
         e.Asset?.Code,
+        e.OperationalUnit?.Code,
         e.System,
         e.Subsystem,
         e.Component,
@@ -279,7 +303,7 @@ public sealed class WorkNotificationService : IWorkNotificationService
     private static void ValidateCreate(CreateWorkNotificationRequest request)
     {
         ValidateRequired(request.Descripcion, nameof(request.Descripcion));
-        if (string.IsNullOrWhiteSpace(request.FaenaCodigo) && string.IsNullOrWhiteSpace(request.ActivoCodigo)) throw new DomainException("Debe indicar faena o activo para crear el aviso.");
+        if (string.IsNullOrWhiteSpace(request.FaenaCodigo) && string.IsNullOrWhiteSpace(request.ActivoCodigo) && string.IsNullOrWhiteSpace(request.UnidadOperativaCodigo)) throw new DomainException("Debe indicar faena, activo o unidad operativa para crear el aviso.");
         if (request.FechaDeteccion.HasValue && request.FechaDeteccion.Value > DateTimeOffset.UtcNow.AddMinutes(5)) throw new DomainException("La fecha de deteccion no puede ser futura.");
     }
 

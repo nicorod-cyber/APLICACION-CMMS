@@ -566,7 +566,6 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
         var normalized = entity.Trim().ToLowerInvariant();
         var schemaName = normalized switch
         {
-            "activos" => "activos",
             "faenas" => "faenas",
             "ubicaciones" or "ubicaciones_tecnicas" => "ubicaciones_tecnicas",
             "usuarios" => "usuarios",

@@ -11,6 +11,11 @@ public static class CmmsDbContextOperationalExtensions
 
     public static async Task<IReadOnlyList<DataRow>> ReadOperationalRowsAsync(this CmmsDbContext dbContext, string collectionCode, CancellationToken cancellationToken)
     {
+        if (collectionCode == "activos")
+        {
+            return await ReadTypedRowsAsync(dbContext, collectionCode, cancellationToken);
+        }
+
         var dataSet = await dbContext.OperationalDataSets.AsNoTracking().SingleOrDefaultAsync(item => item.Code == collectionCode, cancellationToken);
         var rows = dataSet is null ? [] : Deserialize(dataSet.Payload);
         rows.AddRange(await ReadTypedRowsAsync(dbContext, collectionCode, cancellationToken));
@@ -39,7 +44,7 @@ public static class CmmsDbContextOperationalExtensions
         if (collectionCode == "activos")
         {
             return (await dbContext.Assets.AsNoTracking().Include(item => item.Faena).Include(item => item.Family).Include(item => item.OperationalState).ToListAsync(cancellationToken))
-                .Select(item => Row(("Codigo", item.Code), ("Nombre", item.Name), ("FaenaCodigo", item.Faena.Code), ("Familia", item.Family.Code), ("Marca", item.Brand), ("Modelo", item.Model), ("Estado", item.RecordStatus), ("EstadoOperacional", item.OperationalState.Code), ("TipoActivo", item.AssetType))).ToList();
+                .Select(item => Row(("Codigo", item.Code), ("Nombre", item.Name), ("FaenaCodigo", item.Faena!.Code), ("Familia", item.Family!.Code), ("Marca", item.Brand), ("Modelo", item.Model), ("Estado", item.OperationalState.Code), ("EstadoOperacional", item.OperationalState.Code), ("TipoActivo", item.AssetTypeDefinition.Code))).ToList();
         }
 
         if (collectionCode == "faenas")
@@ -51,7 +56,7 @@ public static class CmmsDbContextOperationalExtensions
         if (collectionCode == "ordenes_trabajo")
         {
             return (await dbContext.WorkOrders.AsNoTracking().Include(item => item.Asset).Include(item => item.Faena).Include(item => item.Status).Include(item => item.MaintenanceType).Include(item => item.Priority).Include(item => item.Criticality).ToListAsync(cancellationToken))
-                .Select(item => Row(("NumeroOT", item.WorkOrderNumber), ("ActivoCodigo", item.Asset.Code), ("FaenaCodigo", item.Faena.Code), ("Estado", item.Status.Code), ("TipoMantenimiento", item.MaintenanceType.Code), ("Prioridad", item.Priority?.Code), ("Criticidad", item.Criticality?.Code), ("Descripcion", item.Description), ("FechaProgramada", item.ScheduledStartUtc?.ToString("O")), ("FechaFinProgramada", item.ScheduledEndUtc?.ToString("O")), ("PlanPreventivoCodigo", item.PreventivePlanCode))).ToList();
+                .Select(item => Row(("NumeroOT", item.WorkOrderNumber), ("ActivoCodigo", item.Asset.Code), ("FaenaCodigo", item.Faena!.Code), ("Estado", item.Status.Code), ("TipoMantenimiento", item.MaintenanceType.Code), ("Prioridad", item.Priority?.Code), ("Criticidad", item.Criticality?.Code), ("Descripcion", item.Description), ("FechaProgramada", item.ScheduledStartUtc?.ToString("O")), ("FechaFinProgramada", item.ScheduledEndUtc?.ToString("O")), ("PlanPreventivoCodigo", item.PreventivePlanCode))).ToList();
         }
 
         if (collectionCode == "solicitudes_repuestos")

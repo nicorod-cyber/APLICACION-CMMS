@@ -93,9 +93,8 @@ public sealed class FileMetadataPostgreSqlTests
             Name = "Activo importado",
             FaenaId = existingAsset.FaenaId,
             FamilyId = existingAsset.FamilyId,
-            OperationalStateId = existingAsset.OperationalStateId,
-            AssetType = "Equipo",
-            RecordStatus = "vigente"
+            AssetTypeId = existingAsset.AssetTypeId,
+            OperationalStateId = existingAsset.OperationalStateId
         });
         await database.DbContext.SaveChangesAsync();
         var importer = new FileMetadataExcelImportService(database.DbContext);

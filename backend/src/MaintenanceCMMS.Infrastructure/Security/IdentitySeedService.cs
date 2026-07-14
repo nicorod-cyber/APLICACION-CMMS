@@ -10,22 +10,32 @@ public sealed class IdentitySeedService : IIdentitySeedService
     private readonly IIdentityStore _identityStore;
     private readonly IPasswordHasher _passwordHasher;
     private readonly AuthSeedOptions _seedOptions;
+    private readonly IIdentitySeedTransaction? _seedTransaction;
 
     public IdentitySeedService(
         IIdentityStore identityStore,
         IPasswordHasher passwordHasher,
-        IOptions<AuthSeedOptions> seedOptions)
+        IOptions<AuthSeedOptions> seedOptions,
+        IEnumerable<IIdentitySeedTransaction>? seedTransactions = null)
     {
         _identityStore = identityStore;
         _passwordHasher = passwordHasher;
         _seedOptions = seedOptions.Value;
+        _seedTransaction = seedTransactions?.SingleOrDefault();
     }
 
-    public async Task SeedAsync(CancellationToken cancellationToken)
+    public Task SeedAsync(CancellationToken cancellationToken)
     {
-        await _identityStore.UpsertRolesAsync(RolePermissionCatalog.InitialRoles, cancellationToken);
+        return _seedTransaction is null
+            ? SeedCoreAsync(_identityStore, cancellationToken)
+            : _seedTransaction.ExecuteAsync(SeedCoreAsync, cancellationToken);
+    }
 
-        var users = await _identityStore.ListUsersAsync(cancellationToken);
+    private async Task SeedCoreAsync(IIdentityStore identityStore, CancellationToken cancellationToken)
+    {
+        await identityStore.UpsertRolesAsync(RolePermissionCatalog.InitialRoles, cancellationToken);
+
+        var users = await identityStore.ListUsersAsync(cancellationToken);
         if (users.Count > 0)
         {
             return;
@@ -48,6 +58,6 @@ public sealed class IdentitySeedService : IIdentitySeedService
             DateTimeOffset.UtcNow,
             null);
 
-        await _identityStore.UpsertUserAsync(admin, cancellationToken);
+        await identityStore.UpsertUserAsync(admin, cancellationToken);
     }
 }

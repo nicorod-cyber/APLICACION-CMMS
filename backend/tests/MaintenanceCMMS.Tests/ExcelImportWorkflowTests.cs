@@ -20,8 +20,8 @@ public sealed class ExcelImportWorkflowTests
         await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.UploadAsync(new ExcelImportUploadCommand(
-            "activos",
-            "activos.xlsx",
+            "faenas",
+            "faenas.xlsx",
             CreateWorkbook(["Codigo"], [["EQ-001"]]),
             "admin",
             SimulateOnly: false), CancellationToken.None);

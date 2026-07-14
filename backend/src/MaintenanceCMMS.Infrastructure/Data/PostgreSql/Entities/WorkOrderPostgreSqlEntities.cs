@@ -1,4 +1,4 @@
-﻿namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 
 public sealed class WorkCatalogEntity : PostgreSqlEntity
 {
@@ -21,6 +21,8 @@ public sealed class WorkNotificationEntity : PostgreSqlEntity
     public FaenaEntity Faena { get; set; } = null!;
     public Guid? AssetId { get; set; }
     public AssetEntity? Asset { get; set; }
+    public Guid? OperationalUnitId { get; set; }
+    public OperationalUnitEntity? OperationalUnit { get; set; }
     public string? System { get; set; }
     public string? Subsystem { get; set; }
     public string? Component { get; set; }
@@ -55,8 +57,10 @@ public sealed class WorkNotificationEntity : PostgreSqlEntity
 public sealed class WorkOrderEntity : PostgreSqlEntity
 {
     public string WorkOrderNumber { get; set; } = string.Empty;
-    public Guid AssetId { get; set; }
-    public AssetEntity Asset { get; set; } = null!;
+    public Guid? AssetId { get; set; }
+    public AssetEntity? Asset { get; set; }
+    public Guid? OperationalUnitId { get; set; }
+    public OperationalUnitEntity? OperationalUnit { get; set; }
     public Guid FaenaId { get; set; }
     public FaenaEntity Faena { get; set; } = null!;
     public Guid StatusId { get; set; }
@@ -103,6 +107,20 @@ public sealed class WorkOrderEntity : PostgreSqlEntity
     public List<WorkOrderChecklistEntity> Checklist { get; set; } = [];
     public List<WorkOrderSignatureEntity> Signatures { get; set; } = [];
     public List<WorkOrderStatusHistoryEntity> History { get; set; } = [];
+    public List<WorkOrderAssetEntity> RelatedAssets { get; set; } = [];
+}
+
+public sealed class WorkOrderAssetEntity : PostgreSqlEntity
+{
+    public Guid WorkOrderId { get; set; }
+    public WorkOrderEntity WorkOrder { get; set; } = null!;
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public string Role { get; set; } = "AFECTADO";
+    public string AssetCodeSnapshot { get; set; } = string.Empty;
+    public string AssetNameSnapshot { get; set; } = string.Empty;
+    public DateTimeOffset AddedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string AddedByUserId { get; set; } = string.Empty;
 }
 
 public sealed class WorkOrderTaskEntity : PostgreSqlEntity

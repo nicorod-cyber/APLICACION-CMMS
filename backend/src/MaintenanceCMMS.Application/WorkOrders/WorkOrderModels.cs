@@ -52,10 +52,11 @@ public sealed record WorkOrderQuery(
     string? FaenaCodigo = null,
     string? TechnicianId = null,
     string? ActivoCodigo = null,
-    bool IncludeClosed = false);
+    bool IncludeClosed = false,
+    string? UnidadOperativaCodigo = null);
 
 public sealed record CreateWorkOrderRequest(
-    string ActivoCodigo,
+    string? ActivoCodigo,
     string Descripcion,
     string TipoMantenimiento,
     string? FaenaCodigo = null,
@@ -68,7 +69,9 @@ public sealed record CreateWorkOrderRequest(
     DateTimeOffset? FechaProgramada = null,
     DateTimeOffset? FechaInicioProgramada = null,
     DateTimeOffset? FechaFinProgramada = null,
-    bool RequiereFirma = false);
+    bool RequiereFirma = false,
+    string? UnidadOperativaCodigo = null,
+    IReadOnlyCollection<WorkOrderAssetInput>? ActivosRelacionados = null);
 
 public sealed record CreatePreventiveWorkOrderRequest(
     string ActivoCodigo,
@@ -201,7 +204,10 @@ public sealed record WorkOrderSummaryResponse(
     int TareasTotal,
     int TecnicosTotal,
     decimal HorasRegistradas,
-    int BloqueosCierre);
+    int BloqueosCierre,
+    string? UnidadOperativaCodigo,
+    string? UnidadOperativaNombre,
+    IReadOnlyCollection<WorkOrderAssetResponse> ActivosRelacionados);
 
 public sealed record WorkOrderDetailResponse(
     WorkOrderSummaryResponse Summary,
@@ -215,6 +221,8 @@ public sealed record WorkOrderDetailResponse(
     IReadOnlyCollection<WorkOrderStatusHistoryResponse> History,
     IReadOnlyCollection<WorkOrderClosureBlocker> ClosureBlockers);
 
+public sealed record WorkOrderAssetInput(string ActivoCodigo, string Rol = "AFECTADO");
+public sealed record WorkOrderAssetResponse(string ActivoCodigo, string ActivoNombre, string Rol, bool EsPrincipal);
 public sealed record WorkOrderTaskResponse(
     string NumeroOT,
     string CodigoTarea,

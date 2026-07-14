@@ -60,12 +60,11 @@ public sealed record UpsertPreventivePlanRequest(
 
 public sealed record RegisterPreventiveReadingRequest(
     string ActivoCodigo,
-    decimal? Horometro,
-    decimal? Kilometraje,
+    decimal Valor,
     DateTimeOffset FechaLectura,
     string? Evidencia = null,
-    bool AutorizarCorreccion = false,
-    string? MotivoCorreccion = null);
+    string Origen = "MANUAL",
+    string? Observaciones = null);
 
 public sealed record GeneratePreventiveWorkOrderRequest(
     string? ActivoCodigo = null,
@@ -112,8 +111,8 @@ public sealed record PreventiveReadingResponse(
     string ActivoCodigo,
     string? ActivoNombre,
     string FaenaCodigo,
-    decimal? Horometro,
-    decimal? Kilometraje,
+    decimal Valor,
+    string Unidad,
     DateTimeOffset FechaLectura,
     string UsuarioId,
     string? Evidencia,

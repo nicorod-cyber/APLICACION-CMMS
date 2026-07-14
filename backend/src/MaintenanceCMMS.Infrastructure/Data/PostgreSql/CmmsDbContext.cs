@@ -19,6 +19,17 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<UserFaenaEntity> UserFaenas => Set<UserFaenaEntity>();
     public DbSet<FaenaEntity> Faenas => Set<FaenaEntity>();
     public DbSet<AssetOperationalStateEntity> AssetOperationalStates => Set<AssetOperationalStateEntity>();
+    public DbSet<AssetTypeEntity> AssetTypes => Set<AssetTypeEntity>();
+    public DbSet<AssetAttributeDefinitionEntity> AssetAttributeDefinitions => Set<AssetAttributeDefinitionEntity>();
+    public DbSet<AssetAttributeValueEntity> AssetAttributeValues => Set<AssetAttributeValueEntity>();
+    public DbSet<AssetReadingEntity> AssetReadings => Set<AssetReadingEntity>();
+    public DbSet<AssetDocumentRequirementEntity> AssetDocumentRequirements => Set<AssetDocumentRequirementEntity>();
+    public DbSet<OperationalUnitTypeEntity> OperationalUnitTypes => Set<OperationalUnitTypeEntity>();
+    public DbSet<OperationalUnitEntity> OperationalUnits => Set<OperationalUnitEntity>();
+    public DbSet<OperationalUnitComponentRoleEntity> OperationalUnitComponentRoles => Set<OperationalUnitComponentRoleEntity>();
+    public DbSet<OperationalUnitCompositionRuleEntity> OperationalUnitCompositionRules => Set<OperationalUnitCompositionRuleEntity>();
+    public DbSet<OperationalUnitCompositionRuleAllowedAssetEntity> OperationalUnitCompositionRuleAllowedAssets => Set<OperationalUnitCompositionRuleAllowedAssetEntity>();
+    public DbSet<OperationalUnitComponentEntity> OperationalUnitComponents => Set<OperationalUnitComponentEntity>();
     public DbSet<EquipmentFamilyEntity> EquipmentFamilies => Set<EquipmentFamilyEntity>();
     public DbSet<AssetEntity> Assets => Set<AssetEntity>();
     public DbSet<AssetStateEventEntity> AssetStateEvents => Set<AssetStateEventEntity>();
@@ -31,6 +42,7 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<WorkCatalogEntity> WorkCatalogs => Set<WorkCatalogEntity>();
     public DbSet<WorkNotificationEntity> WorkNotifications => Set<WorkNotificationEntity>();
     public DbSet<WorkOrderEntity> WorkOrders => Set<WorkOrderEntity>();
+    public DbSet<WorkOrderAssetEntity> WorkOrderAssets => Set<WorkOrderAssetEntity>();
     public DbSet<WorkOrderTaskEntity> WorkOrderTasks => Set<WorkOrderTaskEntity>();
     public DbSet<WorkOrderTaskTechnicianEntity> WorkOrderTaskTechnicians => Set<WorkOrderTaskTechnicianEntity>();
     public DbSet<WorkOrderLaborEntity> WorkOrderLabor => Set<WorkOrderLaborEntity>();
@@ -80,4 +92,3 @@ public sealed class CmmsDbContext : DbContext
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(CmmsDbContext).Assembly);
     }
 }
-

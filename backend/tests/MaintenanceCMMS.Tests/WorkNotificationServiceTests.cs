@@ -1,8 +1,10 @@
-﻿using MaintenanceCMMS.Application.Auditing;
+using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 using MaintenanceCMMS.Infrastructure.WorkNotifications;
 using Xunit;
 
@@ -70,20 +72,43 @@ public sealed class WorkNotificationServiceTests
             CancellationToken.None);
 
         Assert.NotNull(conversion);
-        Assert.StartsWith("OT-", conversion.NumeroOT);
-        Assert.Equal(WorkNotificationStatus.ConvertidoOT, conversion.Aviso.Estado);
-        Assert.Equal(conversion.NumeroOT, conversion.Aviso.NumeroOT);
+        Assert.StartsWith("OT-", conversion!.NumeroOT);
+        Assert.Equal(WorkNotificationStatus.ConvertidoOT, conversion!.Aviso.Estado);
+        Assert.Equal(conversion!.NumeroOT, conversion.Aviso.NumeroOT);
 
         var workOrder = Assert.Single(fixture.DbContext.WorkOrders);
-        Assert.Equal("ACT-1", workOrder.Asset.Code);
+        Assert.Equal("ACT-1", workOrder.Asset!.Code);
         Assert.Equal(created.AvisoId, workOrder.Notification!.NotificationNumber);
     }
 
+    [Fact]
+    public async Task ConvertToWorkOrderAsync_PreservesOperationalUnitTarget()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedOperationalUnitAsync(fixture.DbContext);
+        var created = await fixture.Service.CreateAsync(Request() with { ActivoCodigo = null, UnidadOperativaCodigo = "CFA-1000" }, Admin, CancellationToken.None);
+        await fixture.Service.ApproveAsync(created.AvisoId, new WorkNotificationActionRequest("Aprobado"), Admin, CancellationToken.None);
+        var conversion = await fixture.Service.ConvertToWorkOrderAsync(created.AvisoId, new ConvertWorkNotificationToWorkOrderRequest("Crear OT para unidad"), Admin, CancellationToken.None);
+
+        Assert.NotNull(conversion);
+        Assert.Equal("CFA-1000", conversion.Aviso.UnidadOperativaCodigo);
+        var workOrder = Assert.Single(fixture.DbContext.WorkOrders.Include(item => item.OperationalUnit));
+        Assert.Null(workOrder.AssetId);
+        Assert.Equal("CFA-1000", workOrder.OperationalUnit!.Code);
+    }
     private static async Task<Fixture> CreateFixtureAsync()
     {
         var database = await PostgreSqlWorkTestFixture.CreateAsync();
         var service = new WorkNotificationService(database.DbContext, new NullAuditService());
         return new Fixture(database, database.DbContext, service);
+    }
+    private static async Task SeedOperationalUnitAsync(CmmsDbContext db)
+    {
+        var faena = await db.Faenas.SingleAsync(item => item.Code == "FAE-1");
+        var state = await db.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO_FAENA");
+        var type = new OperationalUnitTypeEntity { Code = "CFA", Name = "Conjunto funcional", IsActive = true };
+        db.OperationalUnits.Add(new OperationalUnitEntity { Code = "CFA-1000", Name = "Conjunto CFA 1000", OperationalUnitType = type, Faena = faena, OperationalState = state });
+        await db.SaveChangesAsync();
     }
     private static CreateWorkNotificationRequest Request()
     {

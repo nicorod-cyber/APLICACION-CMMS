@@ -53,7 +53,8 @@ public sealed record WorkNotificationQuery(
     string? ActivoCodigo = null,
     WorkNotificationPriority? Priority = null,
     bool IncludeClosed = false,
-    bool SupervisorInbox = false);
+    bool SupervisorInbox = false,
+    string? UnidadOperativaCodigo = null);
 
 public sealed record CreateWorkNotificationRequest(
     WorkNotificationType Tipo,
@@ -67,7 +68,8 @@ public sealed record CreateWorkNotificationRequest(
     string? Subsistema = null,
     string? Componente = null,
     string? EvidenciaInicial = null,
-    DateTimeOffset? FechaDeteccion = null);
+    DateTimeOffset? FechaDeteccion = null,
+    string? UnidadOperativaCodigo = null);
 
 public sealed record WorkNotificationActionRequest(string Reason);
 
@@ -82,6 +84,7 @@ public sealed record WorkNotificationResponse(
     WorkNotificationType Tipo,
     string FaenaCodigo,
     string? ActivoCodigo,
+    string? UnidadOperativaCodigo,
     string? Sistema,
     string? Subsistema,
     string? Componente,

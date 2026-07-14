@@ -46,6 +46,12 @@ export const navigationItems: NavigationItem[] = [
     ]
   },
   {
+    label: "Unidades operativas",
+    path: "/unidades-operativas",
+    icon: Boxes,
+    accent: "bg-cyan-600",
+    roles: [AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.faenaViewer]
+  },  {
     label: "Jerarquia",
     path: "/jerarquia-tecnica",
     icon: GitBranch,

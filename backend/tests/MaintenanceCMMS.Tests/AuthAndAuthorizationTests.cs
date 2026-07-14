@@ -47,6 +47,22 @@ public sealed class AuthAndAuthorizationTests
     }
 
     [Fact]
+    public async Task IdentitySeed_AssignsAuthorizedOperationalPermissionMatrixIdempotently()
+    {
+        var fixture = await CreateFixtureAsync();
+        await fixture.Seed.SeedAsync(CancellationToken.None);
+        var roles = (await fixture.IdentityStore.ListRolesAsync(CancellationToken.None)).ToDictionary(role => role.Code, StringComparer.OrdinalIgnoreCase);
+
+        AssertNewPermissions(roles[AuthRoles.Admin], [AuthPermissions.ManageAssetCatalogs, AuthPermissions.ManageAssetAttributes, AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings, AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition, AuthPermissions.ManageDocumentRequirements]);
+        AssertNewPermissions(roles[AuthRoles.Planner], [AuthPermissions.ManageAssetAttributes, AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings, AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition, AuthPermissions.ManageDocumentRequirements]);
+        AssertNewPermissions(roles[AuthRoles.MaintenanceSupervisor], [AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings, AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition]);
+        AssertNewPermissions(roles[AuthRoles.Technician], [AuthPermissions.RegisterAssetReadings, AuthPermissions.ViewOperationalUnits]);
+        AssertNewPermissions(roles[AuthRoles.Management], [AuthPermissions.ViewOperationalUnits]);
+        AssertNewPermissions(roles[AuthRoles.FaenaViewer], [AuthPermissions.ViewOperationalUnits]);
+        AssertNewPermissions(roles[AuthRoles.Warehouse], []);
+        AssertNewPermissions(roles[AuthRoles.WarehouseSupervisor], []);
+    }
+    [Fact]
     public void CanAccessWorkOrder_ReturnsFalse_WhenTechnicianIsNotAssigned()
     {
         var service = new AuthorizationPolicyService();
@@ -76,6 +92,22 @@ public sealed class AuthAndAuthorizationTests
         Assert.True(service.CanViewWarehouses(user));
     }
 
+    private static void AssertNewPermissions(RoleDefinition role, IReadOnlyCollection<string> expected)
+    {
+        var newPermissions = new[]
+        {
+            AuthPermissions.ManageAssetCatalogs,
+            AuthPermissions.ManageAssetAttributes,
+            AuthPermissions.RegisterAssetReadings,
+            AuthPermissions.CorrectAssetReadings,
+            AuthPermissions.ViewOperationalUnits,
+            AuthPermissions.ManageOperationalUnits,
+            AuthPermissions.ManageOperationalUnitComposition,
+            AuthPermissions.ManageDocumentRequirements
+        };
+        Assert.Equal(expected.Order(StringComparer.Ordinal), role.Permissions.Where(newPermissions.Contains).Order(StringComparer.Ordinal));
+        Assert.Equal(role.Permissions.Count, role.Permissions.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
     private static async Task<AuthFixture> CreateFixtureAsync()
     {
         var provider = new ExcelDataProvider(
@@ -114,6 +146,7 @@ public sealed class AuthAndAuthorizationTests
 
         return new AuthFixture(
             identityStore,
+            seed,
             new AuthService(identityStore, passwordHasher, jwtTokenService, auditService));
     }
 
@@ -124,5 +157,6 @@ public sealed class AuthAndAuthorizationTests
 
     private sealed record AuthFixture(
         IIdentityStore IdentityStore,
+        IdentitySeedService Seed,
         IAuthService AuthService);
 }

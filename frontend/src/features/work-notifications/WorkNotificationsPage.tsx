@@ -22,6 +22,7 @@ type WorkNotification = {
   tipo: WorkNotificationType;
   faenaCodigo: string;
   activoCodigo?: string | null;
+  unidadOperativaCodigo?: string | null;
   sistema?: string | null;
   subsistema?: string | null;
   componente?: string | null;
@@ -56,6 +57,8 @@ type AssetSummary = {
   estadoOperacional: string;
 };
 
+type OperationalUnitSummary = { codigo: string; nombre: string; faenaCodigo?: string | null };
+
 type ConversionResponse = {
   aviso: WorkNotification;
   numeroOT: string;
@@ -65,6 +68,7 @@ type NotificationForm = {
   tipo: WorkNotificationType;
   faenaCodigo: string;
   activoCodigo: string;
+  unidadOperativaCodigo: string;
   sistema: string;
   subsistema: string;
   componente: string;
@@ -80,6 +84,7 @@ const emptyForm: NotificationForm = {
   tipo: "Falla",
   faenaCodigo: "",
   activoCodigo: "",
+  unidadOperativaCodigo: "",
   sistema: "",
   subsistema: "",
   componente: "",
@@ -124,6 +129,7 @@ const closedStatuses: WorkNotificationStatus[] = ["Rechazado", "ConvertidoOT", "
 export function WorkNotificationsPage() {
   const [notifications, setNotifications] = useState<WorkNotification[]>([]);
   const [assets, setAssets] = useState<AssetSummary[]>([]);
+  const [operationalUnits, setOperationalUnits] = useState<OperationalUnitSummary[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [form, setForm] = useState<NotificationForm>(emptyForm);
   const [filters, setFilters] = useState({ status: "", type: "", priority: "", faenaCodigo: "", includeClosed: false, supervisorInbox: true });
@@ -139,8 +145,10 @@ export function WorkNotificationsPage() {
   }, [filters.status, filters.type, filters.priority, filters.faenaCodigo, filters.includeClosed, filters.supervisorInbox]);
 
   const assetByCode = useMemo(() => new Map(assets.map((item) => [item.codigo, item])), [assets]);
+  const unitByCode = useMemo(() => new Map(operationalUnits.map((item) => [item.codigo, item])), [operationalUnits]);
   const selected = useMemo(() => notifications.find((item) => item.avisoId === selectedId) ?? notifications[0] ?? null, [notifications, selectedId]);
   const asset = selected?.activoCodigo ? assetByCode.get(selected.activoCodigo) : null;
+  const operationalUnit = selected?.unidadOperativaCodigo ? unitByCode.get(selected.unidadOperativaCodigo) : null;
 
   const counters = useMemo(() => {
     return {
@@ -163,10 +171,14 @@ export function WorkNotificationsPage() {
       query.set("includeClosed", String(filters.includeClosed));
       query.set("supervisorInbox", String(filters.supervisorInbox));
 
-      const notificationResult = await apiFetch<WorkNotification[]>(`/api/work-notifications?${query}`);
-      const assetResult = await apiFetch<AssetSummary[]>("/api/assets").catch(() => [] as AssetSummary[]);
+      const [notificationResult, assetResult, unitResult] = await Promise.all([
+        apiFetch<WorkNotification[]>(`/api/work-notifications?${query}`),
+        apiFetch<AssetSummary[]>("/api/assets").catch(() => [] as AssetSummary[]),
+        apiFetch<OperationalUnitSummary[]>("/api/operational-units").catch(() => [] as OperationalUnitSummary[])
+      ]);
       setNotifications(notificationResult);
       setAssets(assetResult);
+      setOperationalUnits(unitResult);
       if (!selectedId && notificationResult[0]) {
         setSelectedId(notificationResult[0].avisoId);
       }
@@ -190,6 +202,7 @@ export function WorkNotificationsPage() {
           clasificacionFalla: form.clasificacionFalla,
           faenaCodigo: emptyToNull(form.faenaCodigo),
           activoCodigo: emptyToNull(form.activoCodigo),
+          unidadOperativaCodigo: emptyToNull(form.unidadOperativaCodigo),
           sistema: emptyToNull(form.sistema),
           subsistema: emptyToNull(form.subsistema),
           componente: emptyToNull(form.componente),
@@ -258,6 +271,11 @@ export function WorkNotificationsPage() {
     });
   }
 
+  function applyOperationalUnit(code: string) {
+    const nextUnit = unitByCode.get(code);
+    setForm({ ...form, unidadOperativaCodigo: code, faenaCodigo: nextUnit?.faenaCodigo ?? form.faenaCodigo });
+  }
+
   return (
     <section className="stack">
       <header className="page-header">
@@ -303,6 +321,17 @@ export function WorkNotificationsPage() {
               <select value={form.activoCodigo} onChange={(event) => applyAsset(event.target.value)}>
                 <option value="">Sin activo especifico</option>
                 {assets.map((item) => (
+                  <option key={item.codigo} value={item.codigo}>
+                    {item.nombre} ({item.codigo})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Unidad operativa
+              <select value={form.unidadOperativaCodigo} onChange={(event) => applyOperationalUnit(event.target.value)}>
+                <option value="">Sin unidad operativa especifica</option>
+                {operationalUnits.map((item) => (
                   <option key={item.codigo} value={item.codigo}>
                     {item.nombre} ({item.codigo})
                   </option>
@@ -425,6 +454,7 @@ export function WorkNotificationsPage() {
               <tbody>
                 {notifications.map((item) => {
                   const rowAsset = item.activoCodigo ? assetByCode.get(item.activoCodigo) : null;
+                  const rowUnit = item.unidadOperativaCodigo ? unitByCode.get(item.unidadOperativaCodigo) : null;
                   return (
                     <tr key={item.avisoId} className={selected?.avisoId === item.avisoId ? "selected-row" : ""} onClick={() => setSelectedId(item.avisoId)}>
                       <td>
@@ -432,7 +462,7 @@ export function WorkNotificationsPage() {
                         <small>{item.descripcion}</small>
                       </td>
                       <td>
-                        <strong>{rowAsset?.nombre ?? item.activoCodigo ?? "Sin activo"}</strong>
+                        <strong>{rowAsset?.nombre ?? rowUnit?.nombre ?? item.activoCodigo ?? item.unidadOperativaCodigo ?? "Sin objetivo"}</strong>
                         <small>{[item.faenaCodigo, item.sistema, item.subsistema, item.componente].filter(Boolean).join(" / ") || "-"}</small>
                       </td>
                       <td>
@@ -469,6 +499,7 @@ export function WorkNotificationsPage() {
           <div className="detail-grid">
             <Info label="Faena" value={selected.faenaCodigo || "-"} />
             <Info label="Activo" value={asset ? `${asset.nombre} (${asset.codigo})` : selected.activoCodigo ?? "-"} />
+            <Info label="Unidad operativa" value={operationalUnit ? `${operationalUnit.nombre} (${operationalUnit.codigo})` : selected.unidadOperativaCodigo ?? "-"} />
             <Info label="Ubicacion tecnica" value={asset?.ubicacionTecnicaCodigo ?? "-"} />
             <Info label="Sistema" value={[selected.sistema, selected.subsistema, selected.componente].filter(Boolean).join(" / ") || "-"} />
             <Info label="Prioridad" value={selected.prioridad} />

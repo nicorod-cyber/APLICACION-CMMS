@@ -71,14 +71,14 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         db.ChecklistTemplates.Add(template);
 
         var faena = new FaenaEntity { Code = "FAE-1", Name = "Faena Uno", IsActive = true };
-        var family = new EquipmentFamilyEntity { Code = "FAM-1", Name = "Familia", IsActive = true };
+        var type = new AssetTypeEntity { Code = "EQUIPO", Name = "Equipo", IsActive = true };
+        var family = new EquipmentFamilyEntity { Code = "FAM-1", Name = "Familia", AssetTypeId = type.Id, IsActive = true };
         var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
-        db.Faenas.Add(faena);
-        db.EquipmentFamilies.Add(family);
+        db.AddRange(faena, type, family);
         db.AssetOperationalStates.Add(state);
         db.Assets.AddRange(
-            new AssetEntity { Code = "ACT-1", Name = "Excavadora 01", Faena = faena, Family = family, OperationalState = state, AssetType = "Equipo movil", RecordStatus = "vigente" },
-            new AssetEntity { Code = "ACT-2", Name = "Camion 02", Faena = faena, Family = family, OperationalState = state, AssetType = "Camion", RecordStatus = "vigente" });
+            new AssetEntity { Code = "ACT-1", Name = "Excavadora 01", Faena = faena, Family = family, OperationalState = state, AssetTypeId = type.Id },
+            new AssetEntity { Code = "ACT-2", Name = "Camion 02", Faena = faena, Family = family, OperationalState = state, AssetTypeId = type.Id });
         await db.SaveChangesAsync();
     }
 
@@ -111,5 +111,3 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         await command.ExecuteNonQueryAsync();
     }
 }
-
-

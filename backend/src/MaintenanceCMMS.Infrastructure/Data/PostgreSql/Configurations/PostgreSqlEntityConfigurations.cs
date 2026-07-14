@@ -1,4 +1,4 @@
-﻿using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -139,7 +139,17 @@ public sealed class AssetOperationalStateConfiguration : IEntityTypeConfiguratio
         builder.Property(entity => entity.Name).HasColumnName("nombre").HasMaxLength(160).IsRequired();
         builder.Property(entity => entity.IsActive).HasColumnName("activo").IsRequired();
         builder.HasIndex(entity => entity.Code).IsUnique();
-        builder.ToTable(table => table.HasCheckConstraint("ck_estados_operacionales_activo_codigo", "codigo IN ('OPERATIVO_FAENA','ALERTA_FAENA','FUERA_SERVICIO_FAENA','FUERA_SERVICIO_TALLER')"));
+    }
+}
+
+public sealed class AssetTypeConfiguration : IEntityTypeConfiguration<AssetTypeEntity>
+{
+    public void Configure(EntityTypeBuilder<AssetTypeEntity> builder)
+    {
+        builder.ToTable("tipos_activo"); builder.ConfigureBase();
+        builder.Property(x => x.Code).HasColumnName("codigo").HasMaxLength(60).IsRequired(); builder.Property(x => x.Name).HasColumnName("nombre").HasMaxLength(160).IsRequired(); builder.Property(x => x.Description).HasColumnName("descripcion").HasMaxLength(1000); builder.Property(x => x.Category).HasColumnName("categoria").HasMaxLength(60).IsRequired();
+        builder.Property(x => x.IsMobile).HasColumnName("es_movil"); builder.Property(x => x.IsMountable).HasColumnName("es_montable"); builder.Property(x => x.CanBeCarrier).HasColumnName("puede_ser_portador"); builder.Property(x => x.ControlsMaintenance).HasColumnName("controla_mantenimiento"); builder.Property(x => x.ParticipatesInAvailability).HasColumnName("participa_en_disponibilidad"); builder.Property(x => x.SortOrder).HasColumnName("orden_visualizacion"); builder.Property(x => x.IsActive).HasColumnName("activo");
+        builder.HasIndex(x => x.Code).IsUnique(); builder.ToTable(t => t.HasCheckConstraint("ck_tipos_activo_orden", "orden_visualizacion >= 0"));
     }
 }
 
@@ -147,12 +157,9 @@ public sealed class EquipmentFamilyConfiguration : IEntityTypeConfiguration<Equi
 {
     public void Configure(EntityTypeBuilder<EquipmentFamilyEntity> builder)
     {
-        builder.ToTable("familias_equipo");
-        builder.ConfigureBase();
-        builder.Property(entity => entity.Code).HasColumnName("codigo").HasMaxLength(80).IsRequired();
-        builder.Property(entity => entity.Name).HasColumnName("nombre").HasMaxLength(160).IsRequired();
-        builder.Property(entity => entity.IsActive).HasColumnName("activo").IsRequired();
-        builder.HasIndex(entity => entity.Code).IsUnique();
+        builder.ToTable("familias_equipo"); builder.ConfigureBase();
+        builder.Property(x => x.AssetTypeId).HasColumnName("tipo_activo_id"); builder.Property(x => x.Code).HasColumnName("codigo").HasMaxLength(80).IsRequired(); builder.Property(x => x.Name).HasColumnName("nombre").HasMaxLength(160).IsRequired(); builder.Property(x => x.Description).HasColumnName("descripcion").HasMaxLength(1000); builder.Property(x => x.ReferenceBrand).HasColumnName("marca_referencia").HasMaxLength(120); builder.Property(x => x.ReferenceModel).HasColumnName("modelo_referencia").HasMaxLength(120); builder.Property(x => x.IsActive).HasColumnName("activo");
+        builder.HasIndex(x => x.Code).IsUnique(); builder.HasOne(x => x.AssetType).WithMany().HasForeignKey(x => x.AssetTypeId).OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -160,35 +167,13 @@ public sealed class AssetConfiguration : IEntityTypeConfiguration<AssetEntity>
 {
     public void Configure(EntityTypeBuilder<AssetEntity> builder)
     {
-        builder.ToTable("activos");
-        builder.ConfigureBase();
-        builder.Property(entity => entity.Code).HasColumnName("codigo").HasMaxLength(80).IsRequired();
-        builder.Property(entity => entity.Name).HasColumnName("nombre").HasMaxLength(240).IsRequired();
-        builder.Property(entity => entity.FaenaId).HasColumnName("faena_id");
-        builder.Property(entity => entity.FamilyId).HasColumnName("familia_equipo_id");
-        builder.Property(entity => entity.OperationalStateId).HasColumnName("estado_operacional_id");
-        builder.Property(entity => entity.RecordStatus).HasColumnName("estado_registro").HasMaxLength(40).IsRequired();
-        builder.Property(entity => entity.AssetType).HasColumnName("tipo_activo").HasMaxLength(120).IsRequired();
-        builder.Property(entity => entity.TechnicalLocationCode).HasColumnName("ubicacion_tecnica_codigo").HasMaxLength(120);
-        builder.Property(entity => entity.Brand).HasColumnName("marca").HasMaxLength(120);
-        builder.Property(entity => entity.Model).HasColumnName("modelo").HasMaxLength(120);
-        builder.Property(entity => entity.Plate).HasColumnName("patente").HasMaxLength(80);
-        builder.Property(entity => entity.SerialNumber).HasColumnName("numero_serie").HasMaxLength(120);
-        builder.Property(entity => entity.Ownership).HasColumnName("propiedad").HasMaxLength(120);
-        builder.Property(entity => entity.Criticality).HasColumnName("criticidad").HasMaxLength(80);
-        builder.Property(entity => entity.DocumentStatus).HasColumnName("estado_documental").HasMaxLength(80);
-        builder.Property(entity => entity.TechnicalSheetValidated).HasColumnName("ficha_validada");
-        builder.HasIndex(entity => entity.Code).IsUnique();
-        builder.HasIndex(entity => entity.FaenaId);
-        builder.HasIndex(entity => entity.FamilyId);
-        builder.HasIndex(entity => entity.OperationalStateId);
-        builder.HasOne(entity => entity.Faena).WithMany().HasForeignKey(entity => entity.FaenaId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasOne(entity => entity.Family).WithMany().HasForeignKey(entity => entity.FamilyId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasOne(entity => entity.OperationalState).WithMany().HasForeignKey(entity => entity.OperationalStateId).OnDelete(DeleteBehavior.Restrict);
-        builder.ToTable(table => table.HasCheckConstraint("ck_activos_estado_registro", "estado_registro IN ('vigente','inactivo','anulado','obsoleto','reemplazado','no_vigente')"));
+        builder.ToTable("activos"); builder.ConfigureBase();
+        builder.Property(x => x.Code).HasColumnName("codigo").HasMaxLength(80).IsRequired(); builder.Property(x => x.Name).HasColumnName("nombre").HasMaxLength(240).IsRequired(); builder.Property(x => x.AssetTypeId).HasColumnName("tipo_activo_id"); builder.Property(x => x.FamilyId).HasColumnName("familia_equipo_id"); builder.Property(x => x.FaenaId).HasColumnName("faena_id"); builder.Property(x => x.TechnicalLocationId).HasColumnName("ubicacion_tecnica_id"); builder.Property(x => x.OperationalStateId).HasColumnName("estado_operacional_id");
+        builder.Property(x => x.Brand).HasColumnName("marca").HasMaxLength(120); builder.Property(x => x.Model).HasColumnName("modelo").HasMaxLength(120); builder.Property(x => x.SerialNumber).HasColumnName("numero_serie").HasMaxLength(160); builder.Property(x => x.Ownership).HasColumnName("propiedad").HasMaxLength(80); builder.Property(x => x.Criticality).HasColumnName("criticidad").HasMaxLength(40); builder.Property(x => x.ManufacturingYear).HasColumnName("anio_fabricacion"); builder.Property(x => x.AcquisitionDate).HasColumnName("fecha_adquisicion"); builder.Property(x => x.CommissioningDate).HasColumnName("fecha_puesta_servicio"); builder.Property(x => x.DecommissioningDate).HasColumnName("fecha_baja"); builder.Property(x => x.UsageMeasurementType).HasColumnName("tipo_medicion_uso").HasMaxLength(20); builder.Property(x => x.Observations).HasColumnName("observaciones").HasMaxLength(2000);
+        builder.HasIndex(x => x.Code).IsUnique(); builder.HasIndex(x => x.FaenaId); builder.HasIndex(x => x.FamilyId); builder.HasIndex(x => x.OperationalStateId); builder.HasOne(x => x.AssetTypeDefinition).WithMany().HasForeignKey(x => x.AssetTypeId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.Faena).WithMany().HasForeignKey(x => x.FaenaId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.Family).WithMany().HasForeignKey(x => x.FamilyId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.TechnicalLocation).WithMany().HasForeignKey(x => x.TechnicalLocationId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.OperationalState).WithMany().HasForeignKey(x => x.OperationalStateId).OnDelete(DeleteBehavior.Restrict);
+        builder.ToTable(t => { t.HasCheckConstraint("ck_activos_tipo_medicion_uso", "tipo_medicion_uso IS NULL OR tipo_medicion_uso IN ('HOROMETRO','KILOMETRAJE')"); t.HasCheckConstraint("ck_activos_anio_fabricacion", "anio_fabricacion IS NULL OR anio_fabricacion BETWEEN 1900 AND 2200"); t.HasCheckConstraint("ck_activos_fecha_baja", "fecha_baja IS NULL OR fecha_puesta_servicio IS NULL OR fecha_baja >= fecha_puesta_servicio"); });
     }
 }
-
 public sealed class AssetStateEventConfiguration : IEntityTypeConfiguration<AssetStateEventEntity>
 {
     public void Configure(EntityTypeBuilder<AssetStateEventEntity> builder)
@@ -417,4 +402,3 @@ public sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLogEnt
         builder.HasIndex(entity => entity.FaenaCode);
     }
 }
-

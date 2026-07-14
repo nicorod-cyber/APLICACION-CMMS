@@ -32,11 +32,20 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         await UpsertOperationalStateAsync("FUERA_SERVICIO_FAENA", "Fuera de servicio en Faena", cancellationToken);
         await UpsertOperationalStateAsync("FUERA_SERVICIO_TALLER", "Fuera de servicio en Taller", cancellationToken);
 
+        await UpsertAssetTypeAsync("EQUIPO", "Equipo", cancellationToken);
         await UpsertFamilyAsync("CAMION_PLUMA", "Camion pluma", cancellationToken);
         await UpsertFamilyAsync("COMPRESOR", "Compresor", cancellationToken);
         await UpsertFamilyAsync("GRUA_HORQUILLA", "Grua horquilla", cancellationToken);
 
         await UpsertPermissionAsync(AuthPermissions.ManageEquipmentFamilies, "Gestionar familias de equipo", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.ManageAssetCatalogs, "Administrar cat�logos de activos", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.ManageAssetAttributes, "Administrar atributos de activos", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.RegisterAssetReadings, "Registrar lecturas de activos", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.CorrectAssetReadings, "Corregir lecturas de activos", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.ViewOperationalUnits, "Ver unidades operativas", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.ManageOperationalUnits, "Administrar unidades operativas", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.ManageOperationalUnitComposition, "Gestionar composici�n de unidades", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.ManageDocumentRequirements, "Administrar requisitos documentales", cancellationToken);
         await UpsertDocumentTypeAsync("REV-TEC", "Revision tecnica", DocumentEntityType.Activo, true, true, true, 30, cancellationToken);
         await UpsertDocumentTypeAsync("PERMISO", "Permiso operacional", DocumentEntityType.Activo, true, false, false, 30, cancellationToken);
         await UpsertDocumentTypeAsync("CERT", "Certificado", DocumentEntityType.Activo, false, false, false, 45, cancellationToken);
@@ -48,6 +57,7 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         var faena = await _dbContext.Faenas.SingleAsync(item => item.Code == "FAENA_DEMO", cancellationToken);
+        var assetType = await _dbContext.AssetTypes.SingleAsync(item => item.Code == "EQUIPO", cancellationToken);
         var family = await _dbContext.EquipmentFamilies.SingleAsync(item => item.Code == "CAMION_PLUMA", cancellationToken);
         var state = await _dbContext.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO_FAENA", cancellationToken);
 
@@ -61,11 +71,8 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
                 Name = "Activo demo",
                 FaenaId = faena.Id,
                 FamilyId = family.Id,
-                OperationalStateId = state.Id,
-                AssetType = "Equipo",
-                RecordStatus = "vigente",
-                DocumentStatus = "Pendiente",
-                TechnicalSheetValidated = false
+                AssetTypeId = assetType.Id,
+                OperationalStateId = state.Id
             });
         }
 
@@ -102,22 +109,20 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         }
     }
 
-    private async Task UpsertFamilyAsync(string code, string name, CancellationToken cancellationToken)
+    private async Task UpsertAssetTypeAsync(string code, string name, CancellationToken cancellationToken)
     {
-        var entity = await _dbContext.EquipmentFamilies.FirstOrDefaultAsync(item => item.Code == code, cancellationToken);
-        if (entity is null)
-        {
-            _dbContext.EquipmentFamilies.Add(new EquipmentFamilyEntity { Code = code, Name = name, IsActive = true });
-        }
-        else
-        {
-            entity.Name = name;
-            entity.IsActive = true;
-            entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
-        }
+        var entity = await _dbContext.AssetTypes.FirstOrDefaultAsync(item => item.Code == code, cancellationToken);
+        if (entity is null) _dbContext.AssetTypes.Add(new AssetTypeEntity { Code = code, Name = name, Category = "EQUIPO", IsActive = true });
+        else { entity.Name = name; entity.IsActive = true; entity.UpdatedAtUtc = DateTimeOffset.UtcNow; }
     }
 
-
+    private async Task UpsertFamilyAsync(string code, string name, CancellationToken cancellationToken)
+    {
+        var assetType = await _dbContext.AssetTypes.SingleAsync(item => item.Code == "EQUIPO", cancellationToken);
+        var entity = await _dbContext.EquipmentFamilies.FirstOrDefaultAsync(item => item.Code == code, cancellationToken);
+        if (entity is null) _dbContext.EquipmentFamilies.Add(new EquipmentFamilyEntity { Code = code, Name = name, AssetTypeId = assetType.Id, IsActive = true });
+        else { entity.Name = name; entity.AssetTypeId = assetType.Id; entity.IsActive = true; entity.UpdatedAtUtc = DateTimeOffset.UtcNow; }
+    }
     private async Task UpsertInventoryCatalogsAsync(CancellationToken cancellationToken)
     {
         var sortOrder = 1;
@@ -290,4 +295,3 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         }
     }
 }
-

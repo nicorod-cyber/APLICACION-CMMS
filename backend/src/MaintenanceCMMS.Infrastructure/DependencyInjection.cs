@@ -12,6 +12,7 @@ using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Application.MaterialRequests;
 using MaintenanceCMMS.Application.PreventiveMaintenance;
+using MaintenanceCMMS.Application.OperationalUnits;
 using MaintenanceCMMS.Application.Procurement;
 using MaintenanceCMMS.Application.Scheduling;
 using MaintenanceCMMS.Application.Storage;
@@ -33,6 +34,7 @@ using MaintenanceCMMS.Infrastructure.Faenas;
 using MaintenanceCMMS.Infrastructure.Governance;
 using MaintenanceCMMS.Infrastructure.Imports;
 using MaintenanceCMMS.Infrastructure.Inventory;
+using MaintenanceCMMS.Infrastructure.OperationalUnits;
 using MaintenanceCMMS.Infrastructure.MaterialRequests;
 using MaintenanceCMMS.Infrastructure.PreventiveMaintenance;
 using MaintenanceCMMS.Infrastructure.Procurement;
@@ -109,6 +111,7 @@ public static class DependencyInjection
         if (ResolveProviderType(dataProviderSettings.Provider) == DataProviderType.PostgreSql)
         {
             services.AddScoped<IIdentityStore, PostgreSqlIdentityStore>();
+            services.AddSingleton<IIdentitySeedTransaction, PostgreSqlIdentitySeedTransaction>();
             services.AddScoped<IAuditService, PostgreSqlAuditService>();
         }
         else
@@ -126,6 +129,7 @@ public static class DependencyInjection
         services.AddScoped<IExcelImportWorkflowService, ExcelImportWorkflowService>();
         services.AddScoped<IFaenaService, FaenaService>();
         services.AddScoped<IAssetService, AssetService>();
+        services.AddScoped<IOperationalUnitService, OperationalUnitService>();
         services.AddScoped<IAvailabilityService, AvailabilityService>();
         services.AddScoped<IInventoryService, InventoryService>();
         services.AddScoped<ICostManagementService, CostManagementService>();

@@ -9,10 +9,10 @@ type PreventiveFrequencyType = "Horas" | "Kilometros" | "Calendario" | "Mixta";
 type AssetSummary = {
   codigo: string;
   nombre: string;
-  faenaCodigo: string;
-  familia?: string | null;
-  marca?: string | null;
-  modelo?: string | null;
+  faenaCodigo?: string | null;
+  tipoMedicionUso?: "HOROMETRO" | "KILOMETRAJE" | null;
+  ultimaLectura?: number | null;
+  unidadLectura?: string | null;
 };
 
 type PreventivePlan = {
@@ -57,15 +57,13 @@ type PreventiveDue = {
 };
 
 type PreventiveReading = {
-  readingId: string;
+  id: string;
   activoCodigo: string;
   activoNombre?: string | null;
-  faenaCodigo: string;
-  horometro?: number | null;
-  kilometraje?: number | null;
-  fechaLectura: string;
-  usuarioId: string;
-  evidencia?: string | null;
+  faenaCodigo?: string | null;
+  fechaLecturaUtc: string;
+  valor: number;
+  unidad: string;
   esCorreccion: boolean;
   esAnomala: boolean;
   mensajeValidacion?: string | null;
@@ -122,8 +120,7 @@ const emptyPlan = {
 
 const emptyReading = {
   activoCodigo: "",
-  horometro: "",
-  kilometraje: "",
+  valor: "",
   fechaLectura: new Date().toISOString().slice(0, 16),
   evidencia: "",
   autorizarCorreccion: false,
@@ -174,13 +171,17 @@ export function PreventiveMaintenancePage() {
       const query = new URLSearchParams();
       if (filters.faenaCodigo) query.set("faenaCodigo", filters.faenaCodigo);
       if (filters.activoCodigo) query.set("activoCodigo", filters.activoCodigo);
-      const [dashboardResult, readingResult, assetResult] = await Promise.all([
+      const [dashboardResult, assetResult] = await Promise.all([
         apiFetch<PreventiveDashboard>(`/api/preventive/dashboard?${query}`),
-        apiFetch<PreventiveReading[]>(`/api/preventive/readings?${query}`),
         apiFetch<AssetSummary[]>(filters.faenaCodigo ? `/api/assets?faenaCodigo=${encodeURIComponent(filters.faenaCodigo)}` : "/api/assets")
       ]);
+      const selectedAssets = filters.activoCodigo ? assetResult.filter((asset) => asset.codigo === filters.activoCodigo) : assetResult;
+      const readingGroups = await Promise.all(selectedAssets.map(async (asset) => {
+        const rows = await apiFetch<Array<{ id: string; fechaLecturaUtc: string; valor: number; unidad: string; esCorreccion: boolean; esAnomala: boolean; mensajeValidacion?: string | null }>>(`/api/assets/${encodeURIComponent(asset.codigo)}/readings`);
+        return rows.map((row) => ({ ...row, activoCodigo: asset.codigo, activoNombre: asset.nombre, faenaCodigo: asset.faenaCodigo }));
+      }));
       setDashboard(dashboardResult);
-      setReadings(readingResult);
+      setReadings(readingGroups.flat().sort((a, b) => b.fechaLecturaUtc.localeCompare(a.fechaLecturaUtc)));
       setAssets(assetResult);
       setPlanForm((current) => ({ ...current, activoCodigo: current.activoCodigo || filters.activoCodigo }));
       setReadingForm((current) => ({ ...current, activoCodigo: current.activoCodigo || filters.activoCodigo }));
@@ -224,17 +225,9 @@ export function PreventiveMaintenancePage() {
   async function saveReading(event: FormEvent) {
     event.preventDefault();
     await save(async () => {
-      const reading = await apiFetch<PreventiveReading>("/api/preventive/readings", {
+      const reading = await apiFetch<{ esAnomala: boolean; mensajeValidacion?: string | null }>(`/api/assets/${encodeURIComponent(readingForm.activoCodigo)}/readings`, {
         method: "POST",
-        body: JSON.stringify({
-          activoCodigo: readingForm.activoCodigo,
-          horometro: numberOrNull(readingForm.horometro),
-          kilometraje: numberOrNull(readingForm.kilometraje),
-          fechaLectura: new Date(readingForm.fechaLectura).toISOString(),
-          evidencia: emptyToNull(readingForm.evidencia),
-          autorizarCorreccion: readingForm.autorizarCorreccion,
-          motivoCorreccion: emptyToNull(readingForm.motivoCorreccion)
-        })
+        body: JSON.stringify({ valor: Number(readingForm.valor), fechaLecturaUtc: new Date(readingForm.fechaLectura).toISOString(), origen: "MANUAL", evidenciaReferencia: emptyToNull(readingForm.evidencia) })
       });
       setReadingForm(emptyReading);
       setMessage(reading.esAnomala ? reading.mensajeValidacion ?? "Lectura guardada con alerta de salto." : "Lectura guardada.");
@@ -351,15 +344,13 @@ export function PreventiveMaintenancePage() {
         </form>
 
         <form className="panel stack" onSubmit={saveReading}>
-          <div className="section-heading"><h2>Lectura</h2><span>Horometro y kilometraje</span></div>
+          <div className="section-heading"><h2>Lectura</h2><span>Un �nico valor; la unidad proviene del activo</span></div>
           <div className="form-grid xl:grid-cols-2">
             <label>Activo<select value={readingForm.activoCodigo} onChange={(event) => setReadingForm({ ...readingForm, activoCodigo: event.target.value })} required><option value="">Selecciona activo</option>{assets.map((asset) => <option key={asset.codigo} value={asset.codigo}>{asset.nombre} - {asset.codigo}</option>)}</select></label>
             <label>Fecha<input type="datetime-local" value={readingForm.fechaLectura} onChange={(event) => setReadingForm({ ...readingForm, fechaLectura: event.target.value })} required /></label>
-            <label>Horometro<input type="number" min="0" step="0.1" value={readingForm.horometro} onChange={(event) => setReadingForm({ ...readingForm, horometro: event.target.value })} /></label>
-            <label>Kilometraje<input type="number" min="0" step="0.1" value={readingForm.kilometraje} onChange={(event) => setReadingForm({ ...readingForm, kilometraje: event.target.value })} /></label>
+            <label>Valor<input type="number" min="0" step="0.1" value={readingForm.valor} onChange={(event) => setReadingForm({ ...readingForm, valor: event.target.value })} required /></label>
             <label className="span-2">Evidencia<input value={readingForm.evidencia} onChange={(event) => setReadingForm({ ...readingForm, evidencia: event.target.value })} /></label>
-            <label className="check-row"><input type="checkbox" checked={readingForm.autorizarCorreccion} onChange={(event) => setReadingForm({ ...readingForm, autorizarCorreccion: event.target.checked })} />Correccion autorizada</label>
-            <label>Motivo<input value={readingForm.motivoCorreccion} onChange={(event) => setReadingForm({ ...readingForm, motivoCorreccion: event.target.value })} /></label>
+            <small className="span-2">Las correcciones se registran desde el historial del activo; no se edita una lectura existente.</small>
           </div>
           <button className="primary-button" type="submit" disabled={isSaving}><Gauge size={18} /> Registrar lectura</button>
         </form>
@@ -419,8 +410,8 @@ export function PreventiveMaintenancePage() {
           <div className="section-heading"><h2>Lecturas recientes</h2><span>{readings.length}</span></div>
           <div className="data-table">
             <table>
-              <thead><tr><th>Activo</th><th>Fecha</th><th>Horometro</th><th>Km</th><th>Validacion</th></tr></thead>
-              <tbody>{readings.slice(0, 12).map((item) => <tr key={item.readingId}><td><strong>{item.activoNombre ?? item.activoCodigo}</strong><small>{item.faenaCodigo}</small></td><td>{formatDateTime(item.fechaLectura)}</td><td>{item.horometro ?? "-"}</td><td>{item.kilometraje ?? "-"}</td><td>{item.esAnomala ? item.mensajeValidacion : item.esCorreccion ? "Correccion" : "OK"}</td></tr>)}</tbody>
+              <thead><tr><th>Activo</th><th>Fecha</th><th>Valor</th><th>Unidad</th><th>Validaci�n</th></tr></thead>
+              <tbody>{readings.slice(0, 12).map((item) => <tr key={item.id}><td><strong>{item.activoNombre ?? item.activoCodigo}</strong><small>{item.faenaCodigo}</small></td><td>{formatDateTime(item.fechaLecturaUtc)}</td><td>{item.valor}</td><td>{item.unidad}</td><td>{item.esAnomala ? item.mensajeValidacion : item.esCorreccion ? "Correcci�n" : "OK"}</td></tr>)}</tbody>
             </table>
           </div>
         </section>

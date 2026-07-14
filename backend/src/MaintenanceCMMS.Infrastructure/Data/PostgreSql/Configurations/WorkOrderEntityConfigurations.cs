@@ -31,6 +31,7 @@ public sealed class WorkNotificationConfiguration : IEntityTypeConfiguration<Wor
         builder.Property(e => e.TypeId).HasColumnName("tipo_id");
         builder.Property(e => e.FaenaId).HasColumnName("faena_id");
         builder.Property(e => e.AssetId).HasColumnName("activo_id");
+        builder.Property(e => e.OperationalUnitId).HasColumnName("unidad_operativa_id");
         builder.Property(e => e.System).HasColumnName("sistema").HasMaxLength(120);
         builder.Property(e => e.Subsystem).HasColumnName("subsistema").HasMaxLength(120);
         builder.Property(e => e.Component).HasColumnName("componente").HasMaxLength(120);
@@ -59,14 +60,17 @@ public sealed class WorkNotificationConfiguration : IEntityTypeConfiguration<Wor
         builder.HasIndex(e => e.NotificationNumber).IsUnique();
         builder.HasIndex(e => e.FaenaId);
         builder.HasIndex(e => e.AssetId);
+        builder.HasIndex(e => e.OperationalUnitId);
         builder.HasIndex(e => e.WorkOrderId).IsUnique().HasFilter("orden_trabajo_id IS NOT NULL");
         builder.HasOne(e => e.Status).WithMany().HasForeignKey(e => e.StatusId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Type).WithMany().HasForeignKey(e => e.TypeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Priority).WithMany().HasForeignKey(e => e.PriorityId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Criticality).WithMany().HasForeignKey(e => e.CriticalityId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.FailureClassification).WithMany().HasForeignKey(e => e.FailureClassificationId).OnDelete(DeleteBehavior.Restrict);
+
         builder.HasOne(e => e.Faena).WithMany().HasForeignKey(e => e.FaenaId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Asset).WithMany().HasForeignKey(e => e.AssetId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(e => e.OperationalUnit).WithMany().HasForeignKey(e => e.OperationalUnitId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.WorkOrder).WithOne(e => e.Notification).HasForeignKey<WorkNotificationEntity>(e => e.WorkOrderId).OnDelete(DeleteBehavior.Restrict);
     }
 }
@@ -79,6 +83,7 @@ public sealed class WorkOrderConfiguration : IEntityTypeConfiguration<WorkOrderE
         builder.ConfigureBase();
         builder.Property(e => e.WorkOrderNumber).HasColumnName("numero_ot").HasMaxLength(40).IsRequired();
         builder.Property(e => e.AssetId).HasColumnName("activo_id");
+        builder.Property(e => e.OperationalUnitId).HasColumnName("unidad_operativa_id");
         builder.Property(e => e.FaenaId).HasColumnName("faena_id");
         builder.Property(e => e.StatusId).HasColumnName("estado_id");
         builder.Property(e => e.MaintenanceTypeId).HasColumnName("tipo_mantenimiento_id");
@@ -112,15 +117,18 @@ public sealed class WorkOrderConfiguration : IEntityTypeConfiguration<WorkOrderE
         builder.Property(e => e.UpdatedByUserAtUtc).HasColumnName("actualizado_por_usuario_at_utc").HasColumnType("timestamptz");
         builder.HasIndex(e => e.WorkOrderNumber).IsUnique();
         builder.HasIndex(e => e.AssetId);
+        builder.HasIndex(e => e.OperationalUnitId);
         builder.HasIndex(e => e.FaenaId);
         builder.HasIndex(e => e.NotificationId).IsUnique().HasFilter("aviso_id IS NOT NULL");
         builder.HasOne(e => e.Asset).WithMany().HasForeignKey(e => e.AssetId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(e => e.OperationalUnit).WithMany().HasForeignKey(e => e.OperationalUnitId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Faena).WithMany().HasForeignKey(e => e.FaenaId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Status).WithMany().HasForeignKey(e => e.StatusId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.MaintenanceType).WithMany().HasForeignKey(e => e.MaintenanceTypeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Priority).WithMany().HasForeignKey(e => e.PriorityId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Criticality).WithMany().HasForeignKey(e => e.CriticalityId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.FailureClassification).WithMany().HasForeignKey(e => e.FailureClassificationId).OnDelete(DeleteBehavior.Restrict);
+        builder.ToTable(t => t.HasCheckConstraint("ck_ordenes_trabajo_sql_objetivo", "activo_id IS NOT NULL OR unidad_operativa_id IS NOT NULL"));
     }
 }
 
@@ -332,6 +340,20 @@ public sealed class DocumentWorkOrderConfiguration : IEntityTypeConfiguration<Do
         builder.HasOne(e => e.Document).WithMany(e => e.WorkOrders).HasForeignKey(e => e.DocumentId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.WorkOrder).WithMany().HasForeignKey(e => e.WorkOrderId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(e => new { e.DocumentId, e.WorkOrderId, e.IsActive }).IsUnique().HasFilter("vigente");
+    }
+}
+
+
+public sealed class WorkOrderAssetConfiguration : IEntityTypeConfiguration<WorkOrderAssetEntity>
+{
+    public void Configure(EntityTypeBuilder<WorkOrderAssetEntity> builder)
+    {
+        builder.ToTable("orden_trabajo_activos"); builder.ConfigureBase();
+        builder.Property(e => e.WorkOrderId).HasColumnName("orden_trabajo_id"); builder.Property(e => e.AssetId).HasColumnName("activo_id");
+        builder.Property(e => e.Role).HasColumnName("rol").HasMaxLength(20).IsRequired(); builder.Property(e => e.AssetCodeSnapshot).HasColumnName("activo_codigo_snapshot").HasMaxLength(80).IsRequired(); builder.Property(e => e.AssetNameSnapshot).HasColumnName("activo_nombre_snapshot").HasMaxLength(240).IsRequired(); builder.Property(e => e.AddedAtUtc).HasColumnName("agregado_en_utc").HasColumnType("timestamptz"); builder.Property(e => e.AddedByUserId).HasColumnName("agregado_por_usuario_id").HasMaxLength(120).IsRequired();
+        builder.HasIndex(e => new { e.WorkOrderId, e.AssetId }).IsUnique(); builder.HasIndex(e => new { e.WorkOrderId, e.Role });
+        builder.HasOne(e => e.WorkOrder).WithMany(e => e.RelatedAssets).HasForeignKey(e => e.WorkOrderId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(e => e.Asset).WithMany().HasForeignKey(e => e.AssetId).OnDelete(DeleteBehavior.Restrict);
+        builder.ToTable(t => t.HasCheckConstraint("ck_orden_trabajo_activos_rol", "rol IN ('PRINCIPAL','AFECTADO','MONTAJE','DESMONTAJE')"));
     }
 }
 

@@ -4,7 +4,9 @@ using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using MaintenanceCMMS.Infrastructure.WorkOrders;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace MaintenanceCMMS.Tests;
@@ -184,6 +186,35 @@ public sealed class WorkOrderServiceTests
         Assert.Contains("Checklist", exception.Message);
     }
 
+    [Fact]
+    public async Task CreateAsync_AllowsOperationalUnitTargetAndSnapshotsRelatedAssets()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var faena = await fixture.DbContext.Faenas.SingleAsync(x => x.Code == "FAE-1");
+        var state = await fixture.DbContext.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO_FAENA");
+        var type = new OperationalUnitTypeEntity { Code = "CFA", Name = "Unidad CFA", IsActive = true };
+        fixture.DbContext.OperationalUnitTypes.Add(type);
+        await fixture.DbContext.SaveChangesAsync();
+        fixture.DbContext.OperationalUnits.Add(new OperationalUnitEntity
+        {
+            Code = "CFA-1000", Name = "CFA 1000", OperationalUnitTypeId = type.Id,
+            FaenaId = faena.Id, OperationalStateId = state.Id
+        });
+        await fixture.DbContext.SaveChangesAsync();
+
+        var created = await fixture.Service.CreateAsync(new CreateWorkOrderRequest(
+            null, "Inspecci�n integral de CFA-1000", "Corrective", FaenaCodigo: "FAE-1",
+            UnidadOperativaCodigo: "CFA-1000",
+            ActivosRelacionados:
+            [new WorkOrderAssetInput("ACT-1", "MONTAJE"), new WorkOrderAssetInput("ACT-2", "DESMONTAJE")]),
+            Planner, CancellationToken.None);
+
+        Assert.Equal("CFA-1000", created.Summary.UnidadOperativaCodigo);
+        Assert.Equal(string.Empty, created.Summary.ActivoCodigo);
+        Assert.Equal(2, created.Summary.ActivosRelacionados.Count);
+        Assert.Contains(created.Summary.ActivosRelacionados, x => x.ActivoCodigo == "ACT-1" && x.Rol == "MONTAJE");
+        Assert.Single(await fixture.Service.ListAsync(new WorkOrderQuery(UnidadOperativaCodigo: "CFA-1000"), Planner, CancellationToken.None));
+    }
     private static CreateWorkOrderRequest OrderRequest(bool requiresSignature = false)
     {
         return new CreateWorkOrderRequest(
@@ -222,6 +253,3 @@ public sealed class WorkOrderServiceTests
         public Task<AuditQueryResult> QueryAsync(AuditQuery query, CancellationToken cancellationToken) => Task.FromResult(new AuditQueryResult(0, []));
     }
 }
-
-
-

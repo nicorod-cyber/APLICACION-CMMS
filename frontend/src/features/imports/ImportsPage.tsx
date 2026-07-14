@@ -50,7 +50,6 @@ type ImportPreview = {
 };
 
 const importEntities = [
-  ["activos", "Activos"],
   ["faenas", "Faenas"],
   ["ubicaciones_tecnicas", "Ubicaciones tecnicas"],
   ["usuarios", "Usuarios"],
@@ -79,7 +78,6 @@ const importEntities = [
   ["programacion_alertas", "Alertas programacion"],
   ["sistemas_componentes", "Sistemas / componentes"],
   ["planes_preventivos", "Planes preventivos"],
-  ["preventivo_lecturas", "Lecturas preventivas"],
   ["preventivo_evaluaciones", "Evaluaciones preventivas"],
   ["preventivo_historial", "Historial preventivo"],
   ["disponibilidad_contratos", "Contratos disponibilidad"],
@@ -466,9 +464,6 @@ function inferEntityFromFileName(fileName: string) {
   if (value.includes("faena")) {
     return "faenas";
   }
-  if (value.includes("activo")) {
-    return "activos";
-  }
   if (value.includes("ubicacion")) {
     return "ubicaciones_tecnicas";
   }
@@ -546,7 +541,7 @@ function inferEntityFromFileName(fileName: string) {
   }
   if (value.includes("preventivo")) {
     if (value.includes("lectura")) {
-      return "preventivo_lecturas";
+      return null;
     }
     if (value.includes("evaluacion") || value.includes("evaluaci")) {
       return "preventivo_evaluaciones";

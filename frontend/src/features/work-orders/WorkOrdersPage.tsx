@@ -42,6 +42,9 @@ type WorkOrderSummary = {
   estado: WorkOrderStatus;
   activoCodigo: string;
   activoNombre?: string | null;
+  unidadOperativaCodigo?: string | null;
+  unidadOperativaNombre?: string | null;
+  activosRelacionados: { activoCodigo: string; activoNombre: string; rol: string; esPrincipal: boolean }[];
   faenaCodigo: string;
   tipoMantenimiento: string;
   descripcion: string;
@@ -174,6 +177,7 @@ type AssetSummary = {
   ubicacionTecnicaCodigo?: string | null;
 };
 
+type OperationalUnitSummary = { codigo: string; nombre: string; faenaCodigo?: string | null };
 type SparePartSummary = {
   codigo: string;
   descripcion: string;
@@ -200,6 +204,8 @@ const closedStatuses: WorkOrderStatus[] = ["CerradaTecnicamente", "ValidadaPlani
 
 const emptyOrderForm = {
   activoCodigo: "",
+  unidadOperativaCodigo: "",
+  activosRelacionados: [] as string[],
   faenaCodigo: "",
   descripcion: "",
   tipoMantenimiento: "Corrective",
@@ -224,10 +230,11 @@ export function WorkOrdersPage() {
   const currentUser = useAuthStore((state) => state.user);
   const [orders, setOrders] = useState<WorkOrderSummary[]>([]);
   const [assets, setAssets] = useState<AssetSummary[]>([]);
+  const [operationalUnits, setOperationalUnits] = useState<OperationalUnitSummary[]>([]);
   const [spareParts, setSpareParts] = useState<SparePartSummary[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<WorkOrderDetail | null>(null);
-  const [filters, setFilters] = useState({ status: "", faenaCodigo: "", technicianId: "", activoCodigo: "", includeClosed: false });
+  const [filters, setFilters] = useState({ status: "", faenaCodigo: "", technicianId: "", activoCodigo: "", unidadOperativaCodigo: "", includeClosed: false });
   const [orderForm, setOrderForm] = useState(emptyOrderForm);
   const [taskForm, setTaskForm] = useState(emptyTaskForm);
   const [technicianForm, setTechnicianForm] = useState({ codigoTarea: "", tecnicoUserId: currentUser?.id ?? "", tecnicoNombre: "" });
@@ -251,7 +258,7 @@ export function WorkOrdersPage() {
 
   useEffect(() => {
     void loadAll();
-  }, [filters.status, filters.faenaCodigo, filters.technicianId, filters.activoCodigo, filters.includeClosed]);
+  }, [filters.status, filters.faenaCodigo, filters.technicianId, filters.activoCodigo, filters.unidadOperativaCodigo, filters.includeClosed]);
 
   useEffect(() => {
     if (selectedId) {
@@ -276,16 +283,19 @@ export function WorkOrdersPage() {
       if (filters.faenaCodigo) query.set("faenaCodigo", filters.faenaCodigo);
       if (filters.technicianId) query.set("technicianId", filters.technicianId);
       if (filters.activoCodigo) query.set("activoCodigo", filters.activoCodigo);
+      if (filters.unidadOperativaCodigo) query.set("unidadOperativaCodigo", filters.unidadOperativaCodigo);
       query.set("includeClosed", String(filters.includeClosed));
 
-      const [orderResult, assetResult, spareResult] = await Promise.all([
+      const [orderResult, assetResult, spareResult, unitResult] = await Promise.all([
         apiFetch<WorkOrderSummary[]>(`/api/work-orders?${query}`),
         apiFetch<AssetSummary[]>("/api/assets").catch(() => [] as AssetSummary[]),
-        apiFetch<SparePartSummary[]>("/api/inventory/spare-parts?includeObsolete=true").catch(() => [] as SparePartSummary[])
+        apiFetch<SparePartSummary[]>("/api/inventory/spare-parts?includeObsolete=true").catch(() => [] as SparePartSummary[]),
+        apiFetch<OperationalUnitSummary[]>("/api/operational-units").catch(() => [] as OperationalUnitSummary[])
       ]);
       setOrders(orderResult);
       setAssets(assetResult);
       setSpareParts(spareResult);
+      setOperationalUnits(unitResult);
       if (!selectedId && orderResult[0]) {
         setSelectedId(orderResult[0].numeroOT);
       }
@@ -317,7 +327,9 @@ export function WorkOrdersPage() {
     event.preventDefault();
     await saveAction(async () => {
       const body = {
-        activoCodigo: orderForm.activoCodigo,
+        activoCodigo: emptyToNull(orderForm.activoCodigo),
+        unidadOperativaCodigo: emptyToNull(orderForm.unidadOperativaCodigo),
+        activosRelacionados: orderForm.activosRelacionados.filter((code) => code !== orderForm.activoCodigo).map((activoCodigo) => ({ activoCodigo, rol: "AFECTADO" })),
         faenaCodigo: emptyToNull(orderForm.faenaCodigo),
         descripcion: orderForm.descripcion,
         tipoMantenimiento: orderForm.tipoMantenimiento,
@@ -329,6 +341,7 @@ export function WorkOrdersPage() {
         fechaProgramada: toIsoOrNull(orderForm.fechaProgramada),
         requiereFirma: orderForm.requiereFirma
       };
+      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo f�sico.");
       const created = orderForm.preventive
         ? await apiFetch<WorkOrderDetail>("/api/work-orders/preventive", { method: "POST", body: JSON.stringify(body) })
         : await apiFetch<WorkOrderDetail>("/api/work-orders", { method: "POST", body: JSON.stringify(body) });
@@ -570,6 +583,18 @@ export function WorkOrdersPage() {
     setOrderForm({ ...orderForm, activoCodigo: code, faenaCodigo: asset?.faenaCodigo ?? orderForm.faenaCodigo });
   }
 
+  function applyUnit(code: string) {
+    const unit = operationalUnits.find((item) => item.codigo === code);
+    setOrderForm({ ...orderForm, unidadOperativaCodigo: code, faenaCodigo: unit?.faenaCodigo ?? orderForm.faenaCodigo });
+  }
+
+  function toggleRelatedAsset(code: string) {
+    setOrderForm({ ...orderForm, activosRelacionados: orderForm.activosRelacionados.includes(code) ? orderForm.activosRelacionados.filter((item) => item !== code) : [...orderForm.activosRelacionados, code] });
+  }
+
+  function targetLabel(item: WorkOrderSummary) {
+    return (item.activoNombre ?? item.activoCodigo) || item.unidadOperativaNombre || item.unidadOperativaCodigo || "Sin destino";
+  }
   return (
     <section className="stack">
       <header className="page-header">
@@ -600,18 +625,30 @@ export function WorkOrdersPage() {
           </div>
           <div className="form-grid">
             <label>
-              Activo
-              <select value={orderForm.activoCodigo} onChange={(event) => applyAsset(event.target.value)} required>
-                <option value="">Selecciona activo</option>
+              Activo principal (opcional si se selecciona unidad)
+              <select value={orderForm.activoCodigo} onChange={(event) => applyAsset(event.target.value)}>
+                <option value="">Sin activo principal</option>
                 {assets.map((item) => (
-                  <option key={item.codigo} value={item.codigo}>
-                    {item.nombre} ({item.codigo})
-                  </option>
+                  <option key={item.codigo} value={item.codigo}>{item.nombre} ({item.codigo})</option>
                 ))}
               </select>
             </label>
-            <FaenaSelect emptyLabel="Selecciona faena" value={orderForm.faenaCodigo} onChange={(value) => setOrderForm({ ...orderForm, faenaCodigo: value })} />
             <label>
+              Unidad operativa (opcional si se selecciona activo)
+              <select value={orderForm.unidadOperativaCodigo} onChange={(event) => applyUnit(event.target.value)}>
+                <option value="">Sin unidad operativa</option>
+                {operationalUnits.map((item) => <option key={item.codigo} value={item.codigo}>{item.nombre} ({item.codigo})</option>)}
+              </select>
+            </label>
+            <FaenaSelect emptyLabel="Selecciona faena" value={orderForm.faenaCodigo} onChange={(value) => setOrderForm({ ...orderForm, faenaCodigo: value })} />
+            <fieldset className="span-2">
+              <legend>Activos relacionados (snapshot de la OT)</legend>
+              <div className="grid gap-1 md:grid-cols-2">
+                {assets.filter((item) => !orderForm.faenaCodigo || item.faenaCodigo === orderForm.faenaCodigo).map((item) => (
+                  <label className="check-row" key={item.codigo}><input type="checkbox" checked={orderForm.activosRelacionados.includes(item.codigo)} onChange={() => toggleRelatedAsset(item.codigo)} />{item.nombre} ({item.codigo})</label>
+                ))}
+              </div>
+            </fieldset>            <label>
               Tipo
               <select value={orderForm.tipoMantenimiento} onChange={(event) => setOrderForm({ ...orderForm, tipoMantenimiento: event.target.value })}>
                 <option value="Corrective">Correctiva</option>
@@ -679,13 +716,12 @@ export function WorkOrdersPage() {
             </select>
             <select value={filters.activoCodigo} onChange={(event) => setFilters({ ...filters, activoCodigo: event.target.value })}>
               <option value="">Todos los activos</option>
-              {assets.map((item) => (
-                <option key={item.codigo} value={item.codigo}>
-                  {item.nombre}
-                </option>
-              ))}
+              {assets.map((item) => <option key={item.codigo} value={item.codigo}>{item.nombre}</option>)}
             </select>
-            <input placeholder="Tecnico" value={filters.technicianId} onChange={(event) => setFilters({ ...filters, technicianId: event.target.value })} />
+            <select value={filters.unidadOperativaCodigo} onChange={(event) => setFilters({ ...filters, unidadOperativaCodigo: event.target.value })}>
+              <option value="">Todas las unidades</option>
+              {operationalUnits.map((item) => <option key={item.codigo} value={item.codigo}>{item.nombre}</option>)}
+            </select>            <input placeholder="Tecnico" value={filters.technicianId} onChange={(event) => setFilters({ ...filters, technicianId: event.target.value })} />
             <label className="check-row">
               <input type="checkbox" checked={filters.includeClosed} onChange={(event) => setFilters({ ...filters, includeClosed: event.target.checked })} />
               Cerradas
@@ -698,7 +734,7 @@ export function WorkOrdersPage() {
               <thead>
                 <tr>
                   <th>OT</th>
-                  <th>Activo</th>
+                  <th>Destino</th>
                   <th>Estado</th>
                   <th>Plan</th>
                   <th>HH</th>
@@ -712,7 +748,7 @@ export function WorkOrdersPage() {
                       <small>{item.descripcion}</small>
                     </td>
                     <td>
-                      <strong>{item.activoNombre ?? item.activoCodigo}</strong>
+                      <strong>{targetLabel(item)}</strong>
                       <small>{[item.faenaCodigo, item.sistema, item.subsistema, item.componente].filter(Boolean).join(" / ") || "-"}</small>
                     </td>
                     <td>
@@ -744,7 +780,7 @@ export function WorkOrdersPage() {
                 {column.items.map((item) => (
                   <button key={item.numeroOT} className="w-full rounded-md border border-slate-200 bg-white p-3 text-left text-sm dark:border-slate-800 dark:bg-slate-900" type="button" onClick={() => setSelectedId(item.numeroOT)}>
                     <strong className="block text-slate-900 dark:text-slate-100">{item.numeroOT}</strong>
-                    <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{item.activoNombre ?? item.activoCodigo}</span>
+                    <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{targetLabel(item)}</span>
                   </button>
                 ))}
               </div>
@@ -758,7 +794,7 @@ export function WorkOrdersPage() {
           <div className="section-heading">
             <div>
               <h2>{detail.summary.numeroOT} - {detail.summary.descripcion}</h2>
-              <p>{detail.summary.activoNombre ?? detail.summary.activoCodigo} / {detail.summary.faenaCodigo}</p>
+              <p>{targetLabel(detail.summary)} / {detail.summary.faenaCodigo}</p>
             </div>
             <span className={`status-pill ${closedStatuses.includes(detail.summary.estado) ? "success" : ""}`}>{statusLabels[detail.summary.estado]}</span>
           </div>

@@ -31,7 +31,8 @@ public sealed class WorkOrderService : IWorkOrderService
             .Where(d => query.IncludeClosed || d.Summary.Estado is not (WorkOrderLifecycleStatus.ValidadaPlanificacion or WorkOrderLifecycleStatus.Anulada))
             .Where(d => !query.Status.HasValue || d.Summary.Estado == query.Status)
             .Where(d => string.IsNullOrWhiteSpace(query.FaenaCodigo) || Same(d.Summary.FaenaCodigo, query.FaenaCodigo))
-            .Where(d => string.IsNullOrWhiteSpace(query.ActivoCodigo) || Same(d.Summary.ActivoCodigo, query.ActivoCodigo))
+            .Where(d => string.IsNullOrWhiteSpace(query.ActivoCodigo) || Same(d.Summary.ActivoCodigo, query.ActivoCodigo) || d.Summary.ActivosRelacionados.Any(a => Same(a.ActivoCodigo, query.ActivoCodigo)))
+            .Where(d => string.IsNullOrWhiteSpace(query.UnidadOperativaCodigo) || Same(d.Summary.UnidadOperativaCodigo, query.UnidadOperativaCodigo))
             .Where(d => string.IsNullOrWhiteSpace(query.TechnicianId) || d.Technicians.Any(t => Same(t.TecnicoUserId, query.TechnicianId)))
             .Where(d => CanViewOrder(user, d))
             .Select(d => d.Summary)
@@ -52,13 +53,29 @@ public sealed class WorkOrderService : IWorkOrderService
 
     public async Task<WorkOrderDetailResponse> CreateAsync(CreateWorkOrderRequest request, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanPlan(user); ValidateRequired(request.ActivoCodigo, nameof(request.ActivoCodigo)); ValidateRequired(request.Descripcion, nameof(request.Descripcion)); ValidateRequired(request.TipoMantenimiento, nameof(request.TipoMantenimiento));
-        var asset = await ResolveAssetAsync(request.ActivoCodigo, request.FaenaCodigo, user, ct);
+        EnsureCanPlan(user); ValidateRequired(request.Descripcion, nameof(request.Descripcion)); ValidateRequired(request.TipoMantenimiento, nameof(request.TipoMantenimiento));
+        if (string.IsNullOrWhiteSpace(request.ActivoCodigo) && string.IsNullOrWhiteSpace(request.UnidadOperativaCodigo)) throw new DomainException("La OT debe tener un activo principal o una unidad operativa.");
+        var asset = string.IsNullOrWhiteSpace(request.ActivoCodigo) ? null : await ResolveAssetAsync(request.ActivoCodigo, request.FaenaCodigo, user, ct);
+        var unit = string.IsNullOrWhiteSpace(request.UnidadOperativaCodigo) ? null : await ResolveUnitAsync(request.UnidadOperativaCodigo, request.FaenaCodigo, user, ct);
+        var faenaCode = request.FaenaCodigo ?? asset?.Faena?.Code ?? unit?.Faena?.Code;
+        ValidateRequired(faenaCode, "FaenaCodigo");
+        var faena = await _dbContext.Faenas.FirstOrDefaultAsync(x => x.Code == C(faenaCode) && x.IsActive, ct) ?? throw new DomainException("La faena indicada no existe.");
+        EnsureFaena(user, faena.Code);
+        if ((asset?.FaenaId is Guid assetFaena && assetFaena != faena.Id) || (unit?.FaenaId is Guid unitFaena && unitFaena != faena.Id)) throw new DomainException("Los objetivos de la OT deben pertenecer a la faena indicada.");
+        var related = new List<(AssetEntity Asset, string Role)>();
+        if (asset is not null) related.Add((asset, "PRINCIPAL"));
+        foreach (var target in request.ActivosRelacionados ?? [])
+        {
+            ValidateRequired(target.ActivoCodigo, "ActivosRelacionados.ActivoCodigo");
+            var relatedAsset = await ResolveAssetAsync(target.ActivoCodigo, faena.Code, user, ct);
+            if (related.Any(x => x.Asset.Id == relatedAsset.Id)) throw new DomainException("Un activo solo puede asociarse una vez a la OT.");
+            related.Add((relatedAsset, TargetRole(target.Rol)));
+        }
         await using var tx = await _dbContext.Database.BeginTransactionAsync(ct);
         var now = DateTimeOffset.UtcNow; var status = await CatalogAsync("WorkOrderLifecycleStatus", WorkOrderLifecycleStatus.OTCreada.ToString(), ct);
         var order = new WorkOrderEntity
         {
-            Id = Guid.NewGuid(), WorkOrderNumber = await NextNumberAsync("work_order_number_seq", "OT", ct), AssetId = asset.Id, Asset = asset, FaenaId = asset.FaenaId, Faena = asset.Faena,
+            Id = Guid.NewGuid(), WorkOrderNumber = await NextNumberAsync("work_order_number_seq", "OT", ct), AssetId = asset?.Id, Asset = asset, OperationalUnitId = unit?.Id, OperationalUnit = unit, FaenaId = faena.Id, Faena = faena,
             StatusId = status.Id, Status = status, MaintenanceTypeId = (await CatalogAsync("MaintenanceType", request.TipoMantenimiento, ct)).Id,
             Description = request.Descripcion.Trim(), NotificationId = await ResolveNotificationIdAsync(request.AvisoId, ct), System = N(request.Sistema), Subsystem = N(request.Subsistema), Component = N(request.Componente),
             PriorityId = (await CatalogAsync("WorkNotificationPriority", N(request.Prioridad) ?? "Media", ct)).Id, CriticalityId = (await CatalogAsync("WorkNotificationCriticality", N(request.Criticidad) ?? "Media", ct)).Id,
@@ -66,13 +83,19 @@ public sealed class WorkOrderService : IWorkOrderService
             RequiresSignature = request.RequiereFirma, CreatedByUserId = user.UserId, CreatedByUserAtUtc = now, UpdatedByUserId = user.UserId, UpdatedByUserAtUtc = now
         };
         _dbContext.WorkOrders.Add(order);
+        foreach (var target in related) _dbContext.WorkOrderAssets.Add(new WorkOrderAssetEntity { Id = Guid.NewGuid(), WorkOrder = order, WorkOrderId = order.Id, Asset = target.Asset, AssetId = target.Asset.Id, Role = target.Role, AssetCodeSnapshot = target.Asset.Code, AssetNameSnapshot = target.Asset.Name, AddedAtUtc = now, AddedByUserId = user.UserId });
         AddHistory(order, status, status, user, "OT creada", now);
         await _dbContext.SaveChangesAsync(ct); await tx.CommitAsync(ct);
-        await Audit(user, "work_order.created", order.WorkOrderNumber, null, order, order.Faena.Code, request.Descripcion, ct);
+        await Audit(user, "work_order.created", order.WorkOrderNumber, null, order, faena.Code, request.Descripcion, ct);
         return (await GetByIdAsync(order.WorkOrderNumber, user, ct))!;
     }
 
-    public async Task<WorkOrderDetailResponse> CreatePreventiveAsync(CreatePreventiveWorkOrderRequest r, UserAccessContext u, CancellationToken ct)
+    private static string TargetRole(string? value)
+    {
+        var role = C(value) ?? "AFECTADO";
+        return role is "AFECTADO" or "MONTAJE" or "DESMONTAJE" ? role : throw new DomainException("El rol del activo relacionado es invalido.");
+    }
+public async Task<WorkOrderDetailResponse> CreatePreventiveAsync(CreatePreventiveWorkOrderRequest r, UserAccessContext u, CancellationToken ct)
     {
         var d = await CreateAsync(new CreateWorkOrderRequest(r.ActivoCodigo, r.Descripcion, "Preventive", r.FaenaCodigo, null, r.Sistema, r.Subsistema, r.Componente, "Media", "Media", r.FechaProgramada, r.FechaInicioProgramada, r.FechaFinProgramada, r.RequiereFirma), u, ct);
         var e = await FindAsync(d.Summary.NumeroOT, true, ct); e!.PreventivePlanCode = N(r.PlanPreventivoCodigo); e.IsAutomaticPreventive = true; await _dbContext.SaveChangesAsync(ct);
@@ -176,14 +199,27 @@ public sealed class WorkOrderService : IWorkOrderService
     }
 
     private IQueryable<WorkOrderEntity> BaseQuery() => _dbContext.WorkOrders.AsSplitQuery()
-        .Include(o => o.Asset).ThenInclude(a => a.Faena).Include(o => o.Faena).Include(o => o.Status).Include(o => o.MaintenanceType).Include(o => o.Priority).Include(o => o.Criticality).Include(o => o.FailureClassification).Include(o => o.Notification)
+        .Include(o => o.Asset).ThenInclude(a => a!.Faena).Include(o => o.OperationalUnit).ThenInclude(u => u!.Faena).Include(o => o.RelatedAssets).ThenInclude(x => x.Asset).Include(o => o.Faena).Include(o => o.Status).Include(o => o.MaintenanceType).Include(o => o.Priority).Include(o => o.Criticality).Include(o => o.FailureClassification).Include(o => o.Notification)
         .Include(o => o.Tasks).Include(o => o.Technicians).ThenInclude(t => t.Task).Include(o => o.Labor).ThenInclude(l => l.Task).Include(o => o.Evidences).ThenInclude(e => e.EvidenceType).Include(o => o.Evidences).ThenInclude(e => e.Task)
         .Include(o => o.SpareParts).ThenInclude(s => s.Status).Include(o => o.SpareParts).ThenInclude(s => s.Task).Include(o => o.Checklist).ThenInclude(c => c.ResponseType).Include(o => o.Checklist).ThenInclude(c => c.Task).Include(o => o.Checklist).ThenInclude(c => c.Template)
         .Include(o => o.Signatures).ThenInclude(s => s.Task).Include(o => o.History).ThenInclude(h => h.PreviousStatus).Include(o => o.History).ThenInclude(h => h.NewStatus);
     private Task<WorkOrderEntity?> FindAsync(string n, bool tracking, CancellationToken ct) { var q = BaseQuery(); if (!tracking) q = q.AsNoTracking(); return q.FirstOrDefaultAsync(o => o.WorkOrderNumber == C(n), ct); }
     private async Task<WorkOrderEntity> MutOrder(string n, UserAccessContext u, CancellationToken ct) { var o = await FindAsync(n, true, ct) ?? throw new DomainException("La OT no existe."); EnsureFaena(u, o.Faena.Code); return o; }
     private static WorkOrderTaskEntity Task(WorkOrderEntity o, string c) => o.Tasks.FirstOrDefault(t => t.IsActive && Same(t.TaskCode, c)) ?? throw new DomainException($"La tarea '{c}' no existe en la OT.");
-    private async Task<AssetEntity> ResolveAssetAsync(string c, string? f, UserAccessContext u, CancellationToken ct) { var a = await _dbContext.Assets.Include(x => x.Faena).FirstOrDefaultAsync(x => x.Code == C(c) && x.RecordStatus == "vigente", ct) ?? throw new DomainException($"El activo '{c}' no existe."); if (!string.IsNullOrWhiteSpace(f) && !Same(a.Faena.Code, f)) throw new DomainException("El activo seleccionado no pertenece a la faena indicada."); EnsureFaena(u, a.Faena.Code); return a; }
+    private async Task<AssetEntity> ResolveAssetAsync(string c, string? f, UserAccessContext u, CancellationToken ct)
+    {
+        var a = await _dbContext.Assets.Include(x => x.Faena).Include(x => x.OperationalState).FirstOrDefaultAsync(x => x.Code == C(c) && x.OperationalState.Code != "DADO_DE_BAJA", ct) ?? throw new DomainException($"El activo '{c}' no existe.");
+        if (a.Faena is null) throw new DomainException("El activo seleccionado no tiene faena asignada.");
+        if (!string.IsNullOrWhiteSpace(f) && !Same(a.Faena.Code, f)) throw new DomainException("El activo seleccionado no pertenece a la faena indicada.");
+        EnsureFaena(u, a.Faena.Code); return a;
+    }
+    private async Task<OperationalUnitEntity> ResolveUnitAsync(string c, string? f, UserAccessContext u, CancellationToken ct)
+    {
+        var unit = await _dbContext.OperationalUnits.Include(x => x.Faena).Include(x => x.OperationalState).FirstOrDefaultAsync(x => x.Code == C(c) && x.OperationalState.Code != "DADO_DE_BAJA", ct) ?? throw new DomainException($"La unidad operativa '{c}' no existe.");
+        if (unit.Faena is null) throw new DomainException("La unidad operativa seleccionada no tiene faena asignada.");
+        if (!string.IsNullOrWhiteSpace(f) && !Same(unit.Faena.Code, f)) throw new DomainException("La unidad operativa no pertenece a la faena indicada.");
+        EnsureFaena(u, unit.Faena.Code); return unit;
+    }
     private async Task<Guid?> ResolveNotificationIdAsync(string? a, CancellationToken ct) => string.IsNullOrWhiteSpace(a) ? null : (await _dbContext.WorkNotifications.FirstOrDefaultAsync(n => n.NotificationNumber == C(a), ct))?.Id;
     private async Task<WorkCatalogEntity> CatalogAsync(string cat, string code, CancellationToken ct) => await _dbContext.WorkCatalogs.FirstOrDefaultAsync(x => x.Category == cat && x.Code == code.Trim(), ct) ?? throw new DomainException($"No existe catalogo {cat}:{code}.");
     private async Task<string> NextNumberAsync(string seq, string prefix, CancellationToken ct) { var cn = _dbContext.Database.GetDbConnection(); if (cn.State != ConnectionState.Open) await cn.OpenAsync(ct); await using var cmd = cn.CreateCommand(); if (_dbContext.Database.CurrentTransaction is not null) cmd.Transaction = _dbContext.Database.CurrentTransaction.GetDbTransaction(); cmd.CommandText = $"SELECT nextval('{seq}')"; var v = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture); return $"{prefix}-{v:000000}"; }
@@ -200,7 +236,8 @@ public sealed class WorkOrderService : IWorkOrderService
         var ch = o.Checklist.Where(c => c.IsActive).Select(c => ToChecklist(o.WorkOrderNumber, c.Task.TaskCode, c)).ToArray();
         var sig = o.Signatures.Where(s => s.IsActive).Select(s => ToSignature(o.WorkOrderNumber, s.Task?.TaskCode, s)).ToArray();
         var hist = o.History.OrderBy(h => h.OccurredAtUtc).Select(h => new WorkOrderStatusHistoryResponse(h.Id.ToString("D"), o.WorkOrderNumber, ParseEnum(h.PreviousStatus.Code, WorkOrderLifecycleStatus.OTCreada), ParseEnum(h.NewStatus.Code, WorkOrderLifecycleStatus.OTCreada), h.OccurredAtUtc, h.UserId, h.Reason)).ToArray();
-        var sum = new WorkOrderSummaryResponse(o.WorkOrderNumber, ParseEnum(o.Status.Code, WorkOrderLifecycleStatus.OTCreada), o.Asset.Code, o.Asset.Name, o.Faena.Code, o.MaintenanceType.Code, o.Description, o.Notification?.NotificationNumber, o.System, o.Subsystem, o.Component, o.Priority?.Code ?? "Media", o.Criticality?.Code ?? "Media", o.ScheduledAtUtc, o.ScheduledStartUtc, o.ScheduledEndUtc, o.IsAutomaticPreventive, o.RequiresSignature, tasks.Length, tech.Length, labor.Sum(l => l.Horas), 0);
+        var related = o.RelatedAssets.OrderBy(x => x.AddedAtUtc).Select(x => new WorkOrderAssetResponse(x.AssetCodeSnapshot, x.AssetNameSnapshot, x.Role, x.Role == "PRINCIPAL")).ToArray(); if (related.Length == 0 && o.Asset is not null) related = [new WorkOrderAssetResponse(o.Asset.Code, o.Asset.Name, "PRINCIPAL", true)];
+        var sum = new WorkOrderSummaryResponse(o.WorkOrderNumber, ParseEnum(o.Status.Code, WorkOrderLifecycleStatus.OTCreada), o.Asset?.Code ?? string.Empty, o.Asset?.Name, o.Faena.Code, o.MaintenanceType.Code, o.Description, o.Notification?.NotificationNumber, o.System, o.Subsystem, o.Component, o.Priority?.Code ?? "Media", o.Criticality?.Code ?? "Media", o.ScheduledAtUtc, o.ScheduledStartUtc, o.ScheduledEndUtc, o.IsAutomaticPreventive, o.RequiresSignature, tasks.Length, tech.Length, labor.Sum(l => l.Horas), 0, o.OperationalUnit?.Code, o.OperationalUnit?.Name, related);
         var detail = new WorkOrderDetailResponse(sum, tasks, tech, labor, ev, sp, ch, sig, hist, []); var b = Blockers(detail); return detail with { Summary = sum with { BloqueosCierre = b.Count }, ClosureBlockers = b };
     }
     private static WorkOrderTaskResponse ToTask(string ot, WorkOrderTaskEntity t) => new(ot, t.TaskCode, t.Description, t.ScheduledStartUtc, t.ScheduledEndUtc, t.RequiresEvidence, t.RequiresLabor, t.ChecklistMandatory, t.Observations);
@@ -251,4 +288,3 @@ public sealed class WorkOrderService : IWorkOrderService
     private static Guid? G(string? v) => Guid.TryParse(v, out var id) ? id : null;
     private static string Ser(object v) => JsonSerializer.Serialize(v, new JsonSerializerOptions { ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles });
 }
-

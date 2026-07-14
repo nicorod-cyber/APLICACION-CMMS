@@ -32,6 +32,14 @@ public static class AuthPermissions
     public const string ApproveImports = "importaciones.aprobar";
     public const string ChangeAssetFaena = "activos.cambiar_faena";
     public const string ManageEquipmentFamilies = "familias_equipo.gestionar";
+    public const string ManageAssetCatalogs = "activos.catalogos.administrar";
+    public const string ManageAssetAttributes = "activos.atributos.administrar";
+    public const string RegisterAssetReadings = "activos.lecturas.registrar";
+    public const string CorrectAssetReadings = "activos.lecturas.corregir";
+    public const string ViewOperationalUnits = "unidades_operativas.ver";
+    public const string ManageOperationalUnits = "unidades_operativas.administrar";
+    public const string ManageOperationalUnitComposition = "unidades_operativas.composicion";
+    public const string ManageDocumentRequirements = "documentos.requisitos.administrar";
     public const string ManageTechnicalHierarchy = "jerarquia.gestionar";
     public const string ManageDocuments = "documentos.gestionar";
     public const string ValidateDocuments = "documentos.validar";

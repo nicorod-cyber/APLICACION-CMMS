@@ -41,24 +41,20 @@ public sealed class ExcelDataProviderTests
         {
             new DataRow(new Dictionary<string, string?>
             {
-                ["Codigo"] = "EQ-001",
-                ["Nombre"] = "Activo 1",
-                ["FaenaCodigo"] = "F001",
-                ["TipoActivo"] = "Camion",
-                ["Estado"] = "Active"
+                ["Codigo"] = "F001",
+                ["Nombre"] = "Faena 1",
+                ["Empresa"] = "Empresa"
             }),
             new DataRow(new Dictionary<string, string?>
             {
-                ["Codigo"] = "EQ-001",
-                ["Nombre"] = "Activo duplicado",
-                ["FaenaCodigo"] = "F001",
-                ["TipoActivo"] = "Camion",
-                ["Estado"] = "Active"
+                ["Codigo"] = "F001",
+                ["Nombre"] = "Faena duplicada",
+                ["Empresa"] = "Empresa"
             })
         };
 
         var exception = await Assert.ThrowsAsync<DomainException>(() =>
-            provider.SaveRowsAsync("activos", rows, CancellationToken.None));
+            provider.SaveRowsAsync("faenas", rows, CancellationToken.None));
 
         Assert.Contains("Duplicated natural key", exception.Message);
     }

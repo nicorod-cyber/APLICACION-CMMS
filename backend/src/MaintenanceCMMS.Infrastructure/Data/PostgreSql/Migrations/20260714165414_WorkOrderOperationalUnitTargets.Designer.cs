@@ -3,6 +3,7 @@ using System;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
 {
     [DbContext(typeof(CmmsDbContext))]
-    partial class CmmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260714165414_WorkOrderOperationalUnitTargets")]
+    partial class WorkOrderOperationalUnitTargets
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -3069,54 +3072,6 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
                         .IsUnique();
 
                     b.ToTable("roles_componente_unidad", (string)null);
-                });
-
-            modelBuilder.Entity("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.OperationalUnitCompositionRuleAllowedAssetEntity", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<Guid?>("AssetTypeId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("tipo_activo_id");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("created_at_utc");
-
-                    b.Property<Guid?>("EquipmentFamilyId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("familia_equipo_id");
-
-                    b.Property<Guid>("OperationalUnitCompositionRuleId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("regla_composicion_id");
-
-                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
-                        .HasColumnType("timestamptz")
-                        .HasColumnName("updated_at_utc");
-
-                    b.Property<uint>("Version")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("xid")
-                        .HasColumnName("xmin");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AssetTypeId");
-
-                    b.HasIndex("EquipmentFamilyId");
-
-                    b.HasIndex("OperationalUnitCompositionRuleId", "AssetTypeId", "EquipmentFamilyId")
-                        .IsUnique();
-
-                    b.ToTable("reglas_composicion_unidad_activos_permitidos", null, t =>
-                        {
-                            t.HasCheckConstraint("ck_reglas_composicion_permitidos_objetivo", "tipo_activo_id IS NOT NULL OR familia_equipo_id IS NOT NULL");
-                        });
                 });
 
             modelBuilder.Entity("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.OperationalUnitCompositionRuleEntity", b =>
@@ -6574,31 +6529,6 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
                     b.Navigation("RemovalWorkOrder");
                 });
 
-            modelBuilder.Entity("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.OperationalUnitCompositionRuleAllowedAssetEntity", b =>
-                {
-                    b.HasOne("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.AssetTypeEntity", "AssetType")
-                        .WithMany()
-                        .HasForeignKey("AssetTypeId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.EquipmentFamilyEntity", "EquipmentFamily")
-                        .WithMany()
-                        .HasForeignKey("EquipmentFamilyId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.OperationalUnitCompositionRuleEntity", "OperationalUnitCompositionRule")
-                        .WithMany("AllowedAssets")
-                        .HasForeignKey("OperationalUnitCompositionRuleId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("AssetType");
-
-                    b.Navigation("EquipmentFamily");
-
-                    b.Navigation("OperationalUnitCompositionRule");
-                });
-
             modelBuilder.Entity("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.OperationalUnitCompositionRuleEntity", b =>
                 {
                     b.HasOne("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.OperationalUnitComponentRoleEntity", "ComponentRole")
@@ -7433,11 +7363,6 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
                     b.Navigation("Attempts");
 
                     b.Navigation("Recipients");
-                });
-
-            modelBuilder.Entity("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.OperationalUnitCompositionRuleEntity", b =>
-                {
-                    b.Navigation("AllowedAssets");
                 });
 
             modelBuilder.Entity("MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities.RoleEntity", b =>

@@ -23,6 +23,19 @@ public sealed class PostgreSqlMigrationTests
         [AuthRoles.Admin],
         [AuthPermissions.Administration, AuthPermissions.AdjustStock, AuthPermissions.ViewGlobalWarehouses, AuthPermissions.ManageTechnicalHierarchy],
         []);
+    private static Task<int> SeedLegacyAssetAsync(CmmsDbContext context, string faenaCode, string familyCode, string assetCode) =>
+        context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO faenas (id, codigo, nombre, activo, created_at_utc)
+            VALUES (gen_random_uuid(), {faenaCode}, {faenaCode}, true, now());
+            INSERT INTO familias_equipo (id, codigo, nombre, activo, created_at_utc)
+            VALUES (gen_random_uuid(), {familyCode}, {familyCode}, true, now());
+            INSERT INTO estados_operacionales_activo (id, codigo, nombre, activo, created_at_utc)
+            VALUES (gen_random_uuid(), 'OPERATIVO_FAENA', 'Operativo', true, now());
+            INSERT INTO activos (id, codigo, nombre, faena_id, familia_equipo_id, estado_operacional_id, estado_registro, tipo_activo, ficha_validada, created_at_utc)
+            SELECT gen_random_uuid(), {assetCode}, 'Activo legado', f.id, fam.id, s.id, 'vigente', 'Equipo', false, now()
+            FROM faenas f CROSS JOIN familias_equipo fam CROSS JOIN estados_operacionales_activo s
+            WHERE f.codigo = {faenaCode} AND fam.codigo = {familyCode} AND s.codigo = 'OPERATIVO_FAENA';
+            """);
 
     [Fact]
     public async Task MigrateFromEmptyDatabase_CreatesInventoryAndSupportsServiceFlow()
@@ -70,22 +83,7 @@ public sealed class PostgreSqlMigrationTests
         await using var database = await MigrationDatabase.CreateAsync();
         var migrator = database.Context.Database.GetService<IMigrator>();
         await migrator.MigrateAsync(database.WorkMigrationId);
-
-        var faena = new FaenaEntity { Code = "UPG-FAE", Name = "Faena actualización", IsActive = true };
-        var family = new EquipmentFamilyEntity { Code = "UPG-FAM", Name = "Familia actualización", IsActive = true };
-        var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
-        var asset = new AssetEntity
-        {
-            Code = "UPG-ACT",
-            Name = "Activo actualización",
-            Faena = faena,
-            Family = family,
-            OperationalState = state,
-            AssetType = "Equipo",
-            RecordStatus = "vigente"
-        };
-        database.Context.AddRange(faena, family, state, asset);
-        await database.Context.SaveChangesAsync();
+        await SeedLegacyAssetAsync(database.Context, "UPG-FAE", "UPG-FAM", "UPG-ACT");
 
         await database.Context.Database.MigrateAsync();
 
@@ -124,10 +122,13 @@ public sealed class PostgreSqlMigrationTests
         await using var database = await MigrationDatabase.CreateAsync();
         await database.Context.Database.MigrateAsync();
         foreach (var table in new[] { "ubicaciones_tecnicas", "nodos_tecnicos", "nodo_tecnico_familias", "nodo_tecnico_activos", "nodo_tecnico_aliases" }) Assert.True(await database.ExistsAsync(table));
+        var type = new AssetTypeEntity { Code = "TH-TIPO", Name = "Tipo TH", IsActive = true };
+        database.Context.AssetTypes.Add(type);
+        await database.Context.SaveChangesAsync();
         var faena = new FaenaEntity { Code = "TH-FAE", Name = "Faena TH", IsActive = true };
-        var family = new EquipmentFamilyEntity { Code = "TH-FAM", Name = "Familia TH", IsActive = true };
+        var family = new EquipmentFamilyEntity { Code = "TH-FAM", Name = "Familia TH", AssetTypeId = type.Id, IsActive = true };
         var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
-        database.Context.AddRange(faena, family, state, new AssetEntity { Code = "TH-ACT", Name = "Activo TH", Faena = faena, Family = family, OperationalState = state, AssetType = "Equipo", RecordStatus = "vigente" });
+        database.Context.AddRange(faena, family, state, new AssetEntity { Code = "TH-ACT", Name = "Activo TH", AssetTypeId = type.Id, Faena = faena, Family = family, OperationalState = state });
         await database.Context.SaveChangesAsync();
         var service = new TechnicalHierarchyService(database.Context, new PostgreSqlAuditService(database.Context, new AuditContextAccessor()), new AuthorizationPolicyService());
         var node = await service.CreateAsync(new CreateTechnicalNodeRequest("TH-SIS", "Sistema TH", TechnicalHierarchyLevel.Sistema, FaenaCodigo: "TH-FAE", FamiliasEquipo: ["TH-FAM"], ActivosAsignados: ["TH-ACT"]), Admin, CancellationToken.None);
@@ -141,10 +142,8 @@ public sealed class PostgreSqlMigrationTests
     {
         await using var database = await MigrationDatabase.CreateAsync();
         await database.Context.Database.GetService<IMigrator>().MigrateAsync(database.InventoryMigrationId);
-        var faena = new FaenaEntity { Code = "INV-FAE", Name = "Faena previa", IsActive = true };
-        var family = new EquipmentFamilyEntity { Code = "INV-FAM", Name = "Familia previa", IsActive = true };
-        var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
-        database.Context.AddRange(faena, family, state, new AssetEntity { Code = "INV-ACT", Name = "Activo previo", Faena = faena, Family = family, OperationalState = state, AssetType = "Equipo", RecordStatus = "vigente" }, new InventoryCatalogEntity { Category = "Unit", Code = "UN", Name = "UN", IsActive = true });
+        await SeedLegacyAssetAsync(database.Context, "INV-FAE", "INV-FAM", "INV-ACT");
+        database.Context.InventoryCatalogs.Add(new InventoryCatalogEntity { Category = "Unit", Code = "UN", Name = "UN", IsActive = true });
         await database.Context.SaveChangesAsync();
         await database.Context.Database.MigrateAsync();
         Assert.Equal(1, await database.Context.Faenas.CountAsync(x => x.Code == "INV-FAE"));
@@ -335,15 +334,3 @@ public sealed class PostgreSqlMigrationTests
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

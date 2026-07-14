@@ -1,4 +1,4 @@
-﻿using MaintenanceCMMS.Application.Auditing;
+using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Domain.Common;
@@ -259,9 +259,11 @@ public sealed class DocumentServiceTests
     private static async Task SeedCatalogsAsync(CmmsDbContext dbContext)
     {
         var faena = new FaenaEntity { Code = "F001", Name = "Faena Norte", IsActive = true };
-        var family = new EquipmentFamilyEntity { Code = "CAMIONES", Name = "Camiones", IsActive = true };
+        var type = new AssetTypeEntity { Code = "CAMION", Name = "Cami�n", IsActive = true };
+        var family = new EquipmentFamilyEntity { Code = "CAMIONES", Name = "Camiones", AssetTypeId = type.Id, IsActive = true };
         var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo en Faena", IsActive = true };
         dbContext.Faenas.Add(faena);
+        dbContext.AssetTypes.Add(type);
         dbContext.EquipmentFamilies.Add(family);
         dbContext.AssetOperationalStates.Add(state);
         dbContext.Assets.AddRange(
@@ -271,9 +273,7 @@ public sealed class DocumentServiceTests
                 Name = "Camion tolva 1",
                 Faena = faena,
                 Family = family,
-                OperationalState = state,
-                AssetType = "Equipo",
-                RecordStatus = "vigente"
+                OperationalState = state, AssetTypeId = type.Id
             },
             new AssetEntity
             {
@@ -281,9 +281,7 @@ public sealed class DocumentServiceTests
                 Name = "Camion tolva 2",
                 Faena = faena,
                 Family = family,
-                OperationalState = state,
-                AssetType = "Equipo",
-                RecordStatus = "vigente"
+                OperationalState = state, AssetTypeId = type.Id
             });
 
         await dbContext.SaveChangesAsync();
@@ -306,5 +304,3 @@ public sealed class DocumentServiceTests
         }
     }
 }
-
-

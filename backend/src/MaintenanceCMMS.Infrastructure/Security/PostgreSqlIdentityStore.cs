@@ -105,56 +105,127 @@ public sealed class PostgreSqlIdentityStore : IIdentityStore
 
     public async Task UpsertRolesAsync(IReadOnlyCollection<RoleDefinition> roles, CancellationToken cancellationToken)
     {
-        foreach (var roleDefinition in roles)
-        {
-            var roleCode = Normalize(roleDefinition.Code);
-            var role = await _dbContext.Roles
-                .Include(item => item.Permissions)
-                .FirstOrDefaultAsync(item => item.Code == roleCode, cancellationToken);
+        var definitions = roles
+            .Select(definition => new SeedRoleDefinition(
+                Normalize(definition.Code),
+                definition.Name,
+                definition.Type,
+                RolePermissionCatalog.SeedPermissions(definition)
+                    .Select(Normalize)
+                    .Where(static permission => !string.IsNullOrWhiteSpace(permission))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase)))
+            .ToArray();
 
-            if (role is null)
+        var roleCodes = definitions.Select(definition => definition.Code).ToArray();
+        var permissionCodes = definitions.SelectMany(definition => definition.PermissionCodes).ToArray();
+
+        var existingRoles = await _dbContext.Roles
+            .Include(role => role.Permissions)
+                .ThenInclude(permission => permission.Permission)
+            .Where(role => roleCodes.Contains(role.Code))
+            .ToListAsync(cancellationToken);
+        var rolesByCode = existingRoles.ToDictionary(role => role.Code, StringComparer.OrdinalIgnoreCase);
+
+        var existingPermissions = await _dbContext.Permissions
+            .Where(permission => permissionCodes.Contains(permission.Code))
+            .ToListAsync(cancellationToken);
+        var permissionsByCode = existingPermissions.ToDictionary(permission => permission.Code, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var definition in definitions)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var isNewRole = !rolesByCode.TryGetValue(definition.Code, out var role);
+            if (isNewRole)
             {
-                role = new RoleEntity { Code = roleCode };
+                role = new RoleEntity
+                {
+                    Code = definition.Code,
+                    Name = definition.Name,
+                    Type = definition.Type,
+                    IsActive = true
+                };
                 _dbContext.Roles.Add(role);
+                rolesByCode.Add(role.Code, role);
             }
             else
             {
-                role.UpdatedAtUtc = DateTimeOffset.UtcNow;
+                var roleChanged = !string.Equals(role!.Name, definition.Name, StringComparison.Ordinal)
+                    || !string.Equals(role.Type, definition.Type, StringComparison.Ordinal)
+                    || !role.IsActive;
+
+                if (roleChanged)
+                {
+                    role.Name = definition.Name;
+                    role.Type = definition.Type;
+                    role.IsActive = true;
+                    role.UpdatedAtUtc = now;
+                }
             }
 
-            role.Name = roleDefinition.Name;
-            role.Type = roleDefinition.Type;
-            role.IsActive = true;
-
-            var permissions = string.Equals(roleCode, AuthRoles.Admin, StringComparison.OrdinalIgnoreCase)
-                ? roleDefinition.Permissions.Append(AuthPermissions.ManageEquipmentFamilies)
-                : roleDefinition.Permissions;
-
-            foreach (var permissionCode in permissions.Distinct(StringComparer.OrdinalIgnoreCase))
+            var permissionsChanged = false;
+            foreach (var permissionCode in definition.PermissionCodes)
             {
-                var normalizedPermission = Normalize(permissionCode);
-                var permission = _dbContext.Permissions.Local.FirstOrDefault(item => item.Code == normalizedPermission)
-                    ?? await _dbContext.Permissions.FirstOrDefaultAsync(item => item.Code == normalizedPermission, cancellationToken);
-                if (permission is null)
+                if (!permissionsByCode.TryGetValue(permissionCode, out var permission))
                 {
                     permission = new PermissionEntity
                     {
-                        Code = normalizedPermission,
-                        Name = normalizedPermission,
+                        Code = permissionCode,
+                        Name = permissionCode,
                         IsActive = true
                     };
                     _dbContext.Permissions.Add(permission);
+                    permissionsByCode.Add(permission.Code, permission);
+                }
+                else if (!permission.IsActive)
+                {
+                    permission.IsActive = true;
+                    permission.UpdatedAtUtc = now;
                 }
 
-                if (!role.Permissions.Any(item => item.PermissionId == permission.Id && item.IsActive))
+                var rolePermission = role!.Permissions.FirstOrDefault(item => item.PermissionId == permission.Id && item.IsActive);
+                if (rolePermission is null)
                 {
-                    role.Permissions.Add(new RolePermissionEntity { Role = role, Permission = permission, IsActive = true });
+                    rolePermission = role.Permissions.FirstOrDefault(item => item.PermissionId == permission.Id && !item.IsActive);
+                    if (rolePermission is null)
+                    {
+                        _dbContext.RolePermissions.Add(new RolePermissionEntity
+                        {
+                            Role = role,
+                            Permission = permission,
+                            IsActive = true
+                        });
+                    }
+                    else
+                    {
+                        rolePermission.IsActive = true;
+                        rolePermission.UpdatedAtUtc = now;
+                    }
+
+                    permissionsChanged = true;
                 }
+            }
+
+            foreach (var rolePermission in role!.Permissions.Where(item => item.IsActive && !definition.PermissionCodes.Contains(item.Permission.Code)).ToArray())
+            {
+                rolePermission.IsActive = false;
+                rolePermission.UpdatedAtUtc = now;
+                permissionsChanged = true;
+            }
+
+            if (!isNewRole && permissionsChanged)
+            {
+                role.UpdatedAtUtc = now;
             }
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
+
+    private sealed record SeedRoleDefinition(
+        string Code,
+        string Name,
+        string Type,
+        HashSet<string> PermissionCodes);
 
     private IQueryable<AppUserEntity> QueryUsers()
     {
