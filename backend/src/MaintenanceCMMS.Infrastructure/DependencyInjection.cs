@@ -88,37 +88,10 @@ public static class DependencyInjection
         {
             options.UseNpgsql(dataProviderSettings.PostgreSqlConnectionString);
         });
-        if (ResolveProviderType(dataProviderSettings.Provider) == DataProviderType.PostgreSql)
-        {
-            services.AddScoped<IPostgreSqlDevelopmentSeeder, PostgreSqlDevelopmentSeeder>();
-        }
-
-        services.AddScoped<ExcelDataProvider>();
-        services.AddScoped<SqlDataProvider>();
-        services.AddScoped<IDataProvider>(provider =>
-        {
-            var settings = provider.GetRequiredService<DataProviderSettings>();
-            return ResolveProviderType(settings.Provider) == DataProviderType.Excel
-                ? provider.GetRequiredService<ExcelDataProvider>()
-                : provider.GetRequiredService<SqlDataProvider>();
-        });
-
-        services.AddScoped(typeof(IExcelRepository<>), typeof(ExcelRepository<>));
-        services.AddScoped(typeof(ISqlRepository<>), typeof(SqlRepository<>));
-        services.AddScoped(typeof(IRepository<>), typeof(ExcelRepository<>));
-        services.AddScoped<IUnitOfWork, UnitOfWork>();
-        services.AddScoped<IImportService, ImportService>();
-        if (ResolveProviderType(dataProviderSettings.Provider) == DataProviderType.PostgreSql)
-        {
-            services.AddScoped<IIdentityStore, PostgreSqlIdentityStore>();
-            services.AddSingleton<IIdentitySeedTransaction, PostgreSqlIdentitySeedTransaction>();
-            services.AddScoped<IAuditService, PostgreSqlAuditService>();
-        }
-        else
-        {
-            services.AddScoped<IIdentityStore, ExcelIdentityStore>();
-            services.AddScoped<IAuditService, ExcelAuditService>();
-        }
+        services.AddScoped<IPostgreSqlDevelopmentSeeder, PostgreSqlDevelopmentSeeder>();
+        services.AddScoped<IIdentityStore, PostgreSqlIdentityStore>();
+        services.AddSingleton<IIdentitySeedTransaction, PostgreSqlIdentitySeedTransaction>();
+        services.AddScoped<IAuditService, PostgreSqlAuditService>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IJwtTokenService, JwtTokenService>();
         services.AddScoped<IAuthService, AuthService>();
@@ -126,6 +99,12 @@ public static class DependencyInjection
         services.AddScoped<IIdentitySeedService, IdentitySeedService>();
         services.AddSingleton<IAuditContextAccessor, AuditContextAccessor>();
         services.AddScoped<IDataGovernanceService, DataGovernanceService>();
+        services.AddScoped<IPostgreSqlImportHandler, FaenaPostgreSqlImportHandler>();
+        services.AddScoped<IPostgreSqlImportHandler, AssetPostgreSqlImportHandler>();
+        services.AddScoped<IPostgreSqlImportHandler, TechnicalLocationPostgreSqlImportHandler>();
+        services.AddScoped<IPostgreSqlImportHandler, SparePartPostgreSqlImportHandler>();
+        services.AddScoped<IPostgreSqlImportHandler, WarehousePostgreSqlImportHandler>();
+        services.AddScoped<PostgreSqlImportHandlerResolver>();
         services.AddScoped<IExcelImportWorkflowService, ExcelImportWorkflowService>();
         services.AddScoped<IFaenaService, FaenaService>();
         services.AddScoped<IAssetService, AssetService>();

@@ -51,24 +51,22 @@ public sealed class OperationalUnitServiceTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.GetAsync("CFA-2000", otherFaenaViewer, CancellationToken.None));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.CreateTypeAsync(new OperationalUnitTypeRequest("NO", "No autorizado"), viewer, CancellationToken.None));
     }
-    private sealed record Fixture(string DatabaseName, CmmsDbContext Db, IOperationalUnitService Service) : IAsyncDisposable
+    private sealed record Fixture(string DatabaseName, string AdminConnectionString, CmmsDbContext Db, IOperationalUnitService Service) : IAsyncDisposable
     {
         public static async Task<Fixture> CreateAsync()
         {
             var name = $"cmms_operational_unit_{Guid.NewGuid():N}";
-            await using (var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password"))
-            {
-                await connection.OpenAsync(); await using var command = connection.CreateCommand(); command.CommandText = $"CREATE DATABASE \"{name}\""; await command.ExecuteNonQueryAsync();
-            }
-            var db = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql($"Host=localhost;Port=5432;Database={name};Username=cmms_app;Password=cmms_app_password").Options);
+            var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
+            await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name, adminConnectionString);
+            var db = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, name)).Options);
             await db.Database.MigrateAsync();
             var faena = new FaenaEntity { Code = "F001", Name = "Faena", IsActive = true }; var type = new AssetTypeEntity { Code = "MONTABLE", Name = "Montable", IsMountable = true, IsActive = true }; var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
             db.AddRange(faena, type, state); db.Assets.AddRange(new AssetEntity { Code = "CHF-TWCK41", Name = "Chasis", AssetTypeId = type.Id, Faena = faena, OperationalState = state }, new AssetEntity { Code = "AUGER-1000", Name = "Auger", AssetTypeId = type.Id, Faena = faena, OperationalState = state }, new AssetEntity { Code = "QUADRA-1020", Name = "Quadra", AssetTypeId = type.Id, Faena = faena, OperationalState = state }); await db.SaveChangesAsync();
-            return new Fixture(name, db, new OperationalUnitService(db, new PostgreSqlAuditService(db, new AuditContextAccessor())));
+            return new Fixture(name, adminConnectionString, db, new OperationalUnitService(db, new PostgreSqlAuditService(db, new AuditContextAccessor())));
         }
         public async ValueTask DisposeAsync()
         {
-            await Db.DisposeAsync(); await using var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password"); await connection.OpenAsync(); await using var command = connection.CreateCommand(); command.CommandText = $"DROP DATABASE IF EXISTS \"{DatabaseName}\" WITH (FORCE)"; await command.ExecuteNonQueryAsync();
+            await Db.DisposeAsync(); await PostgreSqlWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
         }
     }
 }

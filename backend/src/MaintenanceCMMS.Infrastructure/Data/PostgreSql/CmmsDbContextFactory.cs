@@ -8,7 +8,7 @@ public sealed class CmmsDbContextFactory : IDesignTimeDbContextFactory<CmmsDbCon
     public CmmsDbContext CreateDbContext(string[] args)
     {
         var connectionString = Environment.GetEnvironmentVariable("CMMS_POSTGRES_CONNECTION")
-            ?? "Host=localhost;Port=5432;Database=cmms;Username=cmms_app;Password=cmms_app_password";
+            ?? throw new InvalidOperationException("Configure CMMS_POSTGRES_CONNECTION before running EF Core tools.");
         return new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(connectionString).Options);
     }
 }

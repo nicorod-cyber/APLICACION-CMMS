@@ -23,7 +23,7 @@ Jwt__ExpirationMinutes=60
 Auth__SeedAdmin__Username=admin
 Auth__SeedAdmin__Email=admin@example.local
 Auth__SeedAdmin__DisplayName=Administrador CMMS
-Auth__SeedAdmin__Password=ChangeMe.Admin123!
+Auth__SeedAdmin__Password=<set from a secret or environment variable>
 ```
 
 Si `usuarios.xlsx` no tiene usuarios, el backend crea un admin inicial con esos valores. En ambientes reales se debe cambiar la clave inicial antes de cargar datos productivos.

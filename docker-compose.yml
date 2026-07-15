@@ -9,16 +9,17 @@ services:
       ASPNETCORE_URLS: http://+:8080
       DataProvider__Provider: PostgreSql
       DataProvider__SqlServerConnectionString: ""
-      DataProvider__PostgreSqlConnectionString: Host=postgres;Port=5432;Database=${POSTGRES_DB:-cmms};Username=${POSTGRES_APP_USER:-cmms_app};Password=${POSTGRES_APP_PASSWORD:-cmms_app_password}
-      Database__SeedDevelopment: "true"
+      DataProvider__PostgreSqlConnectionString: Host=postgres;Port=5432;Database=${POSTGRES_DB:?POSTGRES_DB must be set};Username=${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set};Password=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set}
+      Database__SeedReferenceCatalogs: "true"
+      Database__SeedDemoData: "false"
       Jwt__Issuer: MaintenanceCMMS
       Jwt__Audience: MaintenanceCMMS.Clients
-      Jwt__Secret: dev-local-maintenance-cmms-jwt-secret-change-me-2026
+      Jwt__Secret: ${CMMS_JWT_SECRET:?CMMS_JWT_SECRET must be set}
       Jwt__ExpirationMinutes: 60
-      Auth__SeedAdmin__Username: admin
-      Auth__SeedAdmin__Email: admin@example.local
+      Auth__SeedAdmin__Username: ${CMMS_INITIAL_ADMIN_USERNAME:?CMMS_INITIAL_ADMIN_USERNAME must be set}
+      Auth__SeedAdmin__Email: ${CMMS_INITIAL_ADMIN_EMAIL:?CMMS_INITIAL_ADMIN_EMAIL must be set}
       Auth__SeedAdmin__DisplayName: Administrador CMMS
-      Auth__SeedAdmin__Password: ChangeMe.Admin123!
+      Auth__SeedAdmin__Password: ${CMMS_INITIAL_ADMIN_PASSWORD:?CMMS_INITIAL_ADMIN_PASSWORD must be set}
       SharePoint__Provider: LocalSimulation
       SharePoint__LocalPath: /app/data/sharepoint-simulated
       SharePoint__ManualRootUrl: ""
@@ -50,15 +51,15 @@ services:
     image: postgres:16-alpine
     container_name: maintenance-cmms-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-cmms}
-      POSTGRES_USER: ${POSTGRES_APP_USER:-cmms_app}
-      POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD:-cmms_app_password}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_USER: ${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_APP_USER:-cmms_app} -d ${POSTGRES_DB:-cmms}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set} -d ${POSTGRES_DB:?POSTGRES_DB must be set}"]
       interval: 5s
       timeout: 5s
       retries: 20

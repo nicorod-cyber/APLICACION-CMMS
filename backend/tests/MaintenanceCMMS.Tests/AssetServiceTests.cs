@@ -76,18 +76,13 @@ public sealed class AssetServiceTests
     private static async Task<AssetFixture> CreateFixtureAsync()
     {
         var databaseName = $"cmms_asset_tests_{Guid.NewGuid():N}";
-        await using (var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password"))
-        {
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = $"CREATE DATABASE \"{databaseName}\"";
-            await command.ExecuteNonQueryAsync();
-        }
-        var options = new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql($"Host=localhost;Port=5432;Database={databaseName};Username=cmms_app;Password=cmms_app_password").Options;
+        var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
+        await PostgreSqlWorkTestFixture.CreateDatabaseAsync(databaseName, adminConnectionString);
+        var options = new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, databaseName)).Options;
         var dbContext = new CmmsDbContext(options);
         await dbContext.Database.MigrateAsync();
         await SeedCatalogsAsync(dbContext);
-        return new AssetFixture(databaseName, dbContext, new AssetService(dbContext, new PostgreSqlAuditService(dbContext, new AuditContextAccessor()), new AuthorizationPolicyService()));
+        return new AssetFixture(databaseName, adminConnectionString, dbContext, new AssetService(dbContext, new PostgreSqlAuditService(dbContext, new AuditContextAccessor()), new AuthorizationPolicyService()));
     }
 
     private static async Task SeedCatalogsAsync(CmmsDbContext dbContext)
@@ -104,16 +99,12 @@ public sealed class AssetServiceTests
         await dbContext.SaveChangesAsync();
     }
 
-    private sealed record AssetFixture(string DatabaseName, CmmsDbContext DbContext, IAssetService Service) : IAsyncDisposable
+    private sealed record AssetFixture(string DatabaseName, string AdminConnectionString, CmmsDbContext DbContext, IAssetService Service) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
             await DbContext.DisposeAsync();
-            await using var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password");
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = $"DROP DATABASE IF EXISTS \"{DatabaseName}\" WITH (FORCE)";
-            await command.ExecuteNonQueryAsync();
+            await PostgreSqlWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
         }
     }
 }

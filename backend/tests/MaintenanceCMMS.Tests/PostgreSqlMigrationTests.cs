@@ -59,17 +59,17 @@ public sealed class PostgreSqlMigrationTests
             Assert.True(await database.ExistsAsync(sequence));
         }
 
-        database.Context.Faenas.Add(new FaenaEntity { Code = "MIG-FAE", Name = "Faena migración", IsActive = true });
+        database.Context.Faenas.Add(new FaenaEntity { Code = "MIG-FAE", Name = "Faena migraciÃƒÆ’Ã‚Â³n", IsActive = true });
         await database.Context.SaveChangesAsync();
 
         var service = new InventoryService(
             database.Context,
             new PostgreSqlAuditService(database.Context, new AuditContextAccessor()),
             new AuthorizationPolicyService());
-        await service.CreateWarehouseAsync(new CreateWarehouseRequest("MIG-BOD", "Bodega migración", "MIG-FAE", WarehouseType.Central), Admin, CancellationToken.None);
-        var part = await service.CreateSparePartAsync(new CreateSparePartRequest("Repuesto migración", "UN"), Admin, CancellationToken.None);
+        await service.CreateWarehouseAsync(new CreateWarehouseRequest("MIG-BOD", "Bodega migraciÃƒÆ’Ã‚Â³n", "MIG-FAE", WarehouseType.Central), Admin, CancellationToken.None);
+        var part = await service.CreateSparePartAsync(new CreateSparePartRequest("Repuesto migraciÃƒÆ’Ã‚Â³n", "UN"), Admin, CancellationToken.None);
         var movement = await service.RegisterMovementAsync(
-            new StockMovementRequest(StockMovementType.Reception, part.Summary.Codigo, 2, "Recepción migración", BodegaCodigo: "MIG-BOD"),
+            new StockMovementRequest(StockMovementType.Reception, part.Summary.Codigo, 2, "RecepciÃƒÆ’Ã‚Â³n migraciÃƒÆ’Ã‚Â³n", BodegaCodigo: "MIG-BOD"),
             Admin,
             CancellationToken.None);
 
@@ -249,43 +249,69 @@ public sealed class PostgreSqlMigrationTests
         Assert.True(await database.ExistsAsync("archivos"));
         Assert.True(await database.ExistsAsync("nodos_tecnicos"));
     }
+    [Fact]
+    public async Task MigrateFromEmptyOperationalDataSet_RemovesLegacyTableAndRecordsRelationalMigration()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        var migrator = database.Context.Database.GetService<IMigrator>();
+        await migrator.MigrateAsync(database.OperationalUnitAllowedComponentsMigrationId);
+
+        Assert.True(await database.ExistsAsync("conjuntos_datos_operacionales"));
+
+        await database.Context.Database.MigrateAsync();
+
+        Assert.False(await database.ExistsAsync("conjuntos_datos_operacionales"));
+        Assert.Contains(
+            database.RelationalOperationalModulesMigrationId,
+            await database.Context.Database.GetAppliedMigrationsAsync());
+    }
+
+    [Fact]
+    public async Task MigrateFromPopulatedOperationalDataSet_RefusesMigrationAndPreservesLegacyTableAndHistory()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        var migrator = database.Context.Database.GetService<IMigrator>();
+        await migrator.MigrateAsync(database.OperationalUnitAllowedComponentsMigrationId);
+        await database.Context.Database.ExecuteSqlRawAsync("""
+            INSERT INTO conjuntos_datos_operacionales (id, codigo, contenido, created_at_utc)
+            VALUES (gen_random_uuid(), 'LEGACY-JSON', '{{"source":"legacy"}}'::jsonb, NOW());
+            """);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => database.Context.Database.MigrateAsync());
+
+        Assert.Equal("P0001", exception.SqlState);
+        Assert.True(await database.ExistsAsync("conjuntos_datos_operacionales"));
+        var appliedMigrations = await database.Context.Database.GetAppliedMigrationsAsync();
+        Assert.Contains(database.OperationalUnitAllowedComponentsMigrationId, appliedMigrations);
+        Assert.DoesNotContain(database.RelationalOperationalModulesMigrationId, appliedMigrations);
+    }
     private sealed class MigrationDatabase : IAsyncDisposable
     {
-        private MigrationDatabase(string name, CmmsDbContext context)
+        private MigrationDatabase(string name, string adminConnectionString, CmmsDbContext context)
         {
             Name = name;
+            AdminConnectionString = adminConnectionString;
             Context = context;
         }
 
         public string Name { get; }
+        public string AdminConnectionString { get; }
         public CmmsDbContext Context { get; }
         public string WorkMigrationId => "202607090003_WorkNotificationsAndOrdersPostgreSql";
         public string InventoryMigrationId => "20260710134248_InventoryDomainPostgreSql";
         public string TechnicalHierarchyMigrationId => "20260710164638_TechnicalHierarchyDomainPostgreSql";
+        public string OperationalUnitAllowedComponentsMigrationId => "20260714170216_OperationalUnitAllowedComponents";
+        public string RelationalOperationalModulesMigrationId => "20260715123551_RelationalOperationalModules";
         public static async Task<MigrationDatabase> CreateAsync()
         {
             var name = $"cmms_migration_tests_{Guid.NewGuid():N}";
-            await using (var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password"))
-            {
-                await connection.OpenAsync();
-                await using var command = connection.CreateCommand();
-                command.CommandText = $"CREATE DATABASE \"{name}\"";
-                await command.ExecuteNonQueryAsync();
-            }
-
-            var options = new DbContextOptionsBuilder<CmmsDbContext>()
-                .UseNpgsql($"Host=localhost;Port=5432;Database={name};Username=cmms_app;Password=cmms_app_password")
-                .Options;
-            return new MigrationDatabase(name, new CmmsDbContext(options));
+            var admin = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
+            await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name, admin);
+            var options = new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(admin, name)).Options;
+            return new MigrationDatabase(name, admin, new CmmsDbContext(options));
         }
 
-        public CmmsDbContext NewContext()
-        {
-            var options = new DbContextOptionsBuilder<CmmsDbContext>()
-                .UseNpgsql($"Host=localhost;Port=5432;Database={Name};Username=cmms_app;Password=cmms_app_password")
-                .Options;
-            return new CmmsDbContext(options);
-        }
+        public CmmsDbContext NewContext() => new(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(AdminConnectionString, Name)).Options);
 
         public async Task<bool> ExistsAsync(string relation)
         {
@@ -326,11 +352,7 @@ public sealed class PostgreSqlMigrationTests
         public async ValueTask DisposeAsync()
         {
             await Context.DisposeAsync();
-            await using var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password");
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = $"DROP DATABASE IF EXISTS \"{Name}\" WITH (FORCE)";
-            await command.ExecuteNonQueryAsync();
+            await PostgreSqlWorkTestFixture.DropDatabaseAsync(Name, AdminConnectionString);
         }
     }
 }

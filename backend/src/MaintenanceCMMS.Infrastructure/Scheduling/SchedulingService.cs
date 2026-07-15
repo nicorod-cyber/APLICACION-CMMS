@@ -1,668 +1,85 @@
-using System.Globalization;
-using System.Text.Json;
-using MaintenanceCMMS.Application.Abstractions.Data;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Scheduling;
-using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Scheduling;
 
+/// <summary>Relational scheduling service. Dependencies are foreign-key links, never embedded JSON.</summary>
 public sealed class SchedulingService : ISchedulingService
 {
-    private const string WorkshopsSchema = "programacion_talleres";
-    private const string ScheduleSchema = "programacion_ot";
-    private const string DependenciesSchema = "programacion_dependencias";
-    private const string AlertsSchema = "programacion_alertas";
-    private const string WorkOrdersSchema = "ordenes_trabajo";
-    private const string AssetsSchema = "activos";
+    private readonly CmmsDbContext _db;
+    public SchedulingService(CmmsDbContext dbContext) => _db = dbContext;
 
-    private readonly CmmsDbContext _dbContext;
-    private readonly IWorkOrderService _workOrderService;
-    private readonly IAuditService _auditService;
-
-    public SchedulingService(
-        CmmsDbContext dbContext,
-        IWorkOrderService workOrderService,
-        IAuditService auditService)
+    public async Task<IReadOnlyCollection<WorkshopResponse>> ListWorkshopsAsync(UserAccessContext user, CancellationToken ct)
     {
-        _dbContext = dbContext;
-        _workOrderService = workOrderService;
-        _auditService = auditService;
+        EnsureView(user);
+        return (await _db.Workshops.AsNoTracking().Include(x => x.Faena).Where(x => x.IsActive).OrderBy(x => x.Code).ToListAsync(ct)).Where(x => CanAccess(user, x.Faena.Code)).Select(ToWorkshop).ToArray();
     }
 
-    public async Task<ScheduleBoardResponse> GetBoardAsync(
-        ScheduleBoardQuery query,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<WorkshopResponse> UpsertWorkshopAsync(UpsertWorkshopRequest request, UserAccessContext user, CancellationToken ct)
     {
-        var range = ResolveRange(query);
-        var data = await ReadDataAsync(cancellationToken);
-        var workshops = data.Workshops.Select(ToWorkshop).Where(item => CanViewFaena(user, item.FaenaCodigo)).ToArray();
-        var items = BuildItems(data, workshops)
-            .Where(item => item.FechaInicio <= range.To && item.FechaFin >= range.From)
-            .Where(item => string.IsNullOrWhiteSpace(query.FaenaCodigo) || Same(item.FaenaCodigo, query.FaenaCodigo))
-            .Where(item => string.IsNullOrWhiteSpace(query.TallerCodigo) || Same(item.TallerCodigo, query.TallerCodigo))
-            .Where(item => CanViewFaena(user, item.FaenaCodigo))
-            .Where(item => query.IncludeClosed || item.Estado != ScheduleItemStatus.Completado)
-            .OrderBy(item => item.FechaInicio)
-            .ToArray();
-
-        var loads = BuildLoads(items, workshops, range.From, range.To);
-        var alerts = BuildAlerts(data.Alerts, items, loads, user, persistGenerated: false);
-        var dependencies = data.Dependencies.Select(ToDependency).ToArray();
-        var kanban = Enum.GetValues<ScheduleItemStatus>()
-            .Select(status => new KanbanColumnResponse(status, items.Where(item => item.Estado == status).ToArray()))
-            .ToArray();
-
-        return new ScheduleBoardResponse(workshops, items, loads, kanban, dependencies, alerts);
+        EnsureManage(user); Required(request.TallerCodigo, nameof(request.TallerCodigo)); Required(request.Nombre, nameof(request.Nombre)); Required(request.FaenaCodigo, nameof(request.FaenaCodigo)); Required(request.Horario, nameof(request.Horario)); Required(request.Especialidad, nameof(request.Especialidad));
+        if (request.CapacidadDiariaHH < 0 || request.CapacidadEquipos < 0) throw new DomainException("Las capacidades del taller no pueden ser negativas.");
+        var faena = await _db.Faenas.SingleOrDefaultAsync(x => x.Code == Code(request.FaenaCodigo), ct) ?? throw new DomainException($"La faena '{request.FaenaCodigo}' no existe."); EnsureAccess(user, faena.Code);
+        var workshop = await _db.Workshops.Include(x => x.Faena).SingleOrDefaultAsync(x => x.Code == Code(request.TallerCodigo), ct);
+        if (workshop is null) { workshop = new WorkshopEntity { Code = Code(request.TallerCodigo)!, FaenaId = faena.Id, CreatedByUserId = user.UserId }; _db.Workshops.Add(workshop); }
+        workshop.Name = request.Nombre.Trim(); workshop.FaenaId = faena.Id; workshop.Faena = faena; workshop.DailyLaborCapacity = request.CapacidadDiariaHH; workshop.EquipmentCapacity = request.CapacidadEquipos; workshop.Schedule = request.Horario.Trim(); workshop.Specialty = request.Especialidad.Trim(); workshop.IsActive = request.Activo; workshop.UpdatedByUserId = user.UserId; workshop.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync(ct); return ToWorkshop(workshop);
     }
 
-    public async Task<IReadOnlyCollection<WorkshopResponse>> ListWorkshopsAsync(
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<ScheduleWorkOrderResponse> ScheduleWorkOrderAsync(string numeroOt, ScheduleWorkOrderPlanningRequest request, UserAccessContext user, CancellationToken ct)
     {
-        var rows = await _dbContext.ReadOperationalRowsAsync(WorkshopsSchema, cancellationToken);
-        return rows
-            .Select(ToWorkshop)
-            .Where(item => item.Activo)
-            .Where(item => CanViewFaena(user, item.FaenaCodigo))
-            .OrderBy(item => item.Nombre, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    public async Task<WorkshopResponse> UpsertWorkshopAsync(
-        UpsertWorkshopRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(request.TallerCodigo, nameof(request.TallerCodigo));
-        ValidateRequired(request.Nombre, nameof(request.Nombre));
-        ValidateRequired(request.FaenaCodigo, nameof(request.FaenaCodigo));
-        ValidateRequired(request.Horario, nameof(request.Horario));
-        ValidateRequired(request.Especialidad, nameof(request.Especialidad));
-        if (request.CapacidadDiariaHH < 0 || request.CapacidadEquipos < 0)
-        {
-            throw new DomainException("La capacidad del taller no puede ser negativa.");
-        }
-
-        EnsureFaenaAccess(user, request.FaenaCodigo);
-        var rows = (await _dbContext.ReadOperationalRowsAsync(WorkshopsSchema, cancellationToken)).ToList();
-        var index = rows.FindIndex(row => Same(row.GetValue("TallerCodigo"), request.TallerCodigo));
-        var previous = index >= 0 ? rows[index] : null;
-        var updated = WorkshopRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["TallerCodigo"] = NormalizeCode(request.TallerCodigo),
-            ["Nombre"] = NormalizeText(request.Nombre),
-            ["FaenaCodigo"] = NormalizeCode(request.FaenaCodigo),
-            ["CapacidadDiariaHH"] = FormatNumber(request.CapacidadDiariaHH),
-            ["CapacidadEquipos"] = request.CapacidadEquipos.ToString(CultureInfo.InvariantCulture),
-            ["Horario"] = NormalizeText(request.Horario),
-            ["Especialidad"] = NormalizeText(request.Especialidad),
-            ["Activo"] = request.Activo.ToString(CultureInfo.InvariantCulture)
-        });
-
-        if (index >= 0)
-        {
-            rows[index] = updated;
-        }
-        else
-        {
-            rows.Add(updated);
-        }
-
-        await _dbContext.SaveOperationalRowsAsync(WorkshopsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, previous is null ? "scheduling.workshop_created" : "scheduling.workshop_updated", request.TallerCodigo, previous, updated, request.FaenaCodigo, request.Reason, cancellationToken);
-        return ToWorkshop(updated);
-    }
-
-    public async Task<ScheduleWorkOrderResponse> ScheduleWorkOrderAsync(
-        string numeroOt,
-        ScheduleWorkOrderPlanningRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(numeroOt, nameof(numeroOt));
-        ValidateRequired(request.TallerCodigo, nameof(request.TallerCodigo));
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        if (request.FechaFin <= request.FechaInicio)
-        {
-            throw new DomainException("La fecha fin debe ser posterior a la fecha inicio.");
-        }
-
-        var data = await ReadDataAsync(cancellationToken);
-        var workshop = data.Workshops.Select(ToWorkshop).FirstOrDefault(item => Same(item.TallerCodigo, request.TallerCodigo) && item.Activo)
-            ?? throw new DomainException("El taller no existe o esta inactivo.");
-        EnsureFaenaAccess(user, workshop.FaenaCodigo);
-
-        var workOrder = data.WorkOrders.FirstOrDefault(row => Same(row.GetValue("NumeroOT"), numeroOt))
-            ?? throw new DomainException("La OT no existe.");
-        var faenaCodigo = FirstNonEmpty(workOrder.GetValue("FaenaCodigo"), workshop.FaenaCodigo) ?? workshop.FaenaCodigo;
-        EnsureFaenaAccess(user, faenaCodigo);
-
-        var scheduleRows = data.ScheduleItems.ToList();
-        var existingIndex = scheduleRows.FindIndex(row => Same(row.GetValue("NumeroOT"), numeroOt));
-        var previous = existingIndex >= 0 ? scheduleRows[existingIndex] : null;
-        var row = ScheduleRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["ProgramacionId"] = previous?.GetValue("ProgramacionId") ?? NewId("PROG"),
-            ["NumeroOT"] = NormalizeCode(numeroOt),
-            ["TallerCodigo"] = NormalizeCode(request.TallerCodigo),
-            ["FaenaCodigo"] = NormalizeCode(faenaCodigo),
-            ["ActivoCodigo"] = NormalizeCode(workOrder.GetValue("ActivoCodigo")),
-            ["TecnicoUserId"] = NormalizeText(request.TecnicoUserId),
-            ["FechaInicio"] = FormatDate(request.FechaInicio),
-            ["FechaFin"] = FormatDate(request.FechaFin),
-            ["HHEstimadas"] = FormatNumber(request.HHEstimadas),
-            ["Estado"] = ScheduleItemStatus.Programado.ToString(),
-            ["Prioridad"] = NormalizeText(workOrder.GetValue("Prioridad")) ?? "Media",
-            ["Criticidad"] = NormalizeText(workOrder.GetValue("Criticidad")) ?? "Media",
-            ["Motivo"] = NormalizeText(request.Reason),
-            ["ActualizadoPor"] = user.UserId,
-            ["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow)
-        });
-
-        if (existingIndex >= 0)
-        {
-            scheduleRows[existingIndex] = row;
-        }
-        else
-        {
-            scheduleRows.Add(row);
-        }
-
-        var candidateData = data with { ScheduleItems = scheduleRows };
-        var workshops = candidateData.Workshops.Select(ToWorkshop).ToArray();
-        var candidateItems = BuildItems(candidateData, workshops);
-        var range = new DateRange(request.FechaInicio.Date, request.FechaFin.Date);
-        var loads = BuildLoads(candidateItems, workshops, range.From, range.To);
-        var warnings = loads
-            .Where(load => Same(load.TallerCodigo, request.TallerCodigo) && load.Sobrecargado)
-            .Select(load => $"Taller {load.TallerNombre} sobrecargado el {load.Fecha:yyyy-MM-dd}: {load.HHProgramadas}/{load.CapacidadHH} HH.")
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        await _workOrderService.ScheduleAsync(numeroOt, new ScheduleWorkOrderRequest(request.FechaInicio, request.Reason, request.FechaFin), user, cancellationToken);
-        await _dbContext.SaveOperationalRowsAsync(ScheduleSchema, scheduleRows, cancellationToken);
-
-        var alerts = warnings.Length > 0
-            ? await SaveGeneratedAlertsAsync(candidateData, candidateItems, loads, user, cancellationToken)
-            : [];
-
-        await RecordAuditAsync(user, previous is null ? "scheduling.work_order_scheduled" : "scheduling.work_order_rescheduled", numeroOt, previous, row, faenaCodigo, request.Reason, cancellationToken);
-        var item = BuildItems(candidateData, workshops).First(item => Same(item.NumeroOT, numeroOt));
-        return new ScheduleWorkOrderResponse(item, warnings, alerts);
-    }
-
-    public async Task<ScheduleDependencyResponse> AddDependencyAsync(
-        AddScheduleDependencyRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        EnsureCanPlan(user);
-        ValidateRequired(request.PredecessorNumeroOT, nameof(request.PredecessorNumeroOT));
-        ValidateRequired(request.SuccessorNumeroOT, nameof(request.SuccessorNumeroOT));
-        if (Same(request.PredecessorNumeroOT, request.SuccessorNumeroOT))
-        {
-            throw new DomainException("Una OT no puede depender de si misma.");
-        }
-
-        var rows = (await _dbContext.ReadOperationalRowsAsync(DependenciesSchema, cancellationToken)).ToList();
-        if (rows.Any(row => Same(row.GetValue("PredecessorNumeroOT"), request.PredecessorNumeroOT) && Same(row.GetValue("SuccessorNumeroOT"), request.SuccessorNumeroOT)))
-        {
-            throw new DomainException("La dependencia ya existe.");
-        }
-
-        var rowToCreate = DependencyRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["DependenciaId"] = NewId("DEP"),
-            ["PredecessorNumeroOT"] = NormalizeCode(request.PredecessorNumeroOT),
-            ["SuccessorNumeroOT"] = NormalizeCode(request.SuccessorNumeroOT),
-            ["Tipo"] = NormalizeText(request.Tipo) ?? "FinishToStart",
-            ["Motivo"] = NormalizeText(request.Motivo)
-        });
-
-        rows.Add(rowToCreate);
-        await _dbContext.SaveOperationalRowsAsync(DependenciesSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "scheduling.dependency_added", rowToCreate.GetValue("DependenciaId") ?? string.Empty, null, rowToCreate, null, request.Motivo, cancellationToken);
-        return new ScheduleDependencyResponse(
-            rowToCreate.GetValue("DependenciaId") ?? string.Empty,
-            rowToCreate.GetValue("PredecessorNumeroOT") ?? string.Empty,
-            rowToCreate.GetValue("SuccessorNumeroOT") ?? string.Empty,
-            rowToCreate.GetValue("Tipo") ?? "FinishToStart",
-            EmptyToNull(rowToCreate.GetValue("Motivo")));
-    }
-
-    public async Task<IReadOnlyCollection<ScheduleAlertResponse>> ListAlertsAsync(
-        ScheduleBoardQuery query,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        var board = await GetBoardAsync(query, user, cancellationToken);
-        return board.Alerts;
-    }
-
-    private async Task<IReadOnlyCollection<ScheduleAlertResponse>> SaveGeneratedAlertsAsync(
-        SchedulingData data,
-        IReadOnlyCollection<ScheduleItemResponse> items,
-        IReadOnlyCollection<WorkshopLoadResponse> loads,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
-    {
-        var alerts = BuildAlerts(data.Alerts, items, loads, user, persistGenerated: true);
-        if (alerts.Count == 0)
-        {
-            return [];
-        }
-
-        var rows = data.Alerts.ToList();
-        foreach (var alert in alerts)
-        {
-            var causeKey = AlertCauseKey(alert);
-            var index = rows.FindIndex(row => Same(row.GetValue("CauseKey"), causeKey) && !ParseBool(row.GetValue("Resolved")));
-            var row = AlertRow(alert, causeKey);
-            if (index >= 0)
-            {
-                rows[index] = row;
-            }
-            else
-            {
-                rows.Add(row);
-            }
-        }
-
-        await _dbContext.SaveOperationalRowsAsync(AlertsSchema, rows, cancellationToken);
-        return alerts;
-    }
-
-    private async Task<SchedulingData> ReadDataAsync(CancellationToken cancellationToken)
-    {
-        return new SchedulingData(
-            await _dbContext.ReadOperationalRowsAsync(WorkshopsSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(ScheduleSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(DependenciesSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(AlertsSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(WorkOrdersSchema, cancellationToken),
-            await _dbContext.ReadOperationalRowsAsync(AssetsSchema, cancellationToken));
-    }
-
-    private static IReadOnlyCollection<ScheduleItemResponse> BuildItems(SchedulingData data, IReadOnlyCollection<WorkshopResponse> workshops)
-    {
-        return data.ScheduleItems
-            .Select(row =>
-            {
-                var numeroOt = row.GetValue("NumeroOT") ?? string.Empty;
-                var order = data.WorkOrders.FirstOrDefault(item => Same(item.GetValue("NumeroOT"), numeroOt));
-                var assetCode = FirstNonEmpty(row.GetValue("ActivoCodigo"), order?.GetValue("ActivoCodigo")) ?? string.Empty;
-                var asset = data.Assets.FirstOrDefault(item => Same(item.GetValue("Codigo"), assetCode));
-                var workshop = workshops.FirstOrDefault(item => Same(item.TallerCodigo, row.GetValue("TallerCodigo")));
-                var start = ParseDate(row.GetValue("FechaInicio")) ?? ParseDate(order?.GetValue("FechaInicioProgramada")) ?? DateTimeOffset.UtcNow;
-                var end = ParseDate(row.GetValue("FechaFin")) ?? ParseDate(order?.GetValue("FechaFinProgramada")) ?? start.AddHours(2);
-                var status = DeriveStatus(row, order, end);
-                return new ScheduleItemResponse(
-                    row.GetValue("ProgramacionId") ?? string.Empty,
-                    numeroOt,
-                    row.GetValue("TallerCodigo") ?? string.Empty,
-                    workshop?.Nombre ?? row.GetValue("TallerCodigo") ?? string.Empty,
-                    FirstNonEmpty(row.GetValue("FaenaCodigo"), order?.GetValue("FaenaCodigo"), asset?.GetValue("FaenaCodigo")) ?? string.Empty,
-                    assetCode,
-                    EmptyToNull(asset?.GetValue("Nombre")),
-                    EmptyToNull(row.GetValue("TecnicoUserId")),
-                    start,
-                    end,
-                    ParseDecimal(row.GetValue("HHEstimadas")),
-                    status,
-                    FirstNonEmpty(row.GetValue("Prioridad"), order?.GetValue("Prioridad")) ?? "Media",
-                    FirstNonEmpty(row.GetValue("Criticidad"), order?.GetValue("Criticidad")) ?? "Media",
-                    FirstNonEmpty(order?.GetValue("Descripcion"), row.GetValue("Motivo")) ?? string.Empty);
-            })
-            .ToArray();
-    }
-
-    private static IReadOnlyCollection<WorkshopLoadResponse> BuildLoads(
-        IReadOnlyCollection<ScheduleItemResponse> items,
-        IReadOnlyCollection<WorkshopResponse> workshops,
-        DateTimeOffset from,
-        DateTimeOffset to)
-    {
-        var loads = new List<WorkshopLoadResponse>();
-        var fromDate = DateOnly.FromDateTime(from.Date);
-        var toDate = DateOnly.FromDateTime(to.Date);
-        foreach (var workshop in workshops)
-        {
-            for (var date = fromDate; date <= toDate; date = date.AddDays(1))
-            {
-                var dayItems = items.Where(item => Same(item.TallerCodigo, workshop.TallerCodigo) && IntersectsDate(item, date)).ToArray();
-                var hh = dayItems.Sum(item => SpreadHoursOnDate(item, date));
-                var equipos = dayItems.Select(item => item.ActivoCodigo).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-                loads.Add(new WorkshopLoadResponse(
-                    workshop.TallerCodigo,
-                    workshop.Nombre,
-                    date,
-                    workshop.CapacidadDiariaHH,
-                    Math.Round(hh, 2),
-                    workshop.CapacidadEquipos,
-                    equipos,
-                    hh > workshop.CapacidadDiariaHH || equipos > workshop.CapacidadEquipos));
-            }
-        }
-
-        return loads;
-    }
-
-    private IReadOnlyCollection<ScheduleAlertResponse> BuildAlerts(
-        IReadOnlyCollection<DataRow> persistedAlerts,
-        IReadOnlyCollection<ScheduleItemResponse> items,
-        IReadOnlyCollection<WorkshopLoadResponse> loads,
-        UserAccessContext user,
-        bool persistGenerated)
-    {
+        EnsureManage(user); Required(numeroOt, nameof(numeroOt)); Required(request.TallerCodigo, nameof(request.TallerCodigo)); Required(request.Reason, nameof(request.Reason)); if (request.FechaFin <= request.FechaInicio) throw new DomainException("La fecha de termino debe ser posterior al inicio."); if (request.HHEstimadas <= 0) throw new DomainException("Las HH estimadas deben ser positivas.");
+        var order = await _db.WorkOrders.Include(x => x.Asset).Include(x => x.OperationalUnit).Include(x => x.Faena).Include(x => x.Priority).Include(x => x.Criticality).SingleOrDefaultAsync(x => x.WorkOrderNumber == Code(numeroOt), ct) ?? throw new DomainException($"La OT '{numeroOt}' no existe."); EnsureAccess(user, order.Faena.Code);
+        var workshop = await _db.Workshops.Include(x => x.Faena).SingleOrDefaultAsync(x => x.Code == Code(request.TallerCodigo) && x.IsActive, ct) ?? throw new DomainException($"El taller '{request.TallerCodigo}' no existe o esta inactivo."); if (workshop.FaenaId != order.FaenaId) throw new DomainException("La OT y el taller deben pertenecer a la misma faena.");
+        var schedule = await _db.WorkOrderSchedules.Include(x => x.Workshop).SingleOrDefaultAsync(x => x.WorkOrderId == order.Id, ct);
+        var warnings = new List<string>();
+        var load = await DailyLoadAsync(workshop, request.FechaInicio.Date, ct);
+        if (!request.OverrideCapacity && (load.Hours + request.HHEstimadas > workshop.DailyLaborCapacity || load.Count + 1 > workshop.EquipmentCapacity)) throw new DomainException("La programacion excede la capacidad del taller. Use OverrideCapacity con autorizacion explicita.");
+        if (request.OverrideCapacity && (load.Hours + request.HHEstimadas > workshop.DailyLaborCapacity || load.Count + 1 > workshop.EquipmentCapacity)) warnings.Add("La programacion excede la capacidad del taller.");
+        if (schedule is null) { schedule = new WorkOrderScheduleEntity { WorkOrderId = order.Id, WorkshopId = workshop.Id, CreatedByUserId = user.UserId }; _db.WorkOrderSchedules.Add(schedule); }
+        schedule.Workshop = workshop; schedule.StartsAtUtc = request.FechaInicio; schedule.EndsAtUtc = request.FechaFin; schedule.EstimatedLaborHours = request.HHEstimadas; schedule.TechnicianUserId = Text(request.TecnicoUserId); schedule.Status = (int)ScheduleItemStatus.Programado; schedule.UpdatedAtUtc = DateTimeOffset.UtcNow; schedule.UpdatedByUserId = user.UserId;
         var alerts = new List<ScheduleAlertResponse>();
-        alerts.AddRange(persistedAlerts.Select(ToAlert).Where(alert => !alert.Resolved && CanViewFaena(user, alert.FaenaCodigo)));
-
-        foreach (var load in loads.Where(item => item.Sobrecargado))
-        {
-            alerts.Add(new ScheduleAlertResponse(
-                NewId("PAL"),
-                load.HHProgramadas > load.CapacidadHH ? ScheduleAlertType.TallerSobrecargado : ScheduleAlertType.ProgramacionExcedeCapacidad,
-                "Warning",
-                $"Taller {load.TallerNombre} excede capacidad el {load.Fecha:yyyy-MM-dd}: {load.HHProgramadas}/{load.CapacidadHH} HH, {load.EquiposProgramados}/{load.CapacidadEquipos} equipos.",
-                load.TallerCodigo,
-                null,
-                null,
-                DateTimeOffset.UtcNow,
-                false));
-        }
-
-        foreach (var item in items.Where(item => item.Estado == ScheduleItemStatus.Atrasado))
-        {
-            alerts.Add(new ScheduleAlertResponse(
-                NewId("PAL"),
-                item.Criticidad.Equals("Critica", StringComparison.OrdinalIgnoreCase) ? ScheduleAlertType.TrabajoCriticoAtrasado : ScheduleAlertType.OTVencida,
-                item.Criticidad.Equals("Critica", StringComparison.OrdinalIgnoreCase) ? "Critical" : "Warning",
-                $"OT {item.NumeroOT} atrasada desde {item.FechaFin:yyyy-MM-dd}.",
-                item.TallerCodigo,
-                item.NumeroOT,
-                item.FaenaCodigo,
-                DateTimeOffset.UtcNow,
-                false));
-        }
-
-        return persistGenerated ? alerts.Where(alert => alert.TallerCodigo is not null || alert.NumeroOT is not null).ToArray() : alerts.DistinctBy(AlertCauseKey).ToArray();
+        if (warnings.Count > 0) { var alert = new ScheduleAlertEntity { Type = (int)ScheduleAlertType.ProgramacionExcedeCapacidad, Severity = "High", Message = warnings[0], WorkshopId = workshop.Id, WorkOrderId = order.Id, FaenaId = order.FaenaId, RaisedAtUtc = DateTimeOffset.UtcNow }; _db.ScheduleAlerts.Add(alert); alerts.Add(ToAlert(alert, workshop, order)); }
+        await _db.SaveChangesAsync(ct); return new(ToItem(schedule, order, workshop), warnings, alerts);
     }
 
-    private static WorkshopResponse ToWorkshop(DataRow row)
+    public async Task<ScheduleDependencyResponse> AddDependencyAsync(AddScheduleDependencyRequest request, UserAccessContext user, CancellationToken ct)
     {
-        return new WorkshopResponse(
-            row.GetValue("TallerCodigo") ?? string.Empty,
-            row.GetValue("Nombre") ?? string.Empty,
-            row.GetValue("FaenaCodigo") ?? string.Empty,
-            ParseDecimal(row.GetValue("CapacidadDiariaHH")),
-            ParseInt(row.GetValue("CapacidadEquipos")),
-            row.GetValue("Horario") ?? string.Empty,
-            row.GetValue("Especialidad") ?? string.Empty,
-            ParseBool(row.GetValue("Activo"), true));
+        EnsureManage(user); Required(request.PredecessorNumeroOT, nameof(request.PredecessorNumeroOT)); Required(request.SuccessorNumeroOT, nameof(request.SuccessorNumeroOT)); if (Code(request.PredecessorNumeroOT) == Code(request.SuccessorNumeroOT)) throw new DomainException("Una OT no puede depender de si misma.");
+        var schedules = await _db.WorkOrderSchedules.Include(x => x.WorkOrder).Include(x => x.Workshop).ThenInclude(x => x.Faena).Where(x => x.WorkOrder.WorkOrderNumber == Code(request.PredecessorNumeroOT) || x.WorkOrder.WorkOrderNumber == Code(request.SuccessorNumeroOT)).ToListAsync(ct);
+        var predecessor = schedules.SingleOrDefault(x => x.WorkOrder.WorkOrderNumber == Code(request.PredecessorNumeroOT)) ?? throw new DomainException("La OT predecesora no esta programada."); var successor = schedules.SingleOrDefault(x => x.WorkOrder.WorkOrderNumber == Code(request.SuccessorNumeroOT)) ?? throw new DomainException("La OT sucesora no esta programada."); EnsureAccess(user, predecessor.Workshop.Faena.Code); EnsureAccess(user, successor.Workshop.Faena.Code);
+        if (await HasPathAsync(successor.Id, predecessor.Id, ct)) throw new DomainException("La dependencia generaria un ciclo.");
+        if (await _db.ScheduleDependencies.AnyAsync(x => x.PredecessorScheduleId == predecessor.Id && x.SuccessorScheduleId == successor.Id, ct)) throw new DomainException("La dependencia ya existe.");
+        var entity = new ScheduleDependencyEntity { PredecessorScheduleId = predecessor.Id, SuccessorScheduleId = successor.Id, Type = Text(request.Tipo) ?? "FinishToStart", Reason = Text(request.Motivo), CreatedByUserId = user.UserId }; _db.ScheduleDependencies.Add(entity); await _db.SaveChangesAsync(ct); return new(entity.Id.ToString("N"), predecessor.WorkOrder.WorkOrderNumber, successor.WorkOrder.WorkOrderNumber, entity.Type, entity.Reason);
     }
 
-    private static GanttDependencyResponse ToDependency(DataRow row)
+    public async Task<ScheduleBoardResponse> GetBoardAsync(ScheduleBoardQuery query, UserAccessContext user, CancellationToken ct)
     {
-        return new GanttDependencyResponse(
-            row.GetValue("DependenciaId") ?? string.Empty,
-            row.GetValue("PredecessorNumeroOT") ?? string.Empty,
-            row.GetValue("SuccessorNumeroOT") ?? string.Empty,
-            row.GetValue("Tipo") ?? "FinishToStart",
-            EmptyToNull(row.GetValue("Motivo")));
+        EnsureView(user); var from = query.From ?? DateTimeOffset.UtcNow.AddDays(-7); var to = query.To ?? DateTimeOffset.UtcNow.AddDays(30); if (to < from) throw new DomainException("El rango de fechas no es valido.");
+        var workshops = _db.Workshops.AsNoTracking().Include(x => x.Faena).Where(x => x.IsActive).AsQueryable(); if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) workshops = workshops.Where(x => x.Faena.Code == Code(query.FaenaCodigo)); if (!string.IsNullOrWhiteSpace(query.TallerCodigo)) workshops = workshops.Where(x => x.Code == Code(query.TallerCodigo));
+        var workshopList = (await workshops.ToListAsync(ct)).Where(x => CanAccess(user, x.Faena.Code)).ToArray(); var ids = workshopList.Select(x => x.Id).ToArray();
+        var schedules = await _db.WorkOrderSchedules.AsNoTracking().Include(x => x.Workshop).ThenInclude(x => x.Faena).Include(x => x.WorkOrder).ThenInclude(x => x.Asset).Include(x => x.WorkOrder).ThenInclude(x => x.OperationalUnit).Include(x => x.WorkOrder).ThenInclude(x => x.Priority).Include(x => x.WorkOrder).ThenInclude(x => x.Criticality).Where(x => ids.Contains(x.WorkshopId) && x.StartsAtUtc <= to && x.EndsAtUtc >= from).ToListAsync(ct);
+        if (!query.IncludeClosed) schedules = schedules.Where(x => x.Status != (int)ScheduleItemStatus.Completado).ToList(); var items = schedules.Select(x => ToItem(x, x.WorkOrder, x.Workshop)).ToArray();
+        var dependencies = await _db.ScheduleDependencies.AsNoTracking().Include(x => x.PredecessorSchedule).ThenInclude(x => x.WorkOrder).Include(x => x.SuccessorSchedule).ThenInclude(x => x.WorkOrder).Where(x => ids.Contains(x.PredecessorSchedule.WorkshopId) || ids.Contains(x.SuccessorSchedule.WorkshopId)).ToListAsync(ct);
+        var alerts = await AlertsAsync(ids, from, to, ct); var loads = await LoadAsync(workshopList, schedules, from, to, ct); return new(workshopList.Select(ToWorkshop).ToArray(), items, loads, Enum.GetValues<ScheduleItemStatus>().Select(s => new KanbanColumnResponse(s, items.Where(x => x.Estado == s).ToArray())).ToArray(), dependencies.Select(x => new GanttDependencyResponse(x.Id.ToString("N"), x.PredecessorSchedule.WorkOrder.WorkOrderNumber, x.SuccessorSchedule.WorkOrder.WorkOrderNumber, x.Type, x.Reason)).ToArray(), alerts);
     }
 
-    private static ScheduleAlertResponse ToAlert(DataRow row)
+    public async Task<IReadOnlyCollection<ScheduleAlertResponse>> ListAlertsAsync(ScheduleBoardQuery query, UserAccessContext user, CancellationToken ct)
     {
-        return new ScheduleAlertResponse(
-            row.GetValue("AlertId") ?? string.Empty,
-            ParseEnum(row.GetValue("Tipo"), ScheduleAlertType.ProgramacionExcedeCapacidad),
-            row.GetValue("Severity") ?? "Warning",
-            row.GetValue("Message") ?? string.Empty,
-            EmptyToNull(row.GetValue("TallerCodigo")),
-            EmptyToNull(row.GetValue("NumeroOT")),
-            EmptyToNull(row.GetValue("FaenaCodigo")),
-            ParseDate(row.GetValue("CreatedAtUtc")) ?? DateTimeOffset.MinValue,
-            ParseBool(row.GetValue("Resolved")));
+        EnsureView(user); var workshops = await _db.Workshops.AsNoTracking().Include(x => x.Faena).Where(x => string.IsNullOrWhiteSpace(query.FaenaCodigo) || x.Faena.Code == Code(query.FaenaCodigo)).ToListAsync(ct); var ids = workshops.Where(x => CanAccess(user, x.Faena.Code)).Select(x => x.Id).ToArray(); return await AlertsAsync(ids, query.From ?? DateTimeOffset.MinValue, query.To ?? DateTimeOffset.MaxValue, ct);
     }
 
-    private static DataRow WorkshopRow(IReadOnlyDictionary<string, string?> values) => Row(WorkshopColumns, values);
-    private static DataRow ScheduleRow(IReadOnlyDictionary<string, string?> values) => Row(ScheduleColumns, values);
-    private static DataRow DependencyRow(IReadOnlyDictionary<string, string?> values) => Row(DependencyColumns, values);
-    private static DataRow AlertRow(ScheduleAlertResponse alert, string causeKey) => Row(AlertColumns, new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["AlertId"] = alert.AlertId,
-        ["Tipo"] = alert.Tipo.ToString(),
-        ["Severity"] = alert.Severity,
-        ["Message"] = alert.Message,
-        ["TallerCodigo"] = alert.TallerCodigo,
-        ["NumeroOT"] = alert.NumeroOT,
-        ["FaenaCodigo"] = alert.FaenaCodigo,
-        ["CauseKey"] = causeKey,
-        ["CreatedAtUtc"] = FormatDate(alert.CreatedAtUtc),
-        ["Resolved"] = alert.Resolved.ToString(CultureInfo.InvariantCulture)
-    });
-
-    private static DataRow Row(IEnumerable<string> columns, IReadOnlyDictionary<string, string?> values)
-    {
-        return new DataRow(columns.ToDictionary(column => column, column => values.TryGetValue(column, out var value) ? value : null, StringComparer.OrdinalIgnoreCase));
-    }
-
-    private async Task RecordAuditAsync(
-        UserAccessContext user,
-        string action,
-        string entityId,
-        DataRow? previous,
-        DataRow updated,
-        string? faenaCodigo,
-        string? reason,
-        CancellationToken cancellationToken)
-    {
-        await _auditService.RecordAsync(new AuditEventRequest(
-            user.UserId,
-            action,
-            AuditModules.WorkOrders,
-            "Scheduling",
-            entityId,
-            previous is null ? null : Serialize(previous),
-            Serialize(updated),
-            faenaCodigo,
-            AuditSeverity.Medium,
-            reason),
-            cancellationToken);
-    }
-
-    private static DateRange ResolveRange(ScheduleBoardQuery query)
-    {
-        var today = DateTimeOffset.UtcNow.Date;
-        var from = query.From?.Date ?? query.View switch
-        {
-            ScheduleViewMode.Diario => today,
-            ScheduleViewMode.Mensual => new DateTimeOffset(today.Year, today.Month, 1, 0, 0, 0, TimeSpan.Zero),
-            _ => today.AddDays(-(int)today.DayOfWeek)
-        };
-        var to = query.To?.Date ?? query.View switch
-        {
-            ScheduleViewMode.Diario => from.AddDays(1).AddTicks(-1),
-            ScheduleViewMode.Mensual => from.AddMonths(1).AddTicks(-1),
-            _ => from.AddDays(7).AddTicks(-1)
-        };
-        return new DateRange(from, to);
-    }
-
-    private static ScheduleItemStatus DeriveStatus(DataRow scheduleRow, DataRow? order, DateTimeOffset end)
-    {
-        var orderStatus = order?.GetValue("Estado") ?? string.Empty;
-        if (orderStatus is "CerradaTecnicamente" or "ValidadaPlanificacion")
-        {
-            return ScheduleItemStatus.Completado;
-        }
-
-        if (orderStatus is "EnEjecucion" or "Pausada")
-        {
-            return ScheduleItemStatus.EnProceso;
-        }
-
-        if (DateTimeOffset.UtcNow > end && orderStatus is not "Anulada")
-        {
-            return ScheduleItemStatus.Atrasado;
-        }
-
-        return ParseEnum(scheduleRow.GetValue("Estado"), ScheduleItemStatus.Programado);
-    }
-
-    private static bool IntersectsDate(ScheduleItemResponse item, DateOnly date)
-    {
-        var start = DateOnly.FromDateTime(item.FechaInicio.Date);
-        var end = DateOnly.FromDateTime(item.FechaFin.Date);
-        return date >= start && date <= end;
-    }
-
-    private static decimal SpreadHoursOnDate(ScheduleItemResponse item, DateOnly date)
-    {
-        if (!IntersectsDate(item, date))
-        {
-            return 0;
-        }
-
-        var start = DateOnly.FromDateTime(item.FechaInicio.Date);
-        var end = DateOnly.FromDateTime(item.FechaFin.Date);
-        var days = Math.Max(1, end.DayNumber - start.DayNumber + 1);
-        return item.HHEstimadas / days;
-    }
-
-    private static string AlertCauseKey(ScheduleAlertResponse alert)
-    {
-        return $"{alert.Tipo}:{alert.TallerCodigo}:{alert.NumeroOT}:{alert.Message}".ToUpperInvariant();
-    }
-
-    private void EnsureCanPlan(UserAccessContext user)
-    {
-        if (!user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) &&
-            !user.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase) &&
-            !user.Roles.Contains(AuthRoles.MaintenanceSupervisor, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException("El usuario no puede gestionar programacion.");
-        }
-    }
-
-    private void EnsureFaenaAccess(UserAccessContext user, string? faenaCodigo)
-    {
-        if (user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) ||
-            user.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase) ||
-            user.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase) ||
-            string.IsNullOrWhiteSpace(faenaCodigo) ||
-            user.Faenas.Count == 0)
-        {
-            return;
-        }
-
-        if (!user.Faenas.Contains(faenaCodigo, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena indicada.");
-        }
-    }
-
-    private bool CanViewFaena(UserAccessContext user, string? faenaCodigo)
-    {
-        return user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) ||
-               user.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase) ||
-               user.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase) ||
-               string.IsNullOrWhiteSpace(faenaCodigo) ||
-               user.Faenas.Count == 0 ||
-               user.Faenas.Contains(faenaCodigo, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static void ValidateRequired(string? value, string fieldName)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new DomainException($"El campo {fieldName} es obligatorio.");
-        }
-    }
-
-    private static string? NormalizeText(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    private static string? NormalizeCode(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
-    private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
-    private static bool Same(string? left, string? right) => string.Equals(left?.Trim(), right?.Trim(), StringComparison.OrdinalIgnoreCase);
-    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
-    private static string FormatDate(DateTimeOffset value) => value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
-    private static string FormatNumber(decimal value) => value.ToString(CultureInfo.InvariantCulture);
-    private static DateTimeOffset? ParseDate(string? value) => DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed) ? parsed : null;
-    private static decimal ParseDecimal(string? value) => decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
-    private static int ParseInt(string? value) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
-    private static bool ParseBool(string? value, bool fallback = false) => bool.TryParse(value, out var parsed) ? parsed : fallback;
-    private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback) where TEnum : struct => Enum.TryParse<TEnum>(value, true, out var parsed) ? parsed : fallback;
-    private static string NewId(string prefix) => $"{prefix}-{Guid.NewGuid():N}"[..Math.Min(prefix.Length + 13, prefix.Length + 33)].ToUpperInvariant();
-    private static string Serialize(DataRow row) => JsonSerializer.Serialize(row.Values);
-
-    private sealed record DateRange(DateTimeOffset From, DateTimeOffset To);
-
-    private sealed record SchedulingData(
-        IReadOnlyList<DataRow> Workshops,
-        IReadOnlyList<DataRow> ScheduleItems,
-        IReadOnlyList<DataRow> Dependencies,
-        IReadOnlyList<DataRow> Alerts,
-        IReadOnlyList<DataRow> WorkOrders,
-        IReadOnlyList<DataRow> Assets);
-
-    private static readonly string[] WorkshopColumns =
-    [
-        "TallerCodigo",
-        "Nombre",
-        "FaenaCodigo",
-        "CapacidadDiariaHH",
-        "CapacidadEquipos",
-        "Horario",
-        "Especialidad",
-        "Activo"
-    ];
-
-    private static readonly string[] ScheduleColumns =
-    [
-        "ProgramacionId",
-        "NumeroOT",
-        "TallerCodigo",
-        "FaenaCodigo",
-        "ActivoCodigo",
-        "TecnicoUserId",
-        "FechaInicio",
-        "FechaFin",
-        "HHEstimadas",
-        "Estado",
-        "Prioridad",
-        "Criticidad",
-        "Motivo",
-        "ActualizadoPor",
-        "ActualizadoEnUtc"
-    ];
-
-    private static readonly string[] DependencyColumns =
-    [
-        "DependenciaId",
-        "PredecessorNumeroOT",
-        "SuccessorNumeroOT",
-        "Tipo",
-        "Motivo"
-    ];
-
-    private static readonly string[] AlertColumns =
-    [
-        "AlertId",
-        "Tipo",
-        "Severity",
-        "Message",
-        "TallerCodigo",
-        "NumeroOT",
-        "FaenaCodigo",
-        "CauseKey",
-        "CreatedAtUtc",
-        "Resolved"
-    ];
+    private async Task<IReadOnlyCollection<ScheduleAlertResponse>> AlertsAsync(Guid[] workshopIds, DateTimeOffset from, DateTimeOffset to, CancellationToken ct) => (await _db.ScheduleAlerts.AsNoTracking().Include(x => x.Workshop).Include(x => x.WorkOrder).Include(x => x.Faena).Where(x => (x.WorkshopId == null || workshopIds.Contains(x.WorkshopId.Value)) && x.RaisedAtUtc >= from && x.RaisedAtUtc <= to).OrderByDescending(x => x.RaisedAtUtc).ToListAsync(ct)).Select(x => ToAlert(x, x.Workshop, x.WorkOrder)).ToArray();
+    private async Task<IReadOnlyCollection<WorkshopLoadResponse>> LoadAsync(IEnumerable<WorkshopEntity> workshops, IEnumerable<WorkOrderScheduleEntity> schedules, DateTimeOffset from, DateTimeOffset to, CancellationToken ct) { var result = new List<WorkshopLoadResponse>(); foreach (var w in workshops) for (var d = DateOnly.FromDateTime(from.UtcDateTime.Date); d <= DateOnly.FromDateTime(to.UtcDateTime.Date); d = d.AddDays(1)) { var day = schedules.Where(x => x.WorkshopId == w.Id && x.StartsAtUtc.Date <= d.ToDateTime(TimeOnly.MinValue) && x.EndsAtUtc.Date >= d.ToDateTime(TimeOnly.MinValue)).ToArray(); var h = day.Sum(x => x.EstimatedLaborHours); result.Add(new(w.Code, w.Name, d, w.DailyLaborCapacity, h, w.EquipmentCapacity, day.Length, h > w.DailyLaborCapacity || day.Length > w.EquipmentCapacity)); } return result; }
+    private async Task<(decimal Hours,int Count)> DailyLoadAsync(WorkshopEntity workshop, DateTimeOffset day, CancellationToken ct) { var start = new DateTimeOffset(day.UtcDateTime.Date, TimeSpan.Zero); var next = start.AddDays(1); var schedules = await _db.WorkOrderSchedules.AsNoTracking().Where(x => x.WorkshopId == workshop.Id && x.StartsAtUtc < next && x.EndsAtUtc >= start).ToListAsync(ct); return (schedules.Sum(x => x.EstimatedLaborHours), schedules.Count); }
+    private async Task<bool> HasPathAsync(Guid from, Guid target, CancellationToken ct) { var queue = new Queue<Guid>(); var visited = new HashSet<Guid>(); queue.Enqueue(from); while (queue.Count > 0) { var current = queue.Dequeue(); if (!visited.Add(current)) continue; if (current == target) return true; foreach (var next in await _db.ScheduleDependencies.Where(x => x.PredecessorScheduleId == current).Select(x => x.SuccessorScheduleId).ToListAsync(ct)) queue.Enqueue(next); } return false; }
+    private static WorkshopResponse ToWorkshop(WorkshopEntity x) => new(x.Code, x.Name, x.Faena.Code, x.DailyLaborCapacity, x.EquipmentCapacity, x.Schedule, x.Specialty, x.IsActive);
+    private static ScheduleItemResponse ToItem(WorkOrderScheduleEntity x, WorkOrderEntity o, WorkshopEntity w) => new(x.Id.ToString("N"), o.WorkOrderNumber, w.Code, w.Name, w.Faena.Code, o.Asset?.Code ?? o.OperationalUnit?.Code ?? string.Empty, o.Asset?.Name ?? o.OperationalUnit?.Name, x.TechnicianUserId, x.StartsAtUtc, x.EndsAtUtc, x.EstimatedLaborHours, (ScheduleItemStatus)x.Status, o.Priority?.Code ?? string.Empty, o.Criticality?.Code ?? string.Empty, o.Description);
+    private static ScheduleAlertResponse ToAlert(ScheduleAlertEntity x, WorkshopEntity? w, WorkOrderEntity? o) => new(x.Id.ToString("N"), (ScheduleAlertType)x.Type, x.Severity, x.Message, w?.Code, o?.WorkOrderNumber, x.Faena?.Code ?? w?.Faena?.Code, x.RaisedAtUtc, x.IsResolved);
+    private static string? Text(string? x) => string.IsNullOrWhiteSpace(x) ? null : x.Trim(); private static string? Code(string? x) => string.IsNullOrWhiteSpace(x) ? null : x.Trim().ToUpperInvariant(); private static void Required(string? x, string n) { if (string.IsNullOrWhiteSpace(x)) throw new DomainException($"El campo {n} es obligatorio."); }
+    private static bool CanAccess(UserAccessContext u, string code) => u.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) || u.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase) || u.Faenas.Contains(code, StringComparer.OrdinalIgnoreCase); private static void EnsureAccess(UserAccessContext u, string code) { if (!CanAccess(u, code)) throw new UnauthorizedAccessException("No tiene acceso a la faena."); } private static void EnsureView(UserAccessContext u) { if (!(u.Roles.Contains(AuthRoles.Admin,StringComparer.OrdinalIgnoreCase) || u.Roles.Contains(AuthRoles.Planner,StringComparer.OrdinalIgnoreCase) || u.Roles.Contains(AuthRoles.MaintenanceSupervisor,StringComparer.OrdinalIgnoreCase) || u.Roles.Contains(AuthRoles.Management,StringComparer.OrdinalIgnoreCase) || u.Roles.Contains(AuthRoles.FaenaViewer,StringComparer.OrdinalIgnoreCase))) throw new UnauthorizedAccessException("No tiene permisos para ver programacion."); } private static void EnsureManage(UserAccessContext u) { if (!(u.Roles.Contains(AuthRoles.Admin,StringComparer.OrdinalIgnoreCase) || u.Roles.Contains(AuthRoles.Planner,StringComparer.OrdinalIgnoreCase) || u.Roles.Contains(AuthRoles.MaintenanceSupervisor,StringComparer.OrdinalIgnoreCase))) throw new UnauthorizedAccessException("No tiene permisos para gestionar programacion."); }
 }

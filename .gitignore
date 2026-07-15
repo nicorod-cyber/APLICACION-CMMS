@@ -11,12 +11,16 @@ node_modules/
 
 # Local environment
 .env
-.env.local
+.env.*
+!.env.example
 appsettings.Local.json
 
 # Logs
 *.log
 logs/
+
+# Local database backups
+backups/
 
 # IDE/editor
 .vs/

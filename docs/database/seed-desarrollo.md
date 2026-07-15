@@ -27,5 +27,5 @@ Los registros se buscan por codigo o username antes de insertarse. Ejecutar el s
 ```bash
 Auth__SeedAdmin__Username=admin
 Auth__SeedAdmin__Email=admin@example.local
-Auth__SeedAdmin__Password=ChangeMe.Admin123!
+Auth__SeedAdmin__Password=<set from a secret or environment variable>
 ```

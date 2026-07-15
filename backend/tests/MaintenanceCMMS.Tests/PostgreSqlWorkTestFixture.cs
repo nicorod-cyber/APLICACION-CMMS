@@ -6,46 +6,72 @@ using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Testcontainers.PostgreSql;
 
 namespace MaintenanceCMMS.Tests;
 
 internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
 {
-    private PostgreSqlWorkTestFixture(string databaseName, CmmsDbContext dbContext)
+    private PostgreSqlWorkTestFixture(string databaseName, string adminConnectionString, CmmsDbContext dbContext)
     {
         DatabaseName = databaseName;
+        AdminConnectionString = adminConnectionString;
         DbContext = dbContext;
     }
 
+    private static readonly SemaphoreSlim ContainerGate = new(1, 1);
+    private static readonly string ContainerPassword = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+    private static PostgreSqlContainer? Container;
+
     public string DatabaseName { get; }
+    public string AdminConnectionString { get; }
     public CmmsDbContext DbContext { get; }
 
     public static async Task<PostgreSqlWorkTestFixture> CreateAsync()
     {
         var databaseName = $"cmms_work_tests_{Guid.NewGuid():N}";
-        await using (var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password"))
-        {
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = $"CREATE DATABASE \"{databaseName}\"";
-            await command.ExecuteNonQueryAsync();
-        }
-
-        var options = new DbContextOptionsBuilder<CmmsDbContext>()
-            .UseNpgsql($"Host=localhost;Port=5432;Database={databaseName};Username=cmms_app;Password=cmms_app_password")
-            .Options;
-        var dbContext = new CmmsDbContext(options);
+        var adminConnectionString = await GetAdminConnectionStringAsync();
+        await CreateDatabaseAsync(databaseName, adminConnectionString);
+        var dbContext = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(ConnectionString(adminConnectionString, databaseName)).Options);
         await dbContext.Database.MigrateAsync();
         await SeedAsync(dbContext);
-        return new PostgreSqlWorkTestFixture(databaseName, dbContext);
+        return new PostgreSqlWorkTestFixture(databaseName, adminConnectionString, dbContext);
     }
 
-    public CmmsDbContext NewContext()
+    public CmmsDbContext NewContext() => new(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(ConnectionString(AdminConnectionString, DatabaseName)).Options);
+
+    public static async Task<string> GetAdminConnectionStringAsync()
     {
-        var options = new DbContextOptionsBuilder<CmmsDbContext>()
-            .UseNpgsql($"Host=localhost;Port=5432;Database={DatabaseName};Username=cmms_app;Password=cmms_app_password")
-            .Options;
-        return new CmmsDbContext(options);
+        if (Container is not null) return Container.GetConnectionString();
+        await ContainerGate.WaitAsync();
+        try
+        {
+            if (Container is null)
+            {
+                Container = new PostgreSqlBuilder().WithDatabase("postgres").WithUsername("cmms_app").WithPassword(ContainerPassword).Build();
+                await Container.StartAsync();
+            }
+            return Container.GetConnectionString();
+        }
+        finally { ContainerGate.Release(); }
+    }
+
+    public static async Task CreateDatabaseAsync(string databaseName, string? adminConnectionString = null)
+    {
+        await using var connection = new NpgsqlConnection(adminConnectionString ?? await GetAdminConnectionStringAsync());
+        await connection.OpenAsync(); await using var command = connection.CreateCommand(); command.CommandText = $"CREATE DATABASE \"{databaseName}\""; await command.ExecuteNonQueryAsync();
+    }
+
+    public static async Task DropDatabaseAsync(string databaseName, string? adminConnectionString = null)
+    {
+        await using var connection = new NpgsqlConnection(adminConnectionString ?? await GetAdminConnectionStringAsync());
+        await connection.OpenAsync(); await using var command = connection.CreateCommand(); command.CommandText = $"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE)"; await command.ExecuteNonQueryAsync();
+    }
+
+    public static string ConnectionString(string adminConnectionString, string databaseName)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(adminConnectionString) { Database = databaseName };
+        return builder.ConnectionString;
     }
     private static async Task SeedAsync(CmmsDbContext db)
     {
@@ -104,10 +130,6 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await DbContext.DisposeAsync();
-        await using var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password");
-        await connection.OpenAsync();
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"DROP DATABASE IF EXISTS \"{DatabaseName}\" WITH (FORCE)";
-        await command.ExecuteNonQueryAsync();
+        await DropDatabaseAsync(DatabaseName, AdminConnectionString);
     }
 }

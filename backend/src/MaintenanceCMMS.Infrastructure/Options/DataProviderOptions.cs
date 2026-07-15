@@ -2,7 +2,7 @@ namespace MaintenanceCMMS.Infrastructure.Options;
 
 public sealed class DataProviderSettings
 {
-    public string Provider { get; set; } = "Excel";
+    public string Provider { get; set; } = "PostgreSql";
 
     public string ExcelPath { get; set; } = "data/excel";
 

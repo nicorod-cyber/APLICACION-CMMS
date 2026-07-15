@@ -32,10 +32,12 @@ using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.Excel;
 using MaintenanceCMMS.Infrastructure.Options;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Npgsql;
 using Quartz;
 using Serilog;
 
@@ -212,19 +214,68 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-await using (var migrationScope = app.Services.CreateAsyncScope())
+var migrationDatabaseTarget = "unknown";
+string[] pendingMigrations = [];
+
+try
 {
+    await using var migrationScope = app.Services.CreateAsyncScope();
     var dbContext = migrationScope.ServiceProvider.GetRequiredService<CmmsDbContext>();
+    migrationDatabaseTarget = DescribeDatabaseTarget(dbContext.Database.GetConnectionString());
+
+    pendingMigrations = (await dbContext.Database.GetPendingMigrationsAsync(CancellationToken.None)).ToArray();
+    var nextMigration = pendingMigrations.FirstOrDefault() ?? "(none)";
+
+    Log.Information(
+        "Applying {PendingMigrationCount} pending EF Core migration(s) to {DatabaseTarget}. Next migration: {MigrationId}.",
+        pendingMigrations.Length,
+        migrationDatabaseTarget,
+        nextMigration);
+
     await dbContext.Database.MigrateAsync(CancellationToken.None);
+
+    Log.Information(
+        "EF Core migrations completed for {DatabaseTarget}. Applied migrations in this bootstrap: {AppliedMigrations}.",
+        migrationDatabaseTarget,
+        pendingMigrations);
+}
+catch (Exception exception)
+{
+    var postgresException = FindPostgresException(exception);
+    var failedMigration = pendingMigrations.FirstOrDefault() ?? "unknown";
+    var sqlState = postgresException?.SqlState ?? "n/a";
+
+    Log.Fatal(
+        exception,
+        "Database migration bootstrap failed for {DatabaseTarget}. Migration: {MigrationId}. PostgreSQL SQLSTATE: {PostgreSqlState}.",
+        migrationDatabaseTarget,
+        failedMigration,
+        sqlState);
+
+    if (IsLegacyOperationalDataSetBlock(postgresException, exception))
+    {
+        Log.Fatal(
+            "Migration is blocked by legacy rows in public.conjuntos_datos_operacionales. " +
+            "Do not remove the migration guard. Create and verify backups, run " +
+            "backend/scripts/ReportLegacyOperationalDataSets.sql, then " +
+            "backend/scripts/ClearLegacyOperationalDataSets.sql with its explicit confirmation.");
+    }
+
+    await app.DisposeAsync();
+    return 1;
 }
 
-if (builder.Configuration.GetValue("Database:SeedDevelopment", app.Environment.IsDevelopment()))
+if (builder.Configuration.GetValue("Database:SeedReferenceCatalogs", true))
 {
-    await using var developmentSeedScope = app.Services.CreateAsyncScope();
-    var developmentSeeder = developmentSeedScope.ServiceProvider.GetService<IPostgreSqlDevelopmentSeeder>();
+    await using var referenceSeedScope = app.Services.CreateAsyncScope();
+    var developmentSeeder = referenceSeedScope.ServiceProvider.GetService<IPostgreSqlDevelopmentSeeder>();
     if (developmentSeeder is not null)
     {
-        await developmentSeeder.SeedAsync(CancellationToken.None);
+        await developmentSeeder.SeedReferenceCatalogsAsync(CancellationToken.None);
+        if (app.Environment.IsDevelopment() && builder.Configuration.GetValue("Database:SeedDemoData", false))
+        {
+            await developmentSeeder.SeedDemoDataAsync(CancellationToken.None);
+        }
     }
 }
 
@@ -233,6 +284,36 @@ await using (var identitySeedScope = app.Services.CreateAsyncScope())
     var identitySeedService = identitySeedScope.ServiceProvider.GetRequiredService<IIdentitySeedService>();
     await identitySeedService.SeedAsync(CancellationToken.None);
 }
+
+app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
+{
+    var error = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+    var statusCode = error is BadHttpRequestException
+        ? StatusCodes.Status400BadRequest
+        : StatusCodes.Status500InternalServerError;
+
+    if (statusCode == StatusCodes.Status400BadRequest)
+    {
+        Log.Warning(
+            "Rejected malformed API request. TraceId: {TraceId}; ErrorType: {ErrorType}.",
+            context.TraceIdentifier,
+            error?.GetType().Name ?? "Unknown");
+    }
+    else
+    {
+        Log.Error(
+            "Unhandled API exception. TraceId: {TraceId}; ErrorType: {ErrorType}.",
+            context.TraceIdentifier,
+            error?.GetType().Name ?? "Unknown");
+    }
+
+    await Results.Problem(
+            statusCode: statusCode,
+            title: statusCode == StatusCodes.Status400BadRequest ? "Solicitud invalida." : "Error interno del servidor.",
+            detail: statusCode == StatusCodes.Status400BadRequest ? "La solicitud no es valida." : null,
+            extensions: new Dictionary<string, object?> { ["traceId"] = context.TraceIdentifier })
+        .ExecuteAsync(context);
+}));
 
 app.UseSerilogRequestLogging();
 
@@ -4004,49 +4085,30 @@ api.MapGet("/system/info", (
         IConfiguration configuration,
         IWebHostEnvironment environment) =>
     {
-        var dataProvider = configuration["DataProvider:Provider"] ?? configuration["DataProvider"] ?? "Excel";
+        var dataProvider = "PostgreSql";
 
         return Results.Ok(systemInfoService.GetInfo(dataProvider, environment.EnvironmentName));
     })
     .WithName("GetSystemInfo");
 
-api.MapGet("/system/data-provider", (IDataProvider dataProvider, DataProviderSettings settings) =>
+api.MapGet("/system/data-provider", (DataProviderSettings settings) =>
+    Results.Ok(new
     {
-        return Results.Ok(new
-        {
-            activeProvider = dataProvider.Name,
-            providerType = dataProvider.ProviderType.ToString(),
-            excelPath = settings.ExcelPath,
-            sqlServerConfigured = !string.IsNullOrWhiteSpace(settings.SqlServerConnectionString),
-            postgreSqlConfigured = !string.IsNullOrWhiteSpace(settings.PostgreSqlConnectionString)
-        });
-    })
+        activeProvider = "PostgreSql",
+        providerType = DataProviderType.PostgreSql.ToString(),
+        postgreSqlConfigured = !string.IsNullOrWhiteSpace(settings.PostgreSqlConnectionString),
+        legacyExcelRuntimeEnabled = false
+    }))
     .WithName("GetDataProviderInfo");
 
-api.MapGet("/system/database-health", async (
-        IDataProvider dataProvider,
-        IServiceProvider serviceProvider,
-        CancellationToken cancellationToken) =>
+api.MapGet("/system/database-health", async (CmmsDbContext dbContext, CancellationToken cancellationToken) =>
     {
-        if (dataProvider.ProviderType != DataProviderType.PostgreSql)
-        {
-            return Results.Ok(new
-            {
-                activeProvider = dataProvider.Name,
-                postgreSqlOfficial = false,
-                healthy = false,
-                message = "PostgreSQL is not the active data provider."
-            });
-        }
-
-        var dbContext = serviceProvider.GetRequiredService<CmmsDbContext>();
         var canConnect = await dbContext.Database.CanConnectAsync(cancellationToken);
         var pendingMigrations = (await dbContext.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
         var appliedMigrations = (await dbContext.Database.GetAppliedMigrationsAsync(cancellationToken)).ToArray();
-
         return Results.Ok(new
         {
-            activeProvider = dataProvider.Name,
+            activeProvider = "PostgreSql",
             postgreSqlOfficial = true,
             healthy = canConnect && pendingMigrations.Length == 0,
             canConnect,
@@ -4057,24 +4119,11 @@ api.MapGet("/system/database-health", async (
     })
     .WithName("GetDatabaseHealth");
 
-api.MapGet("/system/excel-health", async (ExcelDataProvider excelDataProvider, CancellationToken cancellationToken) =>
-    {
-        var health = await excelDataProvider.CheckHealthAsync(cancellationToken);
-        return Results.Ok(new
-        {
-            legacy = true,
-            officialDataSource = false,
-            purpose = "Excel health is retained only for import/development diagnostics. It is not the official runtime database when PostgreSQL is active.",
-            health
-        });
-    })
-    .WithName("GetExcelHealth");
-
-api.MapGet("/system/excel-schemas", (IExcelSchemaRegistry schemaRegistry) =>
+api.MapGet("/system/import-schemas", (IExcelSchemaRegistry schemaRegistry) =>
     {
         return Results.Ok(schemaRegistry.GetAll());
     })
-    .WithName("GetExcelSchemas");
+    .WithName("GetImportSchemas");
 
 var costsApi = api.MapGroup("/costs").RequireAuthorization();
 costsApi.MapGet("/", async (DateTimeOffset? desde, DateTimeOffset? hasta, string? otNumero, string? activoCodigo, string? faenaCodigo, string? contratoCodigo, string? proveedorRut, CostCategory? categoria, ClaimsPrincipal user, ICostManagementService service, CancellationToken ct) =>
@@ -4096,7 +4145,61 @@ costsApi.MapPut("/labor-rates",async(UpsertLaborRateRequest request,ClaimsPrinci
 costsApi.MapGet("/payment-statements",async(ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{return Results.Ok(await service.ListPaymentsAsync(UserAccessContext.FromClaims(user),ct));}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
 costsApi.MapPost("/payment-statements",async(CreatePaymentStatementRequest request,ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{return Results.Ok(await service.CreatePaymentAsync(request,UserAccessContext.FromClaims(user),ct));}catch(DomainException ex){return Results.BadRequest(new{message=ex.Message});}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
 costsApi.MapPost("/payment-statements/{number}/status",async(string number,ChangePaymentStatusRequest request,ClaimsPrincipal user,ICostManagementService service,CancellationToken ct)=>{try{var result=await service.ChangePaymentStatusAsync(number,request,UserAccessContext.FromClaims(user),ct);return result is null?Results.NotFound():Results.Ok(result);}catch(DomainException ex){return Results.BadRequest(new{message=ex.Message});}catch(UnauthorizedAccessException ex){return Results.Problem(ex.Message,statusCode:403);}});
-app.Run();
+await app.RunAsync();
+return 0;
+
+static string DescribeDatabaseTarget(string? connectionString)
+{
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        return "connection string not configured";
+    }
+
+    try
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+        var host = string.IsNullOrWhiteSpace(builder.Host) ? "(default host)" : builder.Host;
+        var database = string.IsNullOrWhiteSpace(builder.Database) ? "(default database)" : builder.Database;
+        var username = string.IsNullOrWhiteSpace(builder.Username) ? "(default user)" : builder.Username;
+
+        return $"{host}:{builder.Port}/{database} as {username}";
+    }
+    catch (ArgumentException)
+    {
+        return "invalid connection string (redacted)";
+    }
+}
+
+static PostgresException? FindPostgresException(Exception exception)
+{
+    for (Exception? current = exception; current is not null; current = current.InnerException)
+    {
+        if (current is PostgresException postgresException)
+        {
+            return postgresException;
+        }
+
+        if (current is AggregateException aggregateException)
+        {
+            foreach (var innerException in aggregateException.Flatten().InnerExceptions)
+            {
+                if (innerException is PostgresException aggregatePostgresException)
+                {
+                    return aggregatePostgresException;
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+static bool IsLegacyOperationalDataSetBlock(PostgresException? postgresException, Exception exception)
+{
+    var message = postgresException?.MessageText ?? exception.Message;
+    return postgresException?.SqlState == "P0001"
+        && message.Contains("conjuntos_datos_operacionales", StringComparison.OrdinalIgnoreCase);
+}
 
 static string GetActorId(ClaimsPrincipal user)
 {
@@ -4145,4 +4248,3 @@ public sealed record SharePointManualLinkApiRequest(
 public partial class Program
 {
 }
-

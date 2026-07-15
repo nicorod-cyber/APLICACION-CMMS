@@ -11,7 +11,8 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 
 public interface IPostgreSqlDevelopmentSeeder
 {
-    Task SeedAsync(CancellationToken cancellationToken);
+    Task SeedReferenceCatalogsAsync(CancellationToken cancellationToken);
+    Task SeedDemoDataAsync(CancellationToken cancellationToken);
 }
 
 public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
@@ -23,16 +24,16 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         _dbContext = dbContext;
     }
 
-    public async Task SeedAsync(CancellationToken cancellationToken)
+    public async Task SeedReferenceCatalogsAsync(CancellationToken cancellationToken)
     {
-        await UpsertFaenaAsync("FAENA_DEMO", "Faena Demo", cancellationToken);
-
         await UpsertOperationalStateAsync("OPERATIVO_FAENA", "Operativo en Faena", cancellationToken);
         await UpsertOperationalStateAsync("ALERTA_FAENA", "Con alerta en Faena", cancellationToken);
         await UpsertOperationalStateAsync("FUERA_SERVICIO_FAENA", "Fuera de servicio en Faena", cancellationToken);
         await UpsertOperationalStateAsync("FUERA_SERVICIO_TALLER", "Fuera de servicio en Taller", cancellationToken);
 
         await UpsertAssetTypeAsync("EQUIPO", "Equipo", cancellationToken);
+        // Families require the generated asset-type key on a pristine database.
+        await _dbContext.SaveChangesAsync(cancellationToken);
         await UpsertFamilyAsync("CAMION_PLUMA", "Camion pluma", cancellationToken);
         await UpsertFamilyAsync("COMPRESOR", "Compresor", cancellationToken);
         await UpsertFamilyAsync("GRUA_HORQUILLA", "Grua horquilla", cancellationToken);
@@ -56,26 +57,22 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
+        await UpsertBaseChecklistTemplateAsync(cancellationToken);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task SeedDemoDataAsync(CancellationToken cancellationToken)
+    {
+        await UpsertFaenaAsync("FAENA_DEMO", "Faena Demo", cancellationToken);
+        await _dbContext.SaveChangesAsync(cancellationToken);
         var faena = await _dbContext.Faenas.SingleAsync(item => item.Code == "FAENA_DEMO", cancellationToken);
         var assetType = await _dbContext.AssetTypes.SingleAsync(item => item.Code == "EQUIPO", cancellationToken);
         var family = await _dbContext.EquipmentFamilies.SingleAsync(item => item.Code == "CAMION_PLUMA", cancellationToken);
         var state = await _dbContext.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO_FAENA", cancellationToken);
-
-        await UpsertBaseChecklistTemplateAsync(cancellationToken);
-
         if (!await _dbContext.Assets.AnyAsync(item => item.Code == "ACT-DEMO-001", cancellationToken))
         {
-            _dbContext.Assets.Add(new AssetEntity
-            {
-                Code = "ACT-DEMO-001",
-                Name = "Activo demo",
-                FaenaId = faena.Id,
-                FamilyId = family.Id,
-                AssetTypeId = assetType.Id,
-                OperationalStateId = state.Id
-            });
+            _dbContext.Assets.Add(new AssetEntity { Code = "ACT-DEMO-001", Name = "Activo demo", FaenaId = faena.Id, FamilyId = family.Id, AssetTypeId = assetType.Id, OperationalStateId = state.Id });
         }
-
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 

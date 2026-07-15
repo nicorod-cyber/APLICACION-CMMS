@@ -17,7 +17,7 @@ public sealed class PostgreSqlIdentitySeedConcurrencyTests
     public async Task SeedAsync_IsIdempotent_RepairsDifferentialChanges_AndSerializesConcurrentSeeders()
     {
         await using var database = await PostgreSqlWorkTestFixture.CreateAsync();
-        await using var services = CreateServices(database.DatabaseName);
+        await using var services = CreateServices(database.DatabaseName, database.AdminConnectionString);
 
         await SeedAsync(services);
 
@@ -125,12 +125,12 @@ public sealed class PostgreSqlIdentitySeedConcurrencyTests
         await seedService.SeedAsync(CancellationToken.None);
     }
 
-    private static ServiceProvider CreateServices(string databaseName)
+    private static ServiceProvider CreateServices(string databaseName, string adminConnectionString)
     {
         var services = new ServiceCollection();
         services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Debug));
         services.AddDbContext<CmmsDbContext>(options => options.UseNpgsql(
-            $"Host=localhost;Port=5432;Database={databaseName};Username=cmms_app;Password=cmms_app_password"));
+            PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, databaseName)));
         services.AddScoped<IIdentityStore, PostgreSqlIdentityStore>();
         services.AddSingleton<IIdentitySeedTransaction, PostgreSqlIdentitySeedTransaction>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();

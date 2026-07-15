@@ -103,37 +103,22 @@ La configuracion inicial vive en `backend/src/MaintenanceCMMS.Api/appsettings.js
 - `PowerBI`
 - `Offline`
 
-PostgreSQL 16 es el proveedor por defecto en `Development`, `.env.example` y `docker-compose.yml`. Excel queda solo como compatibilidad legacy, importacion, exportacion y plantillas; en Docker `data/excel` se monta solo lectura.
+PostgreSQL 16 es la única fuente operacional. Excel se usa únicamente como archivo de entrada durante una importación explícita; el estado, las filas, los errores, los eventos y los metadatos del archivo se guardan en PostgreSQL.
 
-El archivo base [appsettings.json](/C:/Users/Thinkpad/Documents/Enaex/sistema/APLICACION-CMMS/backend/src/MaintenanceCMMS.Api/appsettings.json) aun conserva `Provider=Excel` como fallback general, pero el runtime local validado usa [appsettings.Development.json](/C:/Users/Thinkpad/Documents/Enaex/sistema/APLICACION-CMMS/backend/src/MaintenanceCMMS.Api/appsettings.Development.json) y variables de entorno con `Provider=PostgreSql`.
-
-Variables principales:
-
-```text
-DataProvider__Provider=PostgreSql
-DataProvider__PostgreSqlConnectionString=Host=postgres;Port=5432;Database=cmms;Username=cmms_app;Password=cmms_app_password
-Database__SeedDevelopment=true
-```
-
-Verificacion:
+Antes de iniciar Docker, copia `.env.example` a `.env` y sustituye todos los valores `<...>` por secretos locales. El archivo `.env` está ignorado por Git. Docker exige las variables de base de datos, JWT y administrador inicial, espera el healthcheck de PostgreSQL y no carga datos demo (`Database__SeedDemoData=false`).
 
 ```powershell
-curl http://localhost:5041/api/system/data-provider
+Copy-Item .env.example .env
+# Edita .env con secretos locales.
+docker compose up --build -d
+docker compose ps
+curl http://localhost:5041/api/health
 curl http://localhost:5041/api/system/database-health
 ```
 
-Verificacion ejecutada el 2026-07-09:
+Para migraciones EF Core configura `CMMS_POSTGRES_CONNECTION` y usa `dotnet ef database update`. Las pruebas de integración usan Testcontainers, no una instancia fija en `localhost`.
 
-- `dotnet restore backend/MaintenanceCMMS.sln`: correcto.
-- `dotnet build backend/MaintenanceCMMS.sln --no-restore`: correcto.
-- `dotnet test backend/MaintenanceCMMS.sln --no-build`: correcto, `84/84` pruebas.
-- `npm.cmd ci`: correcto.
-- `npm.cmd run build`: correcto.
-- `docker compose up --build -d`: correcto.
-- `GET /api/health`: `Healthy`.
-- `GET /api/system/data-provider`: `activeProvider=PostgreSql`.
-- `GET /api/system/database-health`: `healthy=true`, `pendingMigrations=[]`.
-- Inicio verificado incluso retirando temporalmente `data/excel`: el stack levanto con PostgreSQL y Docker recreo un directorio vacio de montaje sin usar Excel como base operacional.
+Documentación de migración, respaldo y limpieza controlada: [postgresql-runtime.md](/C:/Users/Thinkpad/Documents/Enaex/sistema/APLICACION-CMMS/docs/database/postgresql-runtime.md).
 
 Documentacion de migracion:
 

@@ -124,20 +124,20 @@ public sealed class TechnicalHierarchyServiceTests
 
     private sealed class Fixture:IAsyncDisposable
     {
-        private Fixture(string name,CmmsDbContext db){Name=name;Db=db;Service=new TechnicalHierarchyService(db,new PostgreSqlAuditService(db,new AuditContextAccessor()),new AuthorizationPolicyService());}
-        public string Name{get;}public CmmsDbContext Db{get;}public ITechnicalHierarchyService Service{get;}
+        private Fixture(string name,string adminConnectionString,CmmsDbContext db){Name=name;AdminConnectionString=adminConnectionString;Db=db;Service=new TechnicalHierarchyService(db,new PostgreSqlAuditService(db,new AuditContextAccessor()),new AuthorizationPolicyService());}
+        public string Name{get;}public string AdminConnectionString{get;}public CmmsDbContext Db{get;}public ITechnicalHierarchyService Service{get;}
         public static async Task<Fixture> CreateAsync()
         {
-            var name=$"cmms_th_tests_{Guid.NewGuid():N}";await using(var cn=new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password")){await cn.OpenAsync();await using var cmd=cn.CreateCommand();cmd.CommandText=$"CREATE DATABASE \"{name}\"";await cmd.ExecuteNonQueryAsync();}
-            var db=CreateContext(name);await db.Database.MigrateAsync();await SeedAsync(db);return new Fixture(name,db);
+            var name=$"cmms_th_tests_{Guid.NewGuid():N}";var adminConnectionString=await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name,adminConnectionString);
+            var db=CreateContext(name,adminConnectionString);await db.Database.MigrateAsync();await SeedAsync(db);return new Fixture(name,adminConnectionString,db);
         }
-        public CmmsDbContext NewContext()=>CreateContext(Name);
-        private static CmmsDbContext CreateContext(string name)=>new(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql($"Host=localhost;Port=5432;Database={name};Username=cmms_app;Password=cmms_app_password").Options);
+        public CmmsDbContext NewContext()=>CreateContext(Name,AdminConnectionString);
+        private static CmmsDbContext CreateContext(string name,string adminConnectionString)=>new(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString,name)).Options);
         private static async Task SeedAsync(CmmsDbContext db)
         {
             var fae1=new FaenaEntity{Code="FAE-1",Name="Faena Uno",IsActive=true};var fae2=new FaenaEntity{Code="FAE-2",Name="Faena Dos",IsActive=true};var type=new AssetTypeEntity{Code="EQUIPO",Name="Equipo",IsActive=true};var fam1=new EquipmentFamilyEntity{Code="FAM-1",Name="Familia Uno",AssetTypeId=type.Id,IsActive=true};var fam2=new EquipmentFamilyEntity{Code="FAM-2",Name="Familia Dos",AssetTypeId=type.Id,IsActive=true};var state=new AssetOperationalStateEntity{Code="OPERATIVO_FAENA",Name="Operativo",IsActive=true};
             db.AddRange(fae1,fae2,type,fam1,fam2,state);db.Assets.AddRange(new AssetEntity{Code="ACT-1",Name="Activo Uno",Faena=fae1,Family=fam1,OperationalState=state,AssetTypeId=type.Id},new AssetEntity{Code="ACT-2",Name="Activo Dos",Faena=fae1,Family=fam2,OperationalState=state,AssetTypeId=type.Id},new AssetEntity{Code="ACT-3",Name="Activo Tres",Faena=fae2,Family=fam2,OperationalState=state,AssetTypeId=type.Id});await db.SaveChangesAsync();
         }
-        public async ValueTask DisposeAsync(){await Db.DisposeAsync();await using var cn=new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password");await cn.OpenAsync();await using var cmd=cn.CreateCommand();cmd.CommandText=$"DROP DATABASE IF EXISTS \"{Name}\" WITH (FORCE)";await cmd.ExecuteNonQueryAsync();}
+        public async ValueTask DisposeAsync(){await Db.DisposeAsync();await PostgreSqlWorkTestFixture.DropDatabaseAsync(Name,AdminConnectionString);}
     }
 }

@@ -1,867 +1,195 @@
-using System.Globalization;
 using System.Text.Json;
-using MaintenanceCMMS.Application.Abstractions.Data;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Application.Procurement;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Procurement;
 
+/// <summary>PostgreSQL-backed procurement aggregate. Excel is intentionally not a runtime dependency.</summary>
 public sealed class ProcurementService : IProcurementService
 {
-    private const string SuppliersSchema = "proveedores";
-    private const string RequestsSchema = "abastecimiento_solicitudes";
-    private const string PurchaseOrdersSchema = "ordenes_compra";
-    private const string ReceiptsSchema = "recepciones_abastecimiento";
-    private const string MaterialRequestsSchema = "solicitudes_repuestos";
+    private readonly CmmsDbContext _db;
+    private readonly IInventoryService _inventory;
+    private readonly IAuditService _audit;
 
-    private readonly CmmsDbContext _dbContext;
-    private readonly IInventoryService _inventoryService;
-    private readonly IAuditService _auditService;
-
-    public ProcurementService(
-        CmmsDbContext dbContext,
-        IInventoryService inventoryService,
-        IAuditService auditService)
+    public ProcurementService(CmmsDbContext dbContext, IInventoryService inventoryService, IAuditService auditService)
     {
-        _dbContext = dbContext;
-        _inventoryService = inventoryService;
-        _auditService = auditService;
+        _db = dbContext;
+        _inventory = inventoryService;
+        _audit = auditService;
     }
 
-    public async Task<IReadOnlyCollection<SupplierResponse>> ListSuppliersAsync(
-        SupplierQuery query,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<IReadOnlyCollection<SupplierResponse>> ListSuppliersAsync(SupplierQuery query, UserAccessContext user, CancellationToken ct)
     {
         EnsureCanView(user);
-        return (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken))
-            .Select(ToSupplier)
-            .Where(item => query.IncludeInactive || item.Activo)
-            .Where(item => string.IsNullOrWhiteSpace(query.Search) || Contains(item.Rut, query.Search) || Contains(item.Nombre, query.Search) || Contains(item.Contacto, query.Search))
-            .OrderBy(item => item.Nombre, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var suppliers = _db.Suppliers.AsNoTracking().AsQueryable();
+        if (!query.IncludeInactive) suppliers = suppliers.Where(x => x.IsActive);
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var search = query.Search.Trim();
+            suppliers = suppliers.Where(x => EF.Functions.ILike(x.TaxId, $"%{search}%") || EF.Functions.ILike(x.Name, $"%{search}%") || (x.Contact != null && EF.Functions.ILike(x.Contact, $"%{search}%")));
+        }
+        return (await suppliers.OrderBy(x => x.Name).ToListAsync(ct)).Select(ToResponse).ToArray();
     }
 
-    public async Task<SupplierResponse?> GetSupplierAsync(
-        string rut,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<SupplierResponse?> GetSupplierAsync(string rut, UserAccessContext user, CancellationToken ct)
     {
         EnsureCanView(user);
-        return (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken))
-            .Select(ToSupplier)
-            .FirstOrDefault(item => Same(item.Rut, rut));
+        var supplier = await _db.Suppliers.AsNoTracking().SingleOrDefaultAsync(x => x.TaxId == NormalizeCode(rut), ct);
+        return supplier is null ? null : ToResponse(supplier);
     }
 
-    public async Task<SupplierResponse> CreateSupplierAsync(
-        UpsertSupplierRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<SupplierResponse> CreateSupplierAsync(UpsertSupplierRequest request, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        ValidateSupplier(request);
-
-        var rows = (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken)).ToList();
-        if (rows.Any(row => Same(row.GetValue("Rut"), request.Rut)))
-        {
-            throw new DomainException($"Ya existe el proveedor '{request.Rut}'.");
-        }
-
-        var rowToCreate = SupplierRow(request);
-        rows.Add(rowToCreate);
-        await _dbContext.SaveOperationalRowsAsync(SuppliersSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "procurement.supplier_created", "Supplier", request.Rut, null, rowToCreate, null, request.Observaciones, cancellationToken);
-        return ToSupplier(rowToCreate);
+        EnsureCanManage(user); ValidateSupplier(request);
+        var taxId = NormalizeCode(request.Rut)!;
+        if (await _db.Suppliers.AnyAsync(x => x.TaxId == taxId, ct)) throw new DomainException($"Ya existe el proveedor '{taxId}'.");
+        var entity = Apply(request, new SupplierEntity { TaxId = taxId });
+        _db.Suppliers.Add(entity);
+        await _db.SaveChangesAsync(ct);
+        await AuditAsync(user, "procurement.supplier_created", "Supplier", taxId, entity, null, request.Observaciones, ct);
+        return ToResponse(entity);
     }
 
-    public async Task<SupplierResponse?> UpdateSupplierAsync(
-        string rut,
-        UpsertSupplierRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<SupplierResponse?> UpdateSupplierAsync(string rut, UpsertSupplierRequest request, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        ValidateSupplier(request);
-
-        var rows = (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken)).ToList();
-        var index = rows.FindIndex(row => Same(row.GetValue("Rut"), rut));
-        if (index < 0)
-        {
-            return null;
-        }
-
-        if (!Same(rut, request.Rut) && rows.Any(row => Same(row.GetValue("Rut"), request.Rut)))
-        {
-            throw new DomainException($"Ya existe el proveedor '{request.Rut}'.");
-        }
-
-        var previous = rows[index];
-        var updated = SupplierRow(request);
-        rows[index] = updated;
-        await _dbContext.SaveOperationalRowsAsync(SuppliersSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "procurement.supplier_updated", "Supplier", request.Rut, previous, updated, null, request.Observaciones, cancellationToken);
-        return ToSupplier(updated);
+        EnsureCanManage(user); ValidateSupplier(request);
+        var entity = await _db.Suppliers.SingleOrDefaultAsync(x => x.TaxId == NormalizeCode(rut), ct);
+        if (entity is null) return null;
+        var taxId = NormalizeCode(request.Rut)!;
+        if (taxId != entity.TaxId && await _db.Suppliers.AnyAsync(x => x.TaxId == taxId, ct)) throw new DomainException($"Ya existe el proveedor '{taxId}'.");
+        entity = Apply(request, entity); entity.TaxId = taxId; entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        await AuditAsync(user, "procurement.supplier_updated", "Supplier", taxId, entity, null, request.Observaciones, ct);
+        return ToResponse(entity);
     }
 
-    public async Task<IReadOnlyCollection<ProcurementRequestResponse>> ListRequestsAsync(
-        ProcurementRequestQuery query,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<IReadOnlyCollection<ProcurementRequestResponse>> ListRequestsAsync(ProcurementRequestQuery query, UserAccessContext user, CancellationToken ct)
     {
         EnsureCanView(user);
-        var suppliers = await SupplierDictionaryAsync(cancellationToken);
-
-        return (await _dbContext.ReadOperationalRowsAsync(RequestsSchema, cancellationToken))
-            .Select(row => ToRequest(row, suppliers))
-            .Where(item => query.IncludeClosed || item.Estado is not (ProcurementRequestStatus.Cerrada or ProcurementRequestStatus.Cancelada))
-            .Where(item => !query.Status.HasValue || item.Estado == query.Status)
-            .Where(item => string.IsNullOrWhiteSpace(query.SupplierRut) || Same(item.ProveedorRut, query.SupplierRut))
-            .Where(item => string.IsNullOrWhiteSpace(query.FaenaCodigo) || Same(item.FaenaCodigo, query.FaenaCodigo))
-            .Where(item => string.IsNullOrWhiteSpace(query.RepuestoCodigo) || Same(item.RepuestoCodigo, query.RepuestoCodigo))
-            .Where(item => string.IsNullOrWhiteSpace(query.SolicitudInternaCmms) || Same(item.SolicitudInternaCmms, query.SolicitudInternaCmms))
-            .Where(item => !query.OverdueOnly || item.EstaVencida)
-            .Where(item => CanAccessFaena(user, item.FaenaCodigo))
-            .OrderByDescending(item => item.FechaEnvioAbastecimiento)
-            .ToArray();
+        var requests = RequestQuery();
+        if (!query.IncludeClosed) requests = requests.Where(x => x.Status != (int)ProcurementRequestStatus.Cerrada && x.Status != (int)ProcurementRequestStatus.Cancelada);
+        if (query.Status is not null) requests = requests.Where(x => x.Status == (int)query.Status.Value);
+        if (!string.IsNullOrWhiteSpace(query.SupplierRut)) requests = requests.Where(x => x.PurchaseOrders.Any(po => po.Supplier.TaxId == NormalizeCode(query.SupplierRut)));
+        if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) requests = requests.Where(x => x.Faena != null && x.Faena.Code == NormalizeCode(query.FaenaCodigo));
+        if (!string.IsNullOrWhiteSpace(query.RepuestoCodigo)) requests = requests.Where(x => x.Lines.Any(l => l.SparePart != null && l.SparePart.Code == NormalizeCode(query.RepuestoCodigo)));
+        if (!string.IsNullOrWhiteSpace(query.SolicitudInternaCmms)) requests = requests.Where(x => x.MaterialRequest != null && x.MaterialRequest.RequestNumber == NormalizeCode(query.SolicitudInternaCmms));
+        var results = (await requests.OrderByDescending(x => x.SentToProcurementAtUtc).ToListAsync(ct)).Select(ToResponse).Where(x => CanAccessFaena(user, x.FaenaCodigo));
+        return query.OverdueOnly ? results.Where(x => x.EstaVencida).ToArray() : results.ToArray();
     }
 
-    public async Task<ProcurementRequestResponse?> GetRequestAsync(
-        string id,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<ProcurementRequestResponse?> GetRequestAsync(string id, UserAccessContext user, CancellationToken ct)
     {
         EnsureCanView(user);
-        var suppliers = await SupplierDictionaryAsync(cancellationToken);
-        var row = (await _dbContext.ReadOperationalRowsAsync(RequestsSchema, cancellationToken))
-            .FirstOrDefault(item => Same(item.GetValue("SolicitudId"), id));
-        if (row is null)
-        {
-            return null;
-        }
-
-        var response = ToRequest(row, suppliers);
-        EnsureFaenaAccess(user, response.FaenaCodigo);
-        return response;
+        var entity = await RequestQuery().SingleOrDefaultAsync(x => x.RequestNumber == NormalizeCode(id), ct);
+        if (entity is null) return null;
+        var response = ToResponse(entity); EnsureFaenaAccess(user, response.FaenaCodigo); return response;
     }
 
-    public async Task<ProcurementRequestResponse> CreateRequestAsync(
-        CreateProcurementRequestRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<ProcurementRequestResponse> CreateRequestAsync(CreateProcurementRequestRequest request, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-
-        var materialRequest = string.IsNullOrWhiteSpace(request.SolicitudInternaCmms)
-            ? null
-            : await FindMaterialRequestAsync(request.SolicitudInternaCmms, cancellationToken);
-
+        EnsureCanManage(user); EnsurePositive(request.Cantidad); Required(request.Descripcion, nameof(request.Descripcion)); Required(request.Unidad, nameof(request.Unidad)); Required(request.Motivo, nameof(request.Motivo));
+        var faena = await FindOptionalAsync(_db.Faenas, request.FaenaCodigo, x => x.Code, "faena", ct); EnsureFaenaAccess(user, faena?.Code);
+        var warehouse = await FindOptionalAsync(_db.Warehouses, request.BodegaCodigo, x => x.Code, "bodega", ct);
+        var asset = await FindOptionalAsync(_db.Assets, request.ActivoCodigo, x => x.Code, "activo", ct);
+        var workOrder = await FindOptionalAsync(_db.WorkOrders, request.OtNumero, x => x.WorkOrderNumber, "OT", ct);
+        var sparePart = await FindOptionalAsync(_db.SpareParts, request.RepuestoCodigo, x => x.Code, "repuesto", ct);
+        var materialRequest = string.IsNullOrWhiteSpace(request.SolicitudInternaCmms) ? null : await _db.MaterialRequests.SingleOrDefaultAsync(x => x.RequestNumber == NormalizeCode(request.SolicitudInternaCmms), ct);
         var now = DateTimeOffset.UtcNow;
-        var fechaEnvioAbastecimiento = request.FechaEnvioAbastecimiento ?? now;
-        var description = FirstNonEmpty(request.Descripcion, materialRequest?.GetValue("DescripcionTecnica"));
-        var quantity = request.Cantidad > 0 ? request.Cantidad : ParseDecimal(materialRequest?.GetValue("Cantidad"));
-        var unit = FirstNonEmpty(request.Unidad, materialRequest?.GetValue("Unidad"));
-        var faena = FirstNonEmpty(request.FaenaCodigo, materialRequest?.GetValue("FaenaCodigo"));
-        EnsureFaenaAccess(user, faena);
-
-        ValidateRequired(description, nameof(request.Descripcion));
-        ValidateRequired(unit, nameof(request.Unidad));
-        ValidateRequired(request.Motivo, nameof(request.Motivo));
-        EnsurePositive(quantity);
-
-        var rows = (await _dbContext.ReadOperationalRowsAsync(RequestsSchema, cancellationToken)).ToList();
-        var id = NextRequestId(rows);
-        var fechaSolicitudTecnica = request.FechaSolicitudTecnica
-            ?? ParseDate(materialRequest?.GetValue("SolicitadoEnUtc"))
-            ?? now;
-        var fechaAprobacion = request.FechaAprobacionMantenimiento
-            ?? ParseDate(materialRequest?.GetValue("AprobadoMantenimientoEnUtc"));
-
-        var row = RequestRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        var entity = new ProcurementRequestEntity
         {
-            ["SolicitudId"] = id,
-            ["Estado"] = ProcurementRequestStatus.EnviadaAbastecimiento.ToString(),
-            ["SolicitudInternaCmms"] = NormalizeCode(request.SolicitudInternaCmms),
-            ["SolicitudExternaNumero"] = NormalizeText(request.SolicitudExternaNumero),
-            ["RepuestoCodigo"] = NormalizeCode(FirstNonEmpty(request.RepuestoCodigo, materialRequest?.GetValue("RepuestoMaestroCodigo"), materialRequest?.GetValue("RepuestoCodigo"))),
-            ["Descripcion"] = description,
-            ["Cantidad"] = FormatNumber(quantity),
-            ["Unidad"] = unit,
-            ["CantidadRecibida"] = "0",
-            ["CantidadEntregada"] = "0",
-            ["FaenaCodigo"] = NormalizeCode(faena),
-            ["BodegaCodigo"] = NormalizeCode(FirstNonEmpty(request.BodegaCodigo, materialRequest?.GetValue("BodegaCodigo"))),
-            ["OtNumero"] = NormalizeText(FirstNonEmpty(request.OtNumero, materialRequest?.GetValue("OT"))),
-            ["ActivoCodigo"] = NormalizeText(FirstNonEmpty(request.ActivoCodigo, materialRequest?.GetValue("ActivoCodigo"))),
-            ["Motivo"] = NormalizeText(request.Motivo),
-            ["FechaSolicitudTecnica"] = FormatDate(fechaSolicitudTecnica),
-            ["FechaAprobacionMantenimiento"] = fechaAprobacion is null ? null : FormatDate(fechaAprobacion.Value),
-            ["FechaEnvioAbastecimiento"] = FormatDate(fechaEnvioAbastecimiento),
-            ["CostoEstimado"] = FormatOptionalNumber(request.CostoEstimado),
-            ["Moneda"] = NormalizeText(request.Moneda) ?? "CLP",
-            ["DocumentoRespaldoUrl"] = NormalizeText(request.DocumentoRespaldoUrl),
-            ["CreadoPor"] = user.UserId,
-            ["CreadoEnUtc"] = FormatDate(now),
-            ["Observaciones"] = "Solicitud enviada a abastecimiento"
+            RequestNumber = await NextRequestNumberAsync(ct), Status = (int)ProcurementRequestStatus.EnviadaAbastecimiento,
+            MaterialRequestId = materialRequest?.Id, FaenaId = faena?.Id, WarehouseId = warehouse?.Id, AssetId = asset?.Id, WorkOrderId = workOrder?.Id,
+            Reason = request.Motivo.Trim(), TechnicalRequestedAtUtc = request.FechaSolicitudTecnica ?? now, MaintenanceApprovedAtUtc = request.FechaAprobacionMantenimiento,
+            SentToProcurementAtUtc = request.FechaEnvioAbastecimiento ?? now, CreatedByUserId = user.UserId
+        };
+        entity.Lines.Add(new ProcurementRequestLineEntity
+        {
+            SparePartId = sparePart?.Id, ExternalRequestNumber = Text(request.SolicitudExternaNumero), Description = request.Descripcion.Trim(), RequestedQuantity = request.Cantidad,
+            Unit = request.Unidad.Trim(), EstimatedCost = request.CostoEstimado, Currency = Text(request.Moneda) ?? "CLP", SupportingDocumentUrl = Text(request.DocumentoRespaldoUrl), Notes = "Solicitud enviada a abastecimiento"
         });
-
-        rows.Add(row);
-        await _dbContext.SaveOperationalRowsAsync(RequestsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, "procurement.request_created", "ProcurementRequest", id, null, row, faena, request.Motivo, cancellationToken);
-        return ToRequest(row, await SupplierDictionaryAsync(cancellationToken));
+        _db.ProcurementRequests.Add(entity); await _db.SaveChangesAsync(ct);
+        var response = ToResponse(await RequestQuery().SingleAsync(x => x.Id == entity.Id, ct));
+        await AuditAsync(user, "procurement.request_created", "ProcurementRequest", response.SolicitudId, response, response.FaenaCodigo, request.Motivo, ct); return response;
     }
 
-    public async Task<ProcurementRequestResponse?> LinkPurchaseOrderAsync(
-        string id,
-        LinkPurchaseOrderRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<ProcurementRequestResponse?> LinkPurchaseOrderAsync(string id, LinkPurchaseOrderRequest request, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        ValidateRequired(request.OcNumero, nameof(request.OcNumero));
-        ValidateRequired(request.ProveedorRut, nameof(request.ProveedorRut));
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        if (await GetSupplierAsync(request.ProveedorRut, user, cancellationToken) is null)
+        EnsureCanManage(user); Required(request.OcNumero, nameof(request.OcNumero)); Required(request.ProveedorRut, nameof(request.ProveedorRut)); Required(request.Reason, nameof(request.Reason));
+        _db.ChangeTracker.Clear();
+        var entity = await RequestQuery().SingleOrDefaultAsync(x => x.RequestNumber == NormalizeCode(id), ct); if (entity is null) return null;
+        EnsureFaenaAccess(user, entity.Faena?.Code);
+        var supplier = await _db.Suppliers.SingleOrDefaultAsync(x => x.TaxId == NormalizeCode(request.ProveedorRut), ct) ?? throw new DomainException($"El proveedor '{request.ProveedorRut}' no existe.");
+        if (entity.PurchaseOrders.Any(x => x.PurchaseOrderNumber == NormalizeCode(request.OcNumero))) throw new DomainException("La OC ya esta asociada a la solicitud.");
+        var order = new PurchaseOrderEntity { PurchaseOrderNumber = NormalizeCode(request.OcNumero)!, ProcurementRequestId = entity.Id, SupplierId = supplier.Id, OrderedAtUtc = request.FechaOC ?? DateTimeOffset.UtcNow, PromisedAtUtc = request.FechaComprometida, Cost = request.CostoOC, Currency = Text(request.Moneda) ?? entity.Lines.First().Currency, DocumentUrl = Text(request.DocumentoOcUrl), CreatedByUserId = user.UserId, Reason = request.Reason.Trim() };
+        foreach (var line in entity.Lines) order.Lines.Add(new PurchaseOrderLineEntity { ProcurementRequestLineId = line.Id, Quantity = line.RequestedQuantity, UnitCost = request.CostoOC.HasValue ? request.CostoOC / line.RequestedQuantity : null });
+        _db.PurchaseOrders.Add(order); entity.Status = (int)ProcurementRequestStatus.OCAsociada; entity.UpdatedAtUtc = DateTimeOffset.UtcNow; entity.UpdatedByUserId = user.UserId;
+        await _db.SaveChangesAsync(ct);
+        var response = ToResponse(await RequestQuery().SingleAsync(x => x.Id == entity.Id, ct)); await AuditAsync(user, "procurement.purchase_order_linked", "ProcurementRequest", response.SolicitudId, response, response.FaenaCodigo, request.Reason, ct); return response;
+    }
+
+    public async Task<ProcurementRequestResponse?> RegisterReceptionAsync(string id, RegisterProcurementReceptionRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        EnsureCanManage(user); Required(request.BodegaCodigo, nameof(request.BodegaCodigo)); Required(request.Reason, nameof(request.Reason)); EnsurePositive(request.CantidadRecibida);
+        _db.ChangeTracker.Clear();
+        var entity = await RequestQuery().SingleOrDefaultAsync(x => x.RequestNumber == NormalizeCode(id), ct); if (entity is null) return null;
+        EnsureFaenaAccess(user, entity.Faena?.Code); var order = entity.PurchaseOrders.OrderByDescending(x => x.OrderedAtUtc).FirstOrDefault() ?? throw new DomainException("Debe asociar una OC antes de registrar recepcion.");
+        var warehouse = await _db.Warehouses.SingleOrDefaultAsync(x => x.Code == NormalizeCode(request.BodegaCodigo), ct) ?? throw new DomainException($"La bodega '{request.BodegaCodigo}' no existe.");
+        var line = entity.Lines.Single(); if (line.ReceivedQuantity + request.CantidadRecibida > line.RequestedQuantity) throw new DomainException("La recepcion no puede superar la cantidad solicitada.");
+        string? receptionNumber = null; string? deliveryNumber = null;
+        if (line.SparePart is not null)
         {
-            throw new DomainException($"El proveedor '{request.ProveedorRut}' no existe.");
+            var received = await _inventory.RegisterMovementAsync(new StockMovementRequest(StockMovementType.Reception, line.SparePart.Code, request.CantidadRecibida, $"Abastecimiento {entity.RequestNumber}: {request.Reason}", BodegaCodigo: warehouse.Code, ReferenceType: "Abastecimiento", ReferenceId: entity.RequestNumber), user, ct); receptionNumber = received.MovimientoId;
+            if (request.DespachoDirectoOt) { var delivered = await _inventory.DeliverMaterialAsync(new DeliverMaterialRequest(line.SparePart.Code, warehouse.Code, request.CantidadRecibida, $"Despacho directo {entity.RequestNumber}: {request.Reason}", request.OtNumero ?? entity.WorkOrder?.WorkOrderNumber, request.ActivoCodigo ?? entity.Asset?.Code, request.FaenaCodigo ?? entity.Faena?.Code), user, ct); deliveryNumber = delivered.MovimientoId; }
         }
-
-        var result = await UpdateRequestAsync(id, user, cancellationToken, async (current, values) =>
-        {
-            values["Estado"] = ProcurementRequestStatus.OCAsociada.ToString();
-            values["SolicitudExternaNumero"] = NormalizeText(request.SolicitudExternaNumero) ?? current.SolicitudExternaNumero;
-            values["OcNumero"] = NormalizeCode(request.OcNumero);
-            values["ProveedorRut"] = NormalizeCode(request.ProveedorRut);
-            values["FechaOC"] = FormatDate(request.FechaOC ?? DateTimeOffset.UtcNow);
-            values["FechaComprometida"] = FormatDate(request.FechaComprometida);
-            values["CostoOC"] = FormatOptionalNumber(request.CostoOC);
-            values["Moneda"] = NormalizeText(request.Moneda) ?? current.Moneda;
-            values["DocumentoOcUrl"] = NormalizeText(request.DocumentoOcUrl);
-            values["ActualizadoPor"] = user.UserId;
-            values["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow);
-            values["Observaciones"] = Append(values.GetValueOrDefault("Observaciones"), $"OC {request.OcNumero}: {request.Reason}");
-
-            var purchaseOrderRows = (await _dbContext.ReadOperationalRowsAsync(PurchaseOrdersSchema, cancellationToken)).ToList();
-            var purchaseOrderRow = PurchaseOrderRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["OrdenCompraId"] = $"OCREF-{Guid.NewGuid():N}"[..16].ToUpperInvariant(),
-                ["SolicitudId"] = current.SolicitudId,
-                ["SolicitudExternaNumero"] = NormalizeText(request.SolicitudExternaNumero) ?? current.SolicitudExternaNumero,
-                ["OcNumero"] = NormalizeCode(request.OcNumero),
-                ["ProveedorRut"] = NormalizeCode(request.ProveedorRut),
-                ["FechaOC"] = FormatDate(request.FechaOC ?? DateTimeOffset.UtcNow),
-                ["FechaComprometida"] = FormatDate(request.FechaComprometida),
-                ["CostoOC"] = FormatOptionalNumber(request.CostoOC),
-                ["Moneda"] = NormalizeText(request.Moneda) ?? current.Moneda,
-                ["DocumentoOcUrl"] = NormalizeText(request.DocumentoOcUrl),
-                ["UsuarioId"] = user.UserId,
-                ["Motivo"] = request.Reason,
-                ["CreadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow)
-            });
-            purchaseOrderRows.Add(purchaseOrderRow);
-            await _dbContext.SaveOperationalRowsAsync(PurchaseOrdersSchema, purchaseOrderRows, cancellationToken);
-            return ("procurement.purchase_order_linked", request.Reason);
-        });
-
-        return result;
+        else if (request.DespachoDirectoOt) throw new DomainException("El despacho directo requiere repuesto codificado.");
+        var receipt = new ProcurementReceiptEntity { ProcurementRequestId = entity.Id, PurchaseOrderId = order.Id, WarehouseId = warehouse.Id, ReceivedAtUtc = request.FechaRecepcion ?? DateTimeOffset.UtcNow, DirectDispatchToWorkOrder = request.DespachoDirectoOt, ActualCost = request.CostoReal, ReceptionDocumentUrl = Text(request.DocumentoRecepcionUrl), DeliveryDocumentUrl = Text(request.DocumentoEntregaUrl), CreatedByUserId = user.UserId, Reason = request.Reason.Trim(), ReceptionMovementId = await MovementIdAsync(receptionNumber, ct), DeliveryMovementId = await MovementIdAsync(deliveryNumber, ct) };
+        receipt.Lines.Add(new ProcurementReceiptLineEntity { ProcurementRequestLineId = line.Id, ReceivedQuantity = request.CantidadRecibida, DeliveredQuantity = request.DespachoDirectoOt ? request.CantidadRecibida : 0 }); _db.ProcurementReceipts.Add(receipt);
+        line.ReceivedQuantity += request.CantidadRecibida; if (request.DespachoDirectoOt) line.DeliveredQuantity += request.CantidadRecibida; entity.WarehouseId = warehouse.Id; entity.Status = (int)ResolveStatus(line); entity.UpdatedAtUtc = DateTimeOffset.UtcNow; entity.UpdatedByUserId = user.UserId;
+        await _db.SaveChangesAsync(ct); var response = ToResponse(await RequestQuery().SingleAsync(x => x.Id == entity.Id, ct)); await AuditAsync(user, "procurement.reception_registered", "ProcurementRequest", response.SolicitudId, response, response.FaenaCodigo, request.Reason, ct); return response;
     }
 
-    public async Task<ProcurementRequestResponse?> RegisterReceptionAsync(
-        string id,
-        RegisterProcurementReceptionRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    public async Task<ProcurementRequestResponse?> RegisterDeliveryAsync(string id, DeliverProcurementRequest request, UserAccessContext user, CancellationToken ct)
     {
-        EnsureCanManage(user);
-        ValidateRequired(request.BodegaCodigo, nameof(request.BodegaCodigo));
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        EnsurePositive(request.CantidadRecibida);
-
-        return await UpdateRequestAsync(id, user, cancellationToken, async (current, values) =>
-        {
-            if (string.IsNullOrWhiteSpace(current.OcNumero))
-            {
-                throw new DomainException("Debe asociar una OC antes de registrar recepcion.");
-            }
-
-            var fechaRecepcion = request.FechaRecepcion ?? DateTimeOffset.UtcNow;
-            string? movementReceptionId = null;
-            string? movementDeliveryId = null;
-            if (!string.IsNullOrWhiteSpace(current.RepuestoCodigo))
-            {
-                var reception = await _inventoryService.RegisterMovementAsync(
-                    new StockMovementRequest(
-                        StockMovementType.Reception,
-                        current.RepuestoCodigo,
-                        request.CantidadRecibida,
-                        $"Abastecimiento {current.SolicitudId}: {request.Reason}",
-                        BodegaCodigo: request.BodegaCodigo,
-                        ReferenceType: "Abastecimiento",
-                        ReferenceId: current.SolicitudId),
-                    user,
-                    cancellationToken);
-                movementReceptionId = reception.MovimientoId;
-
-                if (request.DespachoDirectoOt)
-                {
-                    var delivery = await _inventoryService.DeliverMaterialAsync(
-                        new DeliverMaterialRequest(
-                            current.RepuestoCodigo,
-                            request.BodegaCodigo,
-                            request.CantidadRecibida,
-                            $"Despacho directo {current.SolicitudId}: {request.Reason}",
-                            WorkOrderId: FirstNonEmpty(request.OtNumero, current.OtNumero),
-                            AssetCode: FirstNonEmpty(request.ActivoCodigo, current.ActivoCodigo),
-                            FaenaCodigo: FirstNonEmpty(request.FaenaCodigo, current.FaenaCodigo)),
-                        user,
-                        cancellationToken);
-                    movementDeliveryId = delivery.MovimientoId;
-                }
-            }
-            else if (request.DespachoDirectoOt)
-            {
-                throw new DomainException("El despacho directo requiere repuesto codificado.");
-            }
-
-            var received = current.CantidadRecibida + request.CantidadRecibida;
-            var delivered = current.CantidadEntregada + (request.DespachoDirectoOt ? request.CantidadRecibida : 0);
-            values["CantidadRecibida"] = FormatNumber(received);
-            values["CantidadEntregada"] = FormatNumber(delivered);
-            values["BodegaCodigo"] = NormalizeCode(request.BodegaCodigo);
-            values["FechaRecepcion"] = values.GetValueOrDefault("FechaRecepcion") ?? FormatDate(fechaRecepcion);
-            values["FechaEntrega"] = request.DespachoDirectoOt
-                ? FormatDate(request.FechaEntrega ?? fechaRecepcion)
-                : values.GetValueOrDefault("FechaEntrega");
-            values["CostoReal"] = FormatOptionalNumber(request.CostoReal) ?? values.GetValueOrDefault("CostoReal");
-            values["DocumentoRecepcionUrl"] = NormalizeText(request.DocumentoRecepcionUrl) ?? values.GetValueOrDefault("DocumentoRecepcionUrl");
-            values["DocumentoEntregaUrl"] = NormalizeText(request.DocumentoEntregaUrl) ?? values.GetValueOrDefault("DocumentoEntregaUrl");
-            values["Estado"] = ResolveStatus(current.Cantidad, received, delivered, request.DespachoDirectoOt).ToString();
-            values["ActualizadoPor"] = user.UserId;
-            values["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow);
-            values["Observaciones"] = Append(values.GetValueOrDefault("Observaciones"), $"Recepcion {request.CantidadRecibida} {current.Unidad}: {request.Reason}");
-
-            var receiptRows = (await _dbContext.ReadOperationalRowsAsync(ReceiptsSchema, cancellationToken)).ToList();
-            receiptRows.Add(ReceiptRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["RecepcionId"] = $"REC-{Guid.NewGuid():N}"[..16].ToUpperInvariant(),
-                ["SolicitudId"] = current.SolicitudId,
-                ["OcNumero"] = current.OcNumero,
-                ["FechaRecepcion"] = FormatDate(fechaRecepcion),
-                ["CantidadRecibida"] = FormatNumber(request.CantidadRecibida),
-                ["CantidadDespachada"] = FormatNumber(request.DespachoDirectoOt ? request.CantidadRecibida : 0),
-                ["BodegaCodigo"] = NormalizeCode(request.BodegaCodigo),
-                ["DespachoDirectoOt"] = request.DespachoDirectoOt.ToString(CultureInfo.InvariantCulture),
-                ["OtNumero"] = FirstNonEmpty(request.OtNumero, current.OtNumero),
-                ["ActivoCodigo"] = FirstNonEmpty(request.ActivoCodigo, current.ActivoCodigo),
-                ["FaenaCodigo"] = FirstNonEmpty(request.FaenaCodigo, current.FaenaCodigo),
-                ["MovimientoRecepcionId"] = movementReceptionId,
-                ["MovimientoEntregaId"] = movementDeliveryId,
-                ["CostoReal"] = FormatOptionalNumber(request.CostoReal),
-                ["DocumentoRecepcionUrl"] = NormalizeText(request.DocumentoRecepcionUrl),
-                ["DocumentoEntregaUrl"] = NormalizeText(request.DocumentoEntregaUrl),
-                ["UsuarioId"] = user.UserId,
-                ["Motivo"] = request.Reason
-            }));
-            await _dbContext.SaveOperationalRowsAsync(ReceiptsSchema, receiptRows, cancellationToken);
-            return ("procurement.reception_registered", request.Reason);
-        });
+        EnsureCanManage(user); Required(request.BodegaCodigo, nameof(request.BodegaCodigo)); Required(request.Reason, nameof(request.Reason)); EnsurePositive(request.CantidadEntregada);
+        _db.ChangeTracker.Clear();
+        var entity = await RequestQuery().SingleOrDefaultAsync(x => x.RequestNumber == NormalizeCode(id), ct); if (entity is null) return null;
+        EnsureFaenaAccess(user, entity.Faena?.Code); var line = entity.Lines.Single(); if (line.SparePart is null) throw new DomainException("La entrega requiere repuesto codificado."); if (line.DeliveredQuantity + request.CantidadEntregada > line.ReceivedQuantity) throw new DomainException("La entrega no puede superar lo recibido.");
+        var warehouse = await _db.Warehouses.SingleOrDefaultAsync(x => x.Code == NormalizeCode(request.BodegaCodigo), ct) ?? throw new DomainException($"La bodega '{request.BodegaCodigo}' no existe.");
+        var movement = await _inventory.DeliverMaterialAsync(new DeliverMaterialRequest(line.SparePart.Code, warehouse.Code, request.CantidadEntregada, $"Entrega abastecimiento {entity.RequestNumber}: {request.Reason}", request.OtNumero ?? entity.WorkOrder?.WorkOrderNumber, request.ActivoCodigo ?? entity.Asset?.Code, request.FaenaCodigo ?? entity.Faena?.Code), user, ct);
+        var receipt = new ProcurementReceiptEntity { ProcurementRequestId = entity.Id, PurchaseOrderId = entity.PurchaseOrders.OrderByDescending(x => x.OrderedAtUtc).FirstOrDefault()?.Id, WarehouseId = warehouse.Id, ReceivedAtUtc = request.FechaEntrega ?? DateTimeOffset.UtcNow, DeliveryDocumentUrl = Text(request.DocumentoEntregaUrl), CreatedByUserId = user.UserId, Reason = request.Reason.Trim(), DeliveryMovementId = await MovementIdAsync(movement.MovimientoId, ct) }; receipt.Lines.Add(new ProcurementReceiptLineEntity { ProcurementRequestLineId = line.Id, DeliveredQuantity = request.CantidadEntregada }); _db.ProcurementReceipts.Add(receipt);
+        line.DeliveredQuantity += request.CantidadEntregada; entity.WarehouseId = warehouse.Id; entity.Status = (int)ResolveStatus(line); entity.UpdatedAtUtc = DateTimeOffset.UtcNow; entity.UpdatedByUserId = user.UserId;
+        await _db.SaveChangesAsync(ct); var response = ToResponse(await RequestQuery().SingleAsync(x => x.Id == entity.Id, ct)); await AuditAsync(user, "procurement.delivery_registered", "ProcurementRequest", response.SolicitudId, response, response.FaenaCodigo, request.Reason, ct); return response;
     }
 
-    public async Task<ProcurementRequestResponse?> RegisterDeliveryAsync(
-        string id,
-        DeliverProcurementRequest request,
-        UserAccessContext user,
-        CancellationToken cancellationToken)
+    private IQueryable<ProcurementRequestEntity> RequestQuery() => _db.ProcurementRequests.Include(x => x.Faena).Include(x => x.Warehouse).Include(x => x.Asset).Include(x => x.WorkOrder).Include(x => x.MaterialRequest).Include(x => x.Lines).ThenInclude(x => x.SparePart).Include(x => x.PurchaseOrders).ThenInclude(x => x.Supplier).Include(x => x.Receipts).ThenInclude(x => x.Lines);
+    private static SupplierEntity Apply(UpsertSupplierRequest r, SupplierEntity e) { e.Name = r.Nombre.Trim(); e.Contact = Text(r.Contacto); e.Email = Text(r.Email); e.Phone = Text(r.Telefono); e.Address = Text(r.Direccion); e.ExpectedLeadTimeDays = r.LeadTimeEsperadoDias ?? 0; e.IsActive = r.Activo; e.Notes = Text(r.Observaciones); return e; }
+    private static SupplierResponse ToResponse(SupplierEntity e) => new(e.TaxId, e.Name, e.Contact, e.Email, e.Phone, e.Address, e.ExpectedLeadTimeDays, e.IsActive, e.Notes);
+    private static ProcurementRequestResponse ToResponse(ProcurementRequestEntity e)
     {
-        EnsureCanManage(user);
-        ValidateRequired(request.BodegaCodigo, nameof(request.BodegaCodigo));
-        ValidateRequired(request.Reason, nameof(request.Reason));
-        EnsurePositive(request.CantidadEntregada);
-
-        return await UpdateRequestAsync(id, user, cancellationToken, async (current, values) =>
-        {
-            if (string.IsNullOrWhiteSpace(current.RepuestoCodigo))
-            {
-                throw new DomainException("La entrega requiere repuesto codificado.");
-            }
-
-            var availableToDeliver = current.CantidadRecibida - current.CantidadEntregada;
-            if (request.CantidadEntregada > availableToDeliver)
-            {
-                throw new DomainException("La cantidad a entregar excede lo recibido pendiente de despacho.");
-            }
-
-            var fechaEntrega = request.FechaEntrega ?? DateTimeOffset.UtcNow;
-            var movement = await _inventoryService.DeliverMaterialAsync(
-                new DeliverMaterialRequest(
-                    current.RepuestoCodigo,
-                    request.BodegaCodigo,
-                    request.CantidadEntregada,
-                    $"Entrega abastecimiento {current.SolicitudId}: {request.Reason}",
-                    WorkOrderId: FirstNonEmpty(request.OtNumero, current.OtNumero),
-                    AssetCode: FirstNonEmpty(request.ActivoCodigo, current.ActivoCodigo),
-                    FaenaCodigo: FirstNonEmpty(request.FaenaCodigo, current.FaenaCodigo)),
-                user,
-                cancellationToken);
-
-            var delivered = current.CantidadEntregada + request.CantidadEntregada;
-            values["CantidadEntregada"] = FormatNumber(delivered);
-            values["FechaEntrega"] = FormatDate(fechaEntrega);
-            values["DocumentoEntregaUrl"] = NormalizeText(request.DocumentoEntregaUrl) ?? values.GetValueOrDefault("DocumentoEntregaUrl");
-            values["Estado"] = ResolveStatus(current.Cantidad, current.CantidadRecibida, delivered, true).ToString();
-            values["ActualizadoPor"] = user.UserId;
-            values["ActualizadoEnUtc"] = FormatDate(DateTimeOffset.UtcNow);
-            values["Observaciones"] = Append(values.GetValueOrDefault("Observaciones"), $"Entrega {request.CantidadEntregada} {current.Unidad}: {request.Reason}");
-
-            var receiptRows = (await _dbContext.ReadOperationalRowsAsync(ReceiptsSchema, cancellationToken)).ToList();
-            receiptRows.Add(ReceiptRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["RecepcionId"] = $"DESP-{Guid.NewGuid():N}"[..16].ToUpperInvariant(),
-                ["SolicitudId"] = current.SolicitudId,
-                ["OcNumero"] = current.OcNumero,
-                ["FechaRecepcion"] = FormatDate(current.FechaRecepcion ?? fechaEntrega),
-                ["CantidadRecibida"] = "0",
-                ["CantidadDespachada"] = FormatNumber(request.CantidadEntregada),
-                ["BodegaCodigo"] = NormalizeCode(request.BodegaCodigo),
-                ["DespachoDirectoOt"] = "False",
-                ["OtNumero"] = FirstNonEmpty(request.OtNumero, current.OtNumero),
-                ["ActivoCodigo"] = FirstNonEmpty(request.ActivoCodigo, current.ActivoCodigo),
-                ["FaenaCodigo"] = FirstNonEmpty(request.FaenaCodigo, current.FaenaCodigo),
-                ["MovimientoEntregaId"] = movement.MovimientoId,
-                ["DocumentoEntregaUrl"] = NormalizeText(request.DocumentoEntregaUrl),
-                ["UsuarioId"] = user.UserId,
-                ["Motivo"] = request.Reason
-            }));
-            await _dbContext.SaveOperationalRowsAsync(ReceiptsSchema, receiptRows, cancellationToken);
-            return ("procurement.delivery_registered", request.Reason);
-        });
+        var line = e.Lines.Single(); var order = e.PurchaseOrders.OrderByDescending(x => x.OrderedAtUtc).FirstOrDefault(); var receipts = e.Receipts.OrderBy(x => x.ReceivedAtUtc).ToArray(); var lastReceipt = receipts.LastOrDefault(); var actual = receipts.Select(x => x.ActualCost).LastOrDefault(x => x.HasValue); var status = (ProcurementRequestStatus)e.Status; var closed = status is ProcurementRequestStatus.Entregada or ProcurementRequestStatus.Cerrada or ProcurementRequestStatus.Cancelada; var overdue = order is not null && order.PromisedAtUtc.Date < DateTimeOffset.UtcNow.Date && !closed;
+        return new(e.RequestNumber, status, e.MaterialRequest?.RequestNumber, line.ExternalRequestNumber, order?.PurchaseOrderNumber, order?.Supplier?.TaxId, order?.Supplier?.Name, line.SparePart?.Code, line.Description, line.RequestedQuantity, line.Unit, line.ReceivedQuantity, line.DeliveredQuantity, e.Faena?.Code, e.Warehouse?.Code, e.WorkOrder?.WorkOrderNumber, e.Asset?.Code, e.Reason, e.TechnicalRequestedAtUtc, e.MaintenanceApprovedAtUtc, e.SentToProcurementAtUtc, order?.OrderedAtUtc, order?.PromisedAtUtc, receipts.FirstOrDefault(x => x.Lines.Any(l => l.ReceivedQuantity > 0))?.ReceivedAtUtc, receipts.FirstOrDefault(x => x.Lines.Any(l => l.DeliveredQuantity > 0))?.ReceivedAtUtc, line.EstimatedCost, order?.Cost, actual, order?.Currency ?? line.Currency, line.SupportingDocumentUrl, order?.DocumentUrl, lastReceipt?.ReceptionDocumentUrl, lastReceipt?.DeliveryDocumentUrl, LeadTime(e.TechnicalRequestedAtUtc, e.MaintenanceApprovedAtUtc, e.SentToProcurementAtUtc, order?.OrderedAtUtc, receipts.FirstOrDefault(x => x.Lines.Any(l => l.ReceivedQuantity > 0))?.ReceivedAtUtc, receipts.FirstOrDefault(x => x.Lines.Any(l => l.DeliveredQuantity > 0))?.ReceivedAtUtc), overdue, e.CreatedByUserId, e.CreatedAtUtc, e.UpdatedByUserId, e.UpdatedAtUtc, line.Notes);
     }
-
-    private async Task<ProcurementRequestResponse?> UpdateRequestAsync(
-        string id,
-        UserAccessContext user,
-        CancellationToken cancellationToken,
-        Func<ProcurementRequestResponse, Dictionary<string, string?>, Task<(string Action, string? Reason)>> mutate)
-    {
-        var suppliers = await SupplierDictionaryAsync(cancellationToken);
-        var rows = (await _dbContext.ReadOperationalRowsAsync(RequestsSchema, cancellationToken)).ToList();
-        var index = rows.FindIndex(row => Same(row.GetValue("SolicitudId"), id));
-        if (index < 0)
-        {
-            return null;
-        }
-
-        var previous = rows[index];
-        var current = ToRequest(previous, suppliers);
-        EnsureFaenaAccess(user, current.FaenaCodigo);
-        var values = CopyRequest(previous);
-        var (action, reason) = await mutate(current, values);
-        var updated = RequestRow(values);
-        rows[index] = updated;
-        await _dbContext.SaveOperationalRowsAsync(RequestsSchema, rows, cancellationToken);
-        await RecordAuditAsync(user, action, "ProcurementRequest", current.SolicitudId, previous, updated, current.FaenaCodigo, reason, cancellationToken, AuditSeverity.High);
-        return ToRequest(updated, await SupplierDictionaryAsync(cancellationToken));
-    }
-
-    private async Task<Dictionary<string, SupplierResponse>> SupplierDictionaryAsync(CancellationToken cancellationToken)
-    {
-        return (await _dbContext.ReadOperationalRowsAsync(SuppliersSchema, cancellationToken))
-            .Select(ToSupplier)
-            .ToDictionary(item => item.Rut, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private async Task<DataRow?> FindMaterialRequestAsync(string requestNumber, CancellationToken cancellationToken)
-    {
-        return (await _dbContext.ReadOperationalRowsAsync(MaterialRequestsSchema, cancellationToken))
-            .FirstOrDefault(row => Same(row.GetValue("NumeroSolicitud"), requestNumber));
-    }
-
-    private static SupplierResponse ToSupplier(DataRow row)
-    {
-        return new SupplierResponse(
-            row.GetValue("Rut") ?? string.Empty,
-            row.GetValue("Nombre") ?? string.Empty,
-            EmptyToNull(row.GetValue("Contacto")),
-            EmptyToNull(row.GetValue("Email")),
-            EmptyToNull(row.GetValue("Telefono")),
-            EmptyToNull(row.GetValue("Direccion")),
-            (int)ParseDecimal(row.GetValue("LeadTimeEsperadoDias")),
-            ParseBool(row.GetValue("Activo"), true),
-            EmptyToNull(row.GetValue("Observaciones")));
-    }
-
-    private static ProcurementRequestResponse ToRequest(DataRow row, IReadOnlyDictionary<string, SupplierResponse> suppliers)
-    {
-        var status = ParseEnum(row.GetValue("Estado"), ProcurementRequestStatus.EnviadaAbastecimiento);
-        var supplierRut = EmptyToNull(row.GetValue("ProveedorRut"));
-        suppliers.TryGetValue(supplierRut ?? string.Empty, out var supplier);
-        var fechaSolicitudTecnica = ParseDate(row.GetValue("FechaSolicitudTecnica")) ?? DateTimeOffset.MinValue;
-        var fechaAprobacion = ParseDate(row.GetValue("FechaAprobacionMantenimiento"));
-        var fechaEnvio = ParseDate(row.GetValue("FechaEnvioAbastecimiento")) ?? fechaSolicitudTecnica;
-        var fechaOC = ParseDate(row.GetValue("FechaOC"));
-        var fechaComprometida = ParseDate(row.GetValue("FechaComprometida"));
-        var fechaRecepcion = ParseDate(row.GetValue("FechaRecepcion"));
-        var fechaEntrega = ParseDate(row.GetValue("FechaEntrega"));
-        var leadTime = BuildLeadTime(fechaSolicitudTecnica, fechaAprobacion, fechaEnvio, fechaOC, fechaRecepcion, fechaEntrega);
-        var isClosed = status is ProcurementRequestStatus.Entregada or ProcurementRequestStatus.Cerrada or ProcurementRequestStatus.Cancelada;
-        var isOverdue = fechaComprometida.HasValue && fechaComprometida.Value.UtcDateTime.Date < DateTimeOffset.UtcNow.UtcDateTime.Date && !isClosed;
-
-        return new ProcurementRequestResponse(
-            row.GetValue("SolicitudId") ?? string.Empty,
-            status,
-            EmptyToNull(row.GetValue("SolicitudInternaCmms")),
-            EmptyToNull(row.GetValue("SolicitudExternaNumero")),
-            EmptyToNull(row.GetValue("OcNumero")),
-            supplierRut,
-            supplier?.Nombre,
-            EmptyToNull(row.GetValue("RepuestoCodigo")),
-            row.GetValue("Descripcion") ?? string.Empty,
-            ParseDecimal(row.GetValue("Cantidad")),
-            row.GetValue("Unidad") ?? string.Empty,
-            ParseDecimal(row.GetValue("CantidadRecibida")),
-            ParseDecimal(row.GetValue("CantidadEntregada")),
-            EmptyToNull(row.GetValue("FaenaCodigo")),
-            EmptyToNull(row.GetValue("BodegaCodigo")),
-            EmptyToNull(row.GetValue("OtNumero")),
-            EmptyToNull(row.GetValue("ActivoCodigo")),
-            row.GetValue("Motivo") ?? string.Empty,
-            fechaSolicitudTecnica,
-            fechaAprobacion,
-            fechaEnvio,
-            fechaOC,
-            fechaComprometida,
-            fechaRecepcion,
-            fechaEntrega,
-            ParseOptionalDecimal(row.GetValue("CostoEstimado")),
-            ParseOptionalDecimal(row.GetValue("CostoOC")),
-            ParseOptionalDecimal(row.GetValue("CostoReal")),
-            row.GetValue("Moneda") ?? "CLP",
-            EmptyToNull(row.GetValue("DocumentoRespaldoUrl")),
-            EmptyToNull(row.GetValue("DocumentoOcUrl")),
-            EmptyToNull(row.GetValue("DocumentoRecepcionUrl")),
-            EmptyToNull(row.GetValue("DocumentoEntregaUrl")),
-            leadTime,
-            isOverdue,
-            row.GetValue("CreadoPor") ?? string.Empty,
-            ParseDate(row.GetValue("CreadoEnUtc")) ?? fechaEnvio,
-            EmptyToNull(row.GetValue("ActualizadoPor")),
-            ParseDate(row.GetValue("ActualizadoEnUtc")),
-            EmptyToNull(row.GetValue("Observaciones")));
-    }
-
-    private static DataRow SupplierRow(UpsertSupplierRequest request)
-    {
-        return new DataRow(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Rut"] = NormalizeCode(request.Rut),
-            ["Nombre"] = NormalizeText(request.Nombre),
-            ["Contacto"] = NormalizeText(request.Contacto),
-            ["Email"] = NormalizeText(request.Email),
-            ["Telefono"] = NormalizeText(request.Telefono),
-            ["Direccion"] = NormalizeText(request.Direccion),
-            ["LeadTimeEsperadoDias"] = FormatNumber(request.LeadTimeEsperadoDias ?? 0),
-            ["Activo"] = request.Activo.ToString(CultureInfo.InvariantCulture),
-            ["Observaciones"] = NormalizeText(request.Observaciones)
-        });
-    }
-
-    private static DataRow RequestRow(IReadOnlyDictionary<string, string?> values) => Row(RequestColumns, values);
-
-    private static DataRow PurchaseOrderRow(IReadOnlyDictionary<string, string?> values) => Row(PurchaseOrderColumns, values);
-
-    private static DataRow ReceiptRow(IReadOnlyDictionary<string, string?> values) => Row(ReceiptColumns, values);
-
-    private static DataRow Row(IEnumerable<string> columns, IReadOnlyDictionary<string, string?> values)
-    {
-        return new DataRow(columns.ToDictionary(column => column, column => values.TryGetValue(column, out var value) ? value : null, StringComparer.OrdinalIgnoreCase));
-    }
-
-    private static Dictionary<string, string?> CopyRequest(DataRow row)
-    {
-        return RequestColumns.ToDictionary(column => column, column => row.GetValue(column), StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static ProcurementRequestStatus ResolveStatus(decimal requested, decimal received, decimal delivered, bool deliveryTouched)
-    {
-        if (deliveryTouched && delivered >= requested)
-        {
-            return ProcurementRequestStatus.Entregada;
-        }
-
-        if (received >= requested)
-        {
-            return ProcurementRequestStatus.Recepcionada;
-        }
-
-        return ProcurementRequestStatus.RecepcionParcial;
-    }
-
-    private static LeadTimeBreakdown BuildLeadTime(
-        DateTimeOffset fechaSolicitudTecnica,
-        DateTimeOffset? fechaAprobacion,
-        DateTimeOffset fechaEnvio,
-        DateTimeOffset? fechaOC,
-        DateTimeOffset? fechaRecepcion,
-        DateTimeOffset? fechaEntrega)
-    {
-        var totalEnd = fechaEntrega ?? fechaRecepcion ?? fechaOC ?? fechaEnvio;
-        return new LeadTimeBreakdown(
-            DaysBetween(fechaSolicitudTecnica, fechaAprobacion),
-            DaysBetween(fechaAprobacion, fechaEnvio),
-            DaysBetween(fechaEnvio, fechaOC),
-            DaysBetween(fechaOC, fechaRecepcion),
-            DaysBetween(fechaRecepcion, fechaEntrega),
-            DaysBetween(fechaSolicitudTecnica, totalEnd));
-    }
-
-    private static int? DaysBetween(DateTimeOffset? start, DateTimeOffset? end)
-    {
-        return start.HasValue && end.HasValue
-            ? (end.Value.UtcDateTime.Date - start.Value.UtcDateTime.Date).Days
-            : null;
-    }
-
-    private static void ValidateSupplier(UpsertSupplierRequest request)
-    {
-        ValidateRequired(request.Rut, nameof(request.Rut));
-        ValidateRequired(request.Nombre, nameof(request.Nombre));
-        if (request.LeadTimeEsperadoDias.GetValueOrDefault() < 0)
-        {
-            throw new DomainException("El lead time esperado no puede ser negativo.");
-        }
-    }
-
-    private static void EnsurePositive(decimal value)
-    {
-        if (value <= 0)
-        {
-            throw new DomainException("La cantidad debe ser mayor a cero.");
-        }
-    }
-
-    private static void EnsureCanView(UserAccessContext user)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor, AuthRoles.Warehouse, AuthRoles.WarehouseSupervisor, AuthRoles.Management, AuthRoles.FaenaViewer))
-        {
-            return;
-        }
-
-        throw new UnauthorizedAccessException("No tiene permisos para ver abastecimiento.");
-    }
-
-    private static void EnsureCanManage(UserAccessContext user)
-    {
-        if (HasAnyRole(user, AuthRoles.Admin, AuthRoles.WarehouseSupervisor) ||
-            user.Permissions.Contains(AuthPermissions.AdjustStock, StringComparer.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        throw new UnauthorizedAccessException("La gestion de abastecimiento requiere supervisor de bodega.");
-    }
-
-    private static void EnsureFaenaAccess(UserAccessContext user, string? faenaCodigo)
-    {
-        if (!CanAccessFaena(user, faenaCodigo))
-        {
-            throw new UnauthorizedAccessException("No tiene acceso a la faena de la solicitud.");
-        }
-    }
-
-    private static bool CanAccessFaena(UserAccessContext user, string? faenaCodigo)
-    {
-        return string.IsNullOrWhiteSpace(faenaCodigo)
-            || HasAnyRole(user, AuthRoles.Admin, AuthRoles.Management, AuthRoles.Warehouse, AuthRoles.WarehouseSupervisor)
-            || user.Permissions.Contains(AuthPermissions.ViewGlobalWarehouses, StringComparer.OrdinalIgnoreCase)
-            || user.Faenas.Contains(faenaCodigo, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static bool HasAnyRole(UserAccessContext user, params string[] roles)
-    {
-        return roles.Any(role => user.Roles.Contains(role, StringComparer.OrdinalIgnoreCase));
-    }
-
-    private async Task RecordAuditAsync(
-        UserAccessContext user,
-        string action,
-        string entityName,
-        string entityId,
-        DataRow? previous,
-        DataRow? updated,
-        string? faenaCodigo,
-        string? reason,
-        CancellationToken cancellationToken,
-        AuditSeverity severity = AuditSeverity.Medium)
-    {
-        await _auditService.RecordAsync(new AuditEventRequest(
-            user.UserId,
-            action,
-            AuditModules.Procurement,
-            entityName,
-            entityId,
-            previous is null ? null : Serialize(previous),
-            updated is null ? null : Serialize(updated),
-            faenaCodigo,
-            severity,
-            reason),
-            cancellationToken);
-    }
-
-    private static string NextRequestId(IReadOnlyCollection<DataRow> rows)
-    {
-        var next = rows
-            .Select(row => row.GetValue("SolicitudId"))
-            .Select(value => value is null ? 0 : int.TryParse(value.Replace("AB-", string.Empty, StringComparison.OrdinalIgnoreCase), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0)
-            .DefaultIfEmpty(0)
-            .Max() + 1;
-        return $"AB-{next:000000}";
-    }
-
-    private static bool Contains(string? value, string? search)
-    {
-        return !string.IsNullOrWhiteSpace(value) &&
-               !string.IsNullOrWhiteSpace(search) &&
-               value.Contains(search, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool Same(string? left, string? right) => string.Equals(left?.Trim(), right?.Trim(), StringComparison.OrdinalIgnoreCase);
-
-    private static void ValidateRequired(string? value, string fieldName)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new DomainException($"El campo {fieldName} es obligatorio.");
-        }
-    }
-
-    private static string? NormalizeText(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string? NormalizeCode(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
-
-    private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
-
-    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
-
-    private static string FormatDate(DateTimeOffset value) => value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
-
-    private static string FormatNumber(decimal value) => value.ToString(CultureInfo.InvariantCulture);
-
-    private static string? FormatOptionalNumber(decimal? value) => value.HasValue ? FormatNumber(value.Value) : null;
-
-    private static decimal ParseDecimal(string? value)
-    {
-        return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
-    }
-
-    private static decimal? ParseOptionalDecimal(string? value)
-    {
-        return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
-    }
-
-    private static DateTimeOffset? ParseDate(string? value)
-    {
-        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed) ? parsed : null;
-    }
-
-    private static bool ParseBool(string? value, bool fallback = false)
-    {
-        return bool.TryParse(value, out var parsed) ? parsed : fallback;
-    }
-
-    private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback)
-        where TEnum : struct
-    {
-        return Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed) ? parsed : fallback;
-    }
-
-    private static string? Append(string? existing, string next)
-    {
-        return string.IsNullOrWhiteSpace(existing) ? next : $"{existing} | {next}";
-    }
-
-    private static string Serialize(DataRow row) => JsonSerializer.Serialize(row.Values);
-
-    private static readonly string[] RequestColumns =
-    [
-        "SolicitudId",
-        "Estado",
-        "SolicitudInternaCmms",
-        "SolicitudExternaNumero",
-        "OcNumero",
-        "ProveedorRut",
-        "RepuestoCodigo",
-        "Descripcion",
-        "Cantidad",
-        "Unidad",
-        "CantidadRecibida",
-        "CantidadEntregada",
-        "FaenaCodigo",
-        "BodegaCodigo",
-        "OtNumero",
-        "ActivoCodigo",
-        "Motivo",
-        "FechaSolicitudTecnica",
-        "FechaAprobacionMantenimiento",
-        "FechaEnvioAbastecimiento",
-        "FechaOC",
-        "FechaComprometida",
-        "FechaRecepcion",
-        "FechaEntrega",
-        "CostoEstimado",
-        "CostoOC",
-        "CostoReal",
-        "Moneda",
-        "DocumentoRespaldoUrl",
-        "DocumentoOcUrl",
-        "DocumentoRecepcionUrl",
-        "DocumentoEntregaUrl",
-        "CreadoPor",
-        "CreadoEnUtc",
-        "ActualizadoPor",
-        "ActualizadoEnUtc",
-        "Observaciones"
-    ];
-
-    private static readonly string[] PurchaseOrderColumns =
-    [
-        "OrdenCompraId",
-        "SolicitudId",
-        "SolicitudExternaNumero",
-        "OcNumero",
-        "ProveedorRut",
-        "FechaOC",
-        "FechaComprometida",
-        "CostoOC",
-        "Moneda",
-        "DocumentoOcUrl",
-        "UsuarioId",
-        "Motivo",
-        "CreadoEnUtc"
-    ];
-
-    private static readonly string[] ReceiptColumns =
-    [
-        "RecepcionId",
-        "SolicitudId",
-        "OcNumero",
-        "FechaRecepcion",
-        "CantidadRecibida",
-        "CantidadDespachada",
-        "BodegaCodigo",
-        "DespachoDirectoOt",
-        "OtNumero",
-        "ActivoCodigo",
-        "FaenaCodigo",
-        "MovimientoRecepcionId",
-        "MovimientoEntregaId",
-        "CostoReal",
-        "DocumentoRecepcionUrl",
-        "DocumentoEntregaUrl",
-        "UsuarioId",
-        "Motivo"
-    ];
+    private static ProcurementRequestStatus ResolveStatus(ProcurementRequestLineEntity x) => x.DeliveredQuantity >= x.RequestedQuantity ? ProcurementRequestStatus.Entregada : x.ReceivedQuantity >= x.RequestedQuantity ? ProcurementRequestStatus.Recepcionada : ProcurementRequestStatus.RecepcionParcial;
+    private static LeadTimeBreakdown LeadTime(DateTimeOffset requested, DateTimeOffset? approved, DateTimeOffset sent, DateTimeOffset? ordered, DateTimeOffset? received, DateTimeOffset? delivered) { var end = delivered ?? received ?? ordered ?? sent; return new(Days(requested, approved), Days(approved, sent), Days(sent, ordered), Days(ordered, received), Days(received, delivered), Days(requested, end)); }
+    private static int? Days(DateTimeOffset? start, DateTimeOffset? end) => start.HasValue && end.HasValue ? (end.Value.Date - start.Value.Date).Days : null;
+    private async Task<string> NextRequestNumberAsync(CancellationToken ct) { var numbers = await _db.ProcurementRequests.AsNoTracking().Select(x => x.RequestNumber).ToListAsync(ct); var next = numbers.Select(x => int.TryParse(x.Replace("AB-", "", StringComparison.OrdinalIgnoreCase), out var n) ? n : 0).DefaultIfEmpty().Max() + 1; return $"AB-{next:000000}"; }
+    private async Task<Guid?> MovementIdAsync(string? number, CancellationToken ct) => string.IsNullOrWhiteSpace(number) ? null : await _db.StockMovements.Where(x => x.MovementNumber == number).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(ct);
+    private static async Task<T?> FindOptionalAsync<T>(DbSet<T> set, string? code, System.Linq.Expressions.Expression<Func<T, string>> codeSelector, string label, CancellationToken ct) where T : class { if (string.IsNullOrWhiteSpace(code)) return null; var value = NormalizeCode(code); var entity = await set.SingleOrDefaultAsync(System.Linq.Expressions.Expression.Lambda<Func<T,bool>>(System.Linq.Expressions.Expression.Equal(codeSelector.Body, System.Linq.Expressions.Expression.Constant(value)), codeSelector.Parameters), ct); return entity ?? throw new DomainException($"El {label} '{code}' no existe."); }
+    private async Task AuditAsync(UserAccessContext user, string action, string entity, string id, object value, string? faena, string? reason, CancellationToken ct) => await _audit.RecordAsync(new(user.UserId, action, AuditModules.Procurement, entity, id, NewValue: JsonSerializer.Serialize(value), FaenaCodigo: faena, Severity: AuditSeverity.High, Reason: reason), ct);
+    private static void ValidateSupplier(UpsertSupplierRequest x) { Required(x.Rut, nameof(x.Rut)); Required(x.Nombre, nameof(x.Nombre)); if (x.LeadTimeEsperadoDias.GetValueOrDefault() < 0) throw new DomainException("El lead time esperado no puede ser negativo."); }
+    private static void Required(string? value, string field) { if (string.IsNullOrWhiteSpace(value)) throw new DomainException($"El campo {field} es obligatorio."); }
+    private static void EnsurePositive(decimal value) { if (value <= 0) throw new DomainException("La cantidad debe ser mayor a cero."); }
+    private static string? Text(string? x) => string.IsNullOrWhiteSpace(x) ? null : x.Trim(); private static string? NormalizeCode(string? x) => string.IsNullOrWhiteSpace(x) ? null : x.Trim().ToUpperInvariant();
+    private static bool CanAccessFaena(UserAccessContext u, string? f) => string.IsNullOrWhiteSpace(f) || HasRole(u, AuthRoles.Admin, AuthRoles.Management, AuthRoles.Warehouse, AuthRoles.WarehouseSupervisor) || u.Permissions.Contains(AuthPermissions.ViewGlobalWarehouses, StringComparer.OrdinalIgnoreCase) || u.Faenas.Contains(f, StringComparer.OrdinalIgnoreCase);
+    private static void EnsureFaenaAccess(UserAccessContext u, string? f) { if (!CanAccessFaena(u, f)) throw new UnauthorizedAccessException("No tiene acceso a la faena de la solicitud."); }
+    private static void EnsureCanView(UserAccessContext u) { if (!HasRole(u, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor, AuthRoles.Warehouse, AuthRoles.WarehouseSupervisor, AuthRoles.Management, AuthRoles.FaenaViewer)) throw new UnauthorizedAccessException("No tiene permisos para ver abastecimiento."); }
+    private static void EnsureCanManage(UserAccessContext u) { if (!HasRole(u, AuthRoles.Admin, AuthRoles.WarehouseSupervisor) && !u.Permissions.Contains(AuthPermissions.AdjustStock, StringComparer.OrdinalIgnoreCase)) throw new UnauthorizedAccessException("La gestion de abastecimiento requiere supervisor de bodega."); }
+    private static bool HasRole(UserAccessContext u, params string[] roles) => roles.Any(r => u.Roles.Contains(r, StringComparer.OrdinalIgnoreCase));
 }

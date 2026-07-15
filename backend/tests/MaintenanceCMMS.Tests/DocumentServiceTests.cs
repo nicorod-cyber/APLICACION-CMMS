@@ -233,16 +233,9 @@ public sealed class DocumentServiceTests
     private static async Task<DocumentFixture> CreateFixtureAsync()
     {
         var databaseName = $"cmms_document_tests_{Guid.NewGuid():N}";
-        var adminConnectionString = "Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password";
-        await using (var connection = new NpgsqlConnection(adminConnectionString))
-        {
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = $"CREATE DATABASE \"{databaseName}\"";
-            await command.ExecuteNonQueryAsync();
-        }
-
-        var connectionString = $"Host=localhost;Port=5432;Database={databaseName};Username=cmms_app;Password=cmms_app_password";
+        var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
+        await PostgreSqlWorkTestFixture.CreateDatabaseAsync(databaseName, adminConnectionString);
+        var connectionString = PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, databaseName);
         var options = new DbContextOptionsBuilder<CmmsDbContext>()
             .UseNpgsql(connectionString)
             .Options;
@@ -253,7 +246,7 @@ public sealed class DocumentServiceTests
 
         var auditService = new PostgreSqlAuditService(dbContext, new AuditContextAccessor());
         var service = new DocumentService(dbContext, auditService, new AuthorizationPolicyService());
-        return new DocumentFixture(databaseName, dbContext, service);
+        return new DocumentFixture(databaseName, adminConnectionString, dbContext, service);
     }
 
     private static async Task SeedCatalogsAsync(CmmsDbContext dbContext)
@@ -289,6 +282,7 @@ public sealed class DocumentServiceTests
 
     private sealed record DocumentFixture(
         string DatabaseName,
+        string AdminConnectionString,
         CmmsDbContext DbContext,
         IDocumentService Service) : IAsyncDisposable
     {
@@ -296,11 +290,7 @@ public sealed class DocumentServiceTests
         {
             await DbContext.DisposeAsync();
 
-            await using var connection = new NpgsqlConnection("Host=localhost;Port=5432;Database=postgres;Username=cmms_app;Password=cmms_app_password");
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = $"DROP DATABASE IF EXISTS \"{DatabaseName}\" WITH (FORCE)";
-            await command.ExecuteNonQueryAsync();
+            await PostgreSqlWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
         }
     }
 }
