@@ -96,11 +96,14 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         template.Items.Add(new ChecklistTemplateItemEntity { Template = template, SortOrder = 1, ItemText = "Verificacion base", Mandatory = true, ResponseType = responseType, IsActive = true });
         db.ChecklistTemplates.Add(template);
 
+        var admin = new AppUserEntity { Username = "admin", Email = "admin@example.test", DisplayName = "Administrador", PasswordHash = "test-hash", IsActive = true };
         var faena = new FaenaEntity { Code = "FAE-1", Name = "Faena Uno", IsActive = true };
+        var technicalLocation = new TechnicalLocationEntity { Code = "UT-FAE-1", Name = "Ubicacion FAE-1", Faena = faena, IsObsolete = false };
         var type = new AssetTypeEntity { Code = "EQUIPO", Name = "Equipo", IsActive = true };
         var family = new EquipmentFamilyEntity { Code = "FAM-1", Name = "Familia", AssetTypeId = type.Id, IsActive = true };
         var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
-        db.AddRange(faena, type, family);
+        faena.TechnicalLocation = technicalLocation;
+        db.AddRange(admin, faena, technicalLocation, type, family);
         db.AssetOperationalStates.Add(state);
         db.Assets.AddRange(
             new AssetEntity { Code = "ACT-1", Name = "Excavadora 01", Faena = faena, Family = family, OperationalState = state, AssetTypeId = type.Id },

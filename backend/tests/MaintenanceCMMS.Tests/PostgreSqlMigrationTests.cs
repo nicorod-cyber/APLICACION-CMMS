@@ -126,9 +126,11 @@ public sealed class PostgreSqlMigrationTests
         database.Context.AssetTypes.Add(type);
         await database.Context.SaveChangesAsync();
         var faena = new FaenaEntity { Code = "TH-FAE", Name = "Faena TH", IsActive = true };
+        var technicalLocation = new TechnicalLocationEntity { Code = "TH-UT", Name = "Ubicacion TH", Faena = faena, IsObsolete = false };
         var family = new EquipmentFamilyEntity { Code = "TH-FAM", Name = "Familia TH", AssetTypeId = type.Id, IsActive = true };
         var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
-        database.Context.AddRange(faena, family, state, new AssetEntity { Code = "TH-ACT", Name = "Activo TH", AssetTypeId = type.Id, Faena = faena, Family = family, OperationalState = state });
+        faena.TechnicalLocation = technicalLocation;
+        database.Context.AddRange(faena, technicalLocation, family, state, new AssetEntity { Code = "TH-ACT", Name = "Activo TH", AssetTypeId = type.Id, Faena = faena, Family = family, OperationalState = state });
         await database.Context.SaveChangesAsync();
         var service = new TechnicalHierarchyService(database.Context, new PostgreSqlAuditService(database.Context, new AuditContextAccessor()), new AuthorizationPolicyService());
         var node = await service.CreateAsync(new CreateTechnicalNodeRequest("TH-SIS", "Sistema TH", TechnicalHierarchyLevel.Sistema, FaenaCodigo: "TH-FAE", FamiliasEquipo: ["TH-FAM"], ActivosAsignados: ["TH-ACT"]), Admin, CancellationToken.None);
@@ -285,6 +287,69 @@ public sealed class PostgreSqlMigrationTests
         Assert.Contains(database.OperationalUnitAllowedComponentsMigrationId, appliedMigrations);
         Assert.DoesNotContain(database.RelationalOperationalModulesMigrationId, appliedMigrations);
     }
+    [Fact]
+    public async Task MigrateFromDuplicateTechnicalLocations_RefusesOneToOneMigrationAndPreservesRows()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        var migrator = database.Context.Database.GetService<IMigrator>();
+        await migrator.MigrateAsync(database.RelationalOperationalModulesMigrationId);
+
+        var faenaId = Guid.NewGuid();
+        await database.Context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO faenas (id, codigo, nombre, activo, created_at_utc)
+            VALUES ({faenaId}, 'MIG-DUP-FAENA', 'Faena duplicada de migracion', true, now());
+
+            INSERT INTO ubicaciones_tecnicas (id, codigo, nombre, nombre_normalizado, faena_id, obsoleto, created_at_utc)
+            VALUES
+                (gen_random_uuid(), 'MIG-DUP-UT-01', 'Ubicacion tecnica 01', 'ubicacion tecnica 01', {faenaId}, false, now()),
+                (gen_random_uuid(), 'MIG-DUP-UT-02', 'Ubicacion tecnica 02', 'ubicacion tecnica 02', {faenaId}, false, now());
+            """);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => database.Context.Database.MigrateAsync());
+
+        Assert.Equal("P0001", exception.SqlState);
+        Assert.Contains("resolve faenas with more than one technical location", exception.MessageText);
+
+        await using var verification = database.NewContext();
+        Assert.Equal(1, await verification.Faenas.CountAsync(item => item.Id == faenaId));
+        Assert.Equal(2, await verification.TechnicalLocations.CountAsync(item => item.FaenaId == faenaId));
+
+        var appliedMigrations = await verification.Database.GetAppliedMigrationsAsync();
+        Assert.Contains(database.RelationalOperationalModulesMigrationId, appliedMigrations);
+        Assert.DoesNotContain(database.FaenaTechnicalLocationMigrationId, appliedMigrations);
+    }
+
+    [Fact]
+    public async Task MigrateFromNodeWithOnlyTechnicalLocation_BackfillsFaenaBeforeRemovingDirectLink()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        var migrator = database.Context.Database.GetService<IMigrator>();
+        await migrator.MigrateAsync(database.RelationalOperationalModulesMigrationId);
+
+        var faenaId = Guid.NewGuid();
+        var locationId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        await database.Context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO faenas (id, codigo, nombre, activo, created_at_utc)
+            VALUES ({faenaId}, 'MIG-BACKFILL-FAENA', 'Faena de backfill', true, now());
+
+            INSERT INTO ubicaciones_tecnicas (id, codigo, nombre, nombre_normalizado, faena_id, obsoleto, created_at_utc)
+            VALUES ({locationId}, 'MIG-BACKFILL-UT', 'Ubicacion de backfill', 'ubicacion de backfill', {faenaId}, false, now());
+
+            INSERT INTO nodos_tecnicos (
+                id, codigo, nombre, nombre_normalizado, nivel, faena_id, ubicacion_tecnica_id, obsoleto, created_at_utc)
+            VALUES (
+                {nodeId}, 'MIG-BACKFILL-NODE', 'Nodo de backfill', 'nodo de backfill', 'Sistema', NULL, {locationId}, false, now());
+            """);
+
+        await database.Context.Database.MigrateAsync();
+
+        await using var verification = database.NewContext();
+        var node = await verification.TechnicalNodes.SingleAsync(item => item.Id == nodeId);
+        Assert.Equal(faenaId, node.FaenaId);
+        Assert.False(await database.ColumnExistsAsync("nodos_tecnicos", "ubicacion_tecnica_id"));
+        Assert.Contains(database.FaenaTechnicalLocationMigrationId, await verification.Database.GetAppliedMigrationsAsync());
+    }
     private sealed class MigrationDatabase : IAsyncDisposable
     {
         private MigrationDatabase(string name, string adminConnectionString, CmmsDbContext context)
@@ -302,6 +367,7 @@ public sealed class PostgreSqlMigrationTests
         public string TechnicalHierarchyMigrationId => "20260710164638_TechnicalHierarchyDomainPostgreSql";
         public string OperationalUnitAllowedComponentsMigrationId => "20260714170216_OperationalUnitAllowedComponents";
         public string RelationalOperationalModulesMigrationId => "20260715123551_RelationalOperationalModules";
+        public string FaenaTechnicalLocationMigrationId => "20260715201243_FaenaTechnicalLocationOneToOne";
         public static async Task<MigrationDatabase> CreateAsync()
         {
             var name = $"cmms_migration_tests_{Guid.NewGuid():N}";

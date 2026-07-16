@@ -68,12 +68,11 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         ManageUnits(u); Require(r.Codigo, "Codigo"); Require(r.Nombre, "Nombre"); var code = Code(r.Codigo); if (await db.OperationalUnits.AnyAsync(x => x.Code == code, ct)) throw new DomainException("La unidad operativa ya existe.");
         var type = await db.OperationalUnitTypes.SingleOrDefaultAsync(x => x.Code == Code(r.TipoUnidadCodigo) && x.IsActive, ct) ?? throw new DomainException("Tipo de unidad inexistente.");
         var state = await db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalCodigo) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente.");
-        var faena = string.IsNullOrWhiteSpace(r.FaenaCodigo) ? null : await db.Faenas.SingleOrDefaultAsync(x => x.Code == Code(r.FaenaCodigo) && x.IsActive, ct) ?? throw new DomainException("Faena inexistente.");
+        var faena = string.IsNullOrWhiteSpace(r.FaenaCodigo) ? null : await db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(r.FaenaCodigo) && x.IsActive, ct) ?? throw new DomainException("Faena inexistente.");
         if (faena is not null) EnsureView(u, faena.Code);
-        var location = string.IsNullOrWhiteSpace(r.UbicacionTecnicaCodigo) ? null : await db.TechnicalLocations.Include(x => x.Faena).SingleOrDefaultAsync(x => x.Code == Code(r.UbicacionTecnicaCodigo) && !x.IsObsolete, ct) ?? throw new DomainException("Ubicaci�n t�cnica inexistente.");
-        if (location is not null && (faena is null || location.FaenaId != faena.Id)) throw new DomainException("La ubicaci�n t�cnica no corresponde a la faena.");
+        if (faena is not null && faena.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene una ubicación técnica configurada.");
         if (r.FechaBaja is { } end && r.FechaPuestaServicio is { } start && end < start) throw new DomainException("La baja no puede preceder a la puesta en servicio.");
-        var unit = new OperationalUnitEntity { Code = code, Name = r.Nombre.Trim(), OperationalUnitTypeId = type.Id, FaenaId = faena?.Id, TechnicalLocationId = location?.Id, OperationalStateId = state.Id, Criticality = Text(r.Criticidad), CommissioningDate = r.FechaPuestaServicio, DecommissioningDate = r.FechaBaja, Observations = Text(r.Observaciones) };
+        var unit = new OperationalUnitEntity { Code = code, Name = r.Nombre.Trim(), OperationalUnitTypeId = type.Id, FaenaId = faena?.Id, OperationalStateId = state.Id, Criticality = Text(r.Criticidad), CommissioningDate = r.FechaPuestaServicio, DecommissioningDate = r.FechaBaja, Observations = Text(r.Observaciones) };
         db.OperationalUnits.Add(unit); await db.SaveChangesAsync(ct); await Audit(u, "operational_unit.created", unit.Code, faena?.Code, ct); return (await GetAsync(unit.Code, u, ct))!;
     }
 
@@ -105,7 +104,7 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         db.OperationalUnitComponents.Add(new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = asset.Id, ComponentRoleId = role.Id, InstalledAtUtc = mountedAt, InstallationWorkOrderId = await WorkOrderIdAsync(workOrder, ct), Observations = Text(observations) });
     }
 
-    private IQueryable<OperationalUnitEntity> Units() => db.OperationalUnits.Include(x => x.OperationalUnitType).Include(x => x.Faena).Include(x => x.TechnicalLocation).Include(x => x.OperationalState);
+    private IQueryable<OperationalUnitEntity> Units() => db.OperationalUnits.Include(x => x.OperationalUnitType).Include(x => x.Faena).ThenInclude(x => x.TechnicalLocation).Include(x => x.OperationalState);
     private Task<OperationalUnitEntity?> FindUnitAsync(string code, CancellationToken ct) => Units().SingleOrDefaultAsync(x => x.Code == Code(code), ct);
     private async Task<OperationalUnitCompositionResponse> CompositionAsync(OperationalUnitEntity unit, CancellationToken ct)
     {
@@ -115,7 +114,7 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         OperationalUnitComponentResponse Map(OperationalUnitComponentEntity x) => new(x.Asset.Code, x.Asset.Name, x.ComponentRole.Code, x.InstalledAtUtc, x.RemovedAtUtc, x.InstallationWorkOrder?.WorkOrderNumber, x.RemovalWorkOrder?.WorkOrderNumber, x.Observations);
         return new(missing.Length == 0, missing, rows.Where(x => x.RemovedAtUtc is null).Select(Map).ToArray(), rows.Select(Map).ToArray());
     }
-    private async Task<OperationalUnitResponse> MapAsync(OperationalUnitEntity unit, CancellationToken ct) => new(unit.Code, unit.Name, unit.OperationalUnitType.Code, unit.Faena?.Code, unit.TechnicalLocation?.Code, unit.OperationalState.Code, unit.Criticality, unit.CommissioningDate, unit.DecommissioningDate, unit.Observations, await CompositionAsync(unit, ct));
+    private async Task<OperationalUnitResponse> MapAsync(OperationalUnitEntity unit, CancellationToken ct) => new(unit.Code, unit.Name, unit.OperationalUnitType.Code, unit.Faena?.Code, unit.Faena?.TechnicalLocation?.Code, unit.OperationalState.Code, unit.Criticality, unit.CommissioningDate, unit.DecommissioningDate, unit.Observations, await CompositionAsync(unit, ct));
     private async Task<Guid?> WorkOrderIdAsync(string? number, CancellationToken ct) => string.IsNullOrWhiteSpace(number) ? null : (await db.WorkOrders.SingleOrDefaultAsync(x => x.WorkOrderNumber == Code(number), ct) ?? throw new DomainException("La OT indicada no existe.")).Id;
     private static void Require(string? value, string name) { if (string.IsNullOrWhiteSpace(value)) throw new DomainException($"{name} es obligatorio."); }
     private static string Code(string? value) => value?.Trim().ToUpperInvariant() ?? string.Empty; private static string? Text(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim(); private static bool Same(string? a, string? b) => string.Equals(a?.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);

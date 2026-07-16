@@ -69,7 +69,7 @@ public sealed class AssetServiceTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.CorrectReadingAsync("EQ-401", reading.Id, new CorrectAssetReadingRequest(11m, "Sin autorización"), technician, CancellationToken.None));
     }
     private static CreateAssetRequest CompleteCreateRequest(string code) => new(
-        code, "Camion tolva", "CAMION", "CAMIONES", "F001", null, "OPERATIVO_FAENA",
+        code, "Camion tolva", "CAMION", "CAMIONES", "F001", "OPERATIVO_FAENA",
         Marca: "CAT", Modelo: "777", NumeroSerie: "SER-777", Propiedad: "Propio", Criticidad: "ALTA",
         TipoMedicionUso: "HOROMETRO", Atributos: [new AssetAttributeValueInput("IDENTIFICADOR", ValorTexto: "ID-" + code)]);
 
@@ -87,7 +87,17 @@ public sealed class AssetServiceTests
 
     private static async Task SeedCatalogsAsync(CmmsDbContext dbContext)
     {
-        dbContext.Faenas.Add(new FaenaEntity { Code = "F001", Name = "Faena Norte", IsActive = true });
+        var faena = new FaenaEntity { Code = "F001", Name = "Faena Norte", IsActive = true };
+        dbContext.AddRange(
+            faena,
+            new TechnicalLocationEntity
+            {
+                Code = "UT-F001",
+                Name = "Ubicación técnica Faena Norte",
+                FaenaId = faena.Id,
+                Faena = faena,
+                IsObsolete = false
+            });
         var type = new AssetTypeEntity { Code = "CAMION", Name = "Cami�n", IsActive = true };
         dbContext.AssetTypes.Add(type);
         dbContext.AssetOperationalStates.AddRange(

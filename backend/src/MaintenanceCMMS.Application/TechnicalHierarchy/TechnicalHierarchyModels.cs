@@ -21,7 +21,6 @@ public sealed record CreateTechnicalNodeRequest(
     TechnicalHierarchyLevel Nivel,
     string? CodigoPadre = null,
     string? FaenaCodigo = null,
-    string? UbicacionTecnicaCodigo = null,
     IReadOnlyCollection<string>? FamiliasEquipo = null,
     IReadOnlyCollection<string>? ActivosAsignados = null,
     IReadOnlyCollection<string>? AliasHistoricos = null);
@@ -30,7 +29,6 @@ public sealed record UpdateTechnicalNodeRequest(
     string Nombre,
     string? CodigoPadre = null,
     string? FaenaCodigo = null,
-    string? UbicacionTecnicaCodigo = null,
     IReadOnlyCollection<string>? FamiliasEquipo = null,
     IReadOnlyCollection<string>? ActivosAsignados = null,
     IReadOnlyCollection<string>? AliasHistoricos = null,

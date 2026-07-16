@@ -1,5 +1,6 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
+import { FaenasPage } from "../features/faenas/FaenasPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { ProtectedRoute } from "../features/auth/ProtectedRoute";
 import { AssetsPage } from "../features/assets/AssetsPage";
@@ -61,6 +62,10 @@ export const router = createBrowserRouter([
             ) : item.path === "/importaciones" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <ImportsPage />
+              </ProtectedRoute>
+            ) : item.path === "/faenas" ? (
+              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
+                <FaenasPage />
               </ProtectedRoute>
             ) : item.path === "/activos" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>

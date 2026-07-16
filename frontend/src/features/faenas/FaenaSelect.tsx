@@ -2,21 +2,28 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { apiFetch } from "../auth/authStore";
 
 export type FaenaRecord = {
+  id: string;
   codigo: string;
   nombre: string;
-  empresa: string;
-  descripcion?: string | null;
-  ubicacionTecnica?: string | null;
-  centroCostos?: string | null;
+  zona?: string | null;
+  cliente?: string | null;
+  centroCostes?: string | null;
   tipoFaena?: string | null;
   region?: string | null;
   comuna?: string | null;
-  latitud?: string | null;
-  longitud?: string | null;
-  responsable?: string | null;
-  estado: string;
-  activa: boolean;
-  metadata?: Record<string, string | null>;
+  latitud?: number | null;
+  longitud?: number | null;
+  responsableUsuarioId?: string | null;
+  responsableNombre?: string | null;
+  activo: boolean;
+  ubicacionTecnica: TechnicalLocationRecord | null;
+};
+
+export type TechnicalLocationRecord = {
+  id: string;
+  codigo: string;
+  nombre: string;
+  obsoleto: boolean;
 };
 
 type UseFaenasResult = {

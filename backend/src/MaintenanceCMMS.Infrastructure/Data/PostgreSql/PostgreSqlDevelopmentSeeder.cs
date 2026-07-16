@@ -38,6 +38,10 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         await UpsertFamilyAsync("COMPRESOR", "Compresor", cancellationToken);
         await UpsertFamilyAsync("GRUA_HORQUILLA", "Grua horquilla", cancellationToken);
 
+        await UpsertPermissionAsync(AuthPermissions.ViewFaenas, "Ver faenas", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.CreateFaenas, "Crear faenas", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.EditFaenas, "Editar faenas", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.DeactivateFaenas, "Desactivar faenas", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.ManageEquipmentFamilies, "Gestionar familias de equipo", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.ManageAssetCatalogs, "Administrar cat�logos de activos", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.ManageAssetAttributes, "Administrar atributos de activos", cancellationToken);
@@ -61,35 +65,7 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task SeedDemoDataAsync(CancellationToken cancellationToken)
-    {
-        await UpsertFaenaAsync("FAENA_DEMO", "Faena Demo", cancellationToken);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-        var faena = await _dbContext.Faenas.SingleAsync(item => item.Code == "FAENA_DEMO", cancellationToken);
-        var assetType = await _dbContext.AssetTypes.SingleAsync(item => item.Code == "EQUIPO", cancellationToken);
-        var family = await _dbContext.EquipmentFamilies.SingleAsync(item => item.Code == "CAMION_PLUMA", cancellationToken);
-        var state = await _dbContext.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO_FAENA", cancellationToken);
-        if (!await _dbContext.Assets.AnyAsync(item => item.Code == "ACT-DEMO-001", cancellationToken))
-        {
-            _dbContext.Assets.Add(new AssetEntity { Code = "ACT-DEMO-001", Name = "Activo demo", FaenaId = faena.Id, FamilyId = family.Id, AssetTypeId = assetType.Id, OperationalStateId = state.Id });
-        }
-        await _dbContext.SaveChangesAsync(cancellationToken);
-    }
-
-    private async Task UpsertFaenaAsync(string code, string name, CancellationToken cancellationToken)
-    {
-        var entity = await _dbContext.Faenas.FirstOrDefaultAsync(item => item.Code == code, cancellationToken);
-        if (entity is null)
-        {
-            _dbContext.Faenas.Add(new FaenaEntity { Code = code, Name = name, IsActive = true });
-        }
-        else
-        {
-            entity.Name = name;
-            entity.IsActive = true;
-            entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
-        }
-    }
+    public Task SeedDemoDataAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private async Task UpsertOperationalStateAsync(string code, string name, CancellationToken cancellationToken)
     {

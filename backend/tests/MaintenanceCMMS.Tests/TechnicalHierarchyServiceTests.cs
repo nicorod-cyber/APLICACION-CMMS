@@ -93,14 +93,14 @@ public sealed class TechnicalHierarchyServiceTests
     }
 
     [Fact]
-    public async Task Importer_ImportsLocationsBeforeNodesAndIsIdempotent()
+    public async Task Importer_UpdatesTheUniqueLocationBeforeNodesAndIsIdempotent()
     {
         await using var fx=await Fixture.CreateAsync();var dir=Path.Combine(Path.GetTempPath(),"cmms-th-import",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(dir);var loc=Path.Combine(dir,"ubicaciones_tecnicas.xlsx");var sys=Path.Combine(dir,"sistemas_componentes.xlsx");
-        WriteWorkbook(loc,["Codigo","Nombre","FaenaCodigo","CodigoPadre"],[["LOC-1","Planta","FAE-1",""]]);
-        WriteWorkbook(sys,["Codigo","Nombre","Nivel","CodigoPadre","NombreNormalizado","FaenaCodigo","UbicacionTecnicaCodigo","FamiliasEquipo","ActivosAsignados","AliasHistoricos","Obsoleto","FusionadoEnCodigo","FechaCreacionUtc","FechaActualizacionUtc"],[["S-IMP","Sistema importado","Sistema","","","FAE-1","LOC-1","FAM-1","ACT-1","Alias viejo","false","","",""]]);
+        WriteWorkbook(loc,["Codigo","Nombre","FaenaCodigo"],[["LOC-1","Planta","FAE-1"]]);
+        WriteWorkbook(sys,["Codigo","Nombre","Nivel","CodigoPadre","NombreNormalizado","FaenaCodigo","FamiliasEquipo","ActivosAsignados","AliasHistoricos","Obsoleto","FusionadoEnCodigo","FechaCreacionUtc","FechaActualizacionUtc"],[["S-IMP","Sistema importado","Sistema","","","FAE-1","FAM-1","ACT-1","Alias viejo","false","","",""]]);
         var importer=new TechnicalHierarchyExcelImportService(fx.Db,new AuthorizationPolicyService(),new PostgreSqlAuditService(fx.Db,new AuditContextAccessor()));
         var first=await importer.ImportAsync(new(sys,loc,"admin"),Admin,CancellationToken.None);var second=await importer.ImportAsync(new(sys,loc,"admin"),Admin,CancellationToken.None);
-        Assert.Equal(2,first.RegistrosInsertados);Assert.Equal(2,second.RegistrosActualizados);Assert.Empty(first.Errores);Assert.Empty(first.ReferenciasNoEncontradas);
+        Assert.Equal(1,first.RegistrosInsertados);Assert.Equal(1,first.RegistrosActualizados);Assert.Equal(1,second.RegistrosActualizados);Assert.Empty(first.Errores);Assert.Empty(first.ReferenciasNoEncontradas);
         await using var next=fx.NewContext();Assert.True(await next.TechnicalNodes.AnyAsync(x=>x.Code=="S-IMP"));Assert.True(await next.TechnicalLocations.AnyAsync(x=>x.Code=="LOC-1"));
     }
 
@@ -108,8 +108,8 @@ public sealed class TechnicalHierarchyServiceTests
     public async Task Importer_RollsBackWhenReferenceIsMissing()
     {
         await using var fx=await Fixture.CreateAsync();var dir=Path.Combine(Path.GetTempPath(),"cmms-th-import",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(dir);var loc=Path.Combine(dir,"ubicaciones_tecnicas.xlsx");var sys=Path.Combine(dir,"sistemas_componentes.xlsx");
-        WriteWorkbook(loc,["Codigo","Nombre","FaenaCodigo","CodigoPadre"],[["LOC-BAD","Planta","NO-FAE",""]]);
-        WriteWorkbook(sys,["Codigo","Nombre","Nivel","CodigoPadre","NombreNormalizado","FaenaCodigo","UbicacionTecnicaCodigo","FamiliasEquipo","ActivosAsignados","AliasHistoricos","Obsoleto","FusionadoEnCodigo","FechaCreacionUtc","FechaActualizacionUtc"],[["S-BAD","Sistema","Sistema","","","FAE-1","LOC-BAD","","","","false","","",""]]);
+        WriteWorkbook(loc,["Codigo","Nombre","FaenaCodigo"],[["LOC-BAD","Planta","NO-FAE"]]);
+        WriteWorkbook(sys,["Codigo","Nombre","Nivel","CodigoPadre","NombreNormalizado","FaenaCodigo","FamiliasEquipo","ActivosAsignados","AliasHistoricos","Obsoleto","FusionadoEnCodigo","FechaCreacionUtc","FechaActualizacionUtc"],[["S-BAD","Sistema","Sistema","","","FAE-1","","","","false","","",""]]);
         var beforeHash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(sys)));
         var importer=new TechnicalHierarchyExcelImportService(fx.Db,new AuthorizationPolicyService(),new PostgreSqlAuditService(fx.Db,new AuditContextAccessor()));
         var result=await importer.ImportAsync(new(sys,loc,"admin"),Admin,CancellationToken.None);
@@ -135,8 +135,12 @@ public sealed class TechnicalHierarchyServiceTests
         private static CmmsDbContext CreateContext(string name,string adminConnectionString)=>new(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString,name)).Options);
         private static async Task SeedAsync(CmmsDbContext db)
         {
-            var fae1=new FaenaEntity{Code="FAE-1",Name="Faena Uno",IsActive=true};var fae2=new FaenaEntity{Code="FAE-2",Name="Faena Dos",IsActive=true};var type=new AssetTypeEntity{Code="EQUIPO",Name="Equipo",IsActive=true};var fam1=new EquipmentFamilyEntity{Code="FAM-1",Name="Familia Uno",AssetTypeId=type.Id,IsActive=true};var fam2=new EquipmentFamilyEntity{Code="FAM-2",Name="Familia Dos",AssetTypeId=type.Id,IsActive=true};var state=new AssetOperationalStateEntity{Code="OPERATIVO_FAENA",Name="Operativo",IsActive=true};
-            db.AddRange(fae1,fae2,type,fam1,fam2,state);db.Assets.AddRange(new AssetEntity{Code="ACT-1",Name="Activo Uno",Faena=fae1,Family=fam1,OperationalState=state,AssetTypeId=type.Id},new AssetEntity{Code="ACT-2",Name="Activo Dos",Faena=fae1,Family=fam2,OperationalState=state,AssetTypeId=type.Id},new AssetEntity{Code="ACT-3",Name="Activo Tres",Faena=fae2,Family=fam2,OperationalState=state,AssetTypeId=type.Id});await db.SaveChangesAsync();
+            var fae1=new FaenaEntity{Code="FAE-1",Name="Faena Uno",IsActive=true};var fae2=new FaenaEntity{Code="FAE-2",Name="Faena Dos",IsActive=true};
+            var loc1=new TechnicalLocationEntity{Code="UT-FAE-1",Name="Ubicacion FAE-1",FaenaId=fae1.Id,Faena=fae1};
+            var loc2=new TechnicalLocationEntity{Code="UT-FAE-2",Name="Ubicacion FAE-2",FaenaId=fae2.Id,Faena=fae2};
+            fae1.TechnicalLocation=loc1;fae2.TechnicalLocation=loc2;
+            var type=new AssetTypeEntity{Code="EQUIPO",Name="Equipo",IsActive=true};var fam1=new EquipmentFamilyEntity{Code="FAM-1",Name="Familia Uno",AssetTypeId=type.Id,IsActive=true};var fam2=new EquipmentFamilyEntity{Code="FAM-2",Name="Familia Dos",AssetTypeId=type.Id,IsActive=true};var state=new AssetOperationalStateEntity{Code="OPERATIVO_FAENA",Name="Operativo",IsActive=true};
+            db.AddRange(fae1,fae2,loc1,loc2,type,fam1,fam2,state);db.Assets.AddRange(new AssetEntity{Code="ACT-1",Name="Activo Uno",Faena=fae1,Family=fam1,OperationalState=state,AssetTypeId=type.Id},new AssetEntity{Code="ACT-2",Name="Activo Dos",Faena=fae1,Family=fam2,OperationalState=state,AssetTypeId=type.Id},new AssetEntity{Code="ACT-3",Name="Activo Tres",Faena=fae2,Family=fam2,OperationalState=state,AssetTypeId=type.Id});await db.SaveChangesAsync();
         }
         public async ValueTask DisposeAsync(){await Db.DisposeAsync();await PostgreSqlWorkTestFixture.DropDatabaseAsync(Name,AdminConnectionString);}
     }

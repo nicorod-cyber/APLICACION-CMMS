@@ -124,8 +124,27 @@ public sealed class FaenaConfiguration : IEntityTypeConfiguration<FaenaEntity>
         builder.ConfigureBase();
         builder.Property(entity => entity.Code).HasColumnName("codigo").HasMaxLength(80).IsRequired();
         builder.Property(entity => entity.Name).HasColumnName("nombre").HasMaxLength(240).IsRequired();
+        builder.Property(entity => entity.Zone).HasColumnName("zona").HasMaxLength(80);
+        builder.Property(entity => entity.Client).HasColumnName("cliente").HasMaxLength(160);
+        builder.Property(entity => entity.CostCenter).HasColumnName("centro_costes").HasMaxLength(80);
+        builder.Property(entity => entity.FaenaType).HasColumnName("tipo_faena").HasMaxLength(80);
+        builder.Property(entity => entity.Region).HasColumnName("region").HasMaxLength(120);
+        builder.Property(entity => entity.Commune).HasColumnName("comuna").HasMaxLength(120);
+        builder.Property(entity => entity.Latitude).HasColumnName("latitud").HasPrecision(10, 7);
+        builder.Property(entity => entity.Longitude).HasColumnName("longitud").HasPrecision(10, 7);
+        builder.Property(entity => entity.ResponsibleUserId).HasColumnName("responsable_usuario_id");
         builder.Property(entity => entity.IsActive).HasColumnName("activo").IsRequired();
+        builder.HasOne(entity => entity.ResponsibleUser)
+            .WithMany(user => user.ResponsibleFaenas)
+            .HasForeignKey(entity => entity.ResponsibleUserId)
+            .OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(entity => entity.Code).IsUnique();
+        builder.HasIndex(entity => entity.ResponsibleUserId);
+        builder.ToTable(table =>
+        {
+            table.HasCheckConstraint("ck_faenas_latitud", "latitud IS NULL OR latitud BETWEEN -90 AND 90");
+            table.HasCheckConstraint("ck_faenas_longitud", "longitud IS NULL OR longitud BETWEEN -180 AND 180");
+        });
     }
 }
 
@@ -168,9 +187,9 @@ public sealed class AssetConfiguration : IEntityTypeConfiguration<AssetEntity>
     public void Configure(EntityTypeBuilder<AssetEntity> builder)
     {
         builder.ToTable("activos"); builder.ConfigureBase();
-        builder.Property(x => x.Code).HasColumnName("codigo").HasMaxLength(80).IsRequired(); builder.Property(x => x.Name).HasColumnName("nombre").HasMaxLength(240).IsRequired(); builder.Property(x => x.AssetTypeId).HasColumnName("tipo_activo_id"); builder.Property(x => x.FamilyId).HasColumnName("familia_equipo_id"); builder.Property(x => x.FaenaId).HasColumnName("faena_id"); builder.Property(x => x.TechnicalLocationId).HasColumnName("ubicacion_tecnica_id"); builder.Property(x => x.OperationalStateId).HasColumnName("estado_operacional_id");
+        builder.Property(x => x.Code).HasColumnName("codigo").HasMaxLength(80).IsRequired(); builder.Property(x => x.Name).HasColumnName("nombre").HasMaxLength(240).IsRequired(); builder.Property(x => x.AssetTypeId).HasColumnName("tipo_activo_id"); builder.Property(x => x.FamilyId).HasColumnName("familia_equipo_id"); builder.Property(x => x.FaenaId).HasColumnName("faena_id"); builder.Property(x => x.OperationalStateId).HasColumnName("estado_operacional_id");
         builder.Property(x => x.Brand).HasColumnName("marca").HasMaxLength(120); builder.Property(x => x.Model).HasColumnName("modelo").HasMaxLength(120); builder.Property(x => x.SerialNumber).HasColumnName("numero_serie").HasMaxLength(160); builder.Property(x => x.Ownership).HasColumnName("propiedad").HasMaxLength(80); builder.Property(x => x.Criticality).HasColumnName("criticidad").HasMaxLength(40); builder.Property(x => x.ManufacturingYear).HasColumnName("anio_fabricacion"); builder.Property(x => x.AcquisitionDate).HasColumnName("fecha_adquisicion"); builder.Property(x => x.CommissioningDate).HasColumnName("fecha_puesta_servicio"); builder.Property(x => x.DecommissioningDate).HasColumnName("fecha_baja"); builder.Property(x => x.UsageMeasurementType).HasColumnName("tipo_medicion_uso").HasMaxLength(20); builder.Property(x => x.Observations).HasColumnName("observaciones").HasMaxLength(2000);
-        builder.HasIndex(x => x.Code).IsUnique(); builder.HasIndex(x => x.FaenaId); builder.HasIndex(x => x.FamilyId); builder.HasIndex(x => x.OperationalStateId); builder.HasOne(x => x.AssetTypeDefinition).WithMany().HasForeignKey(x => x.AssetTypeId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.Faena).WithMany().HasForeignKey(x => x.FaenaId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.Family).WithMany().HasForeignKey(x => x.FamilyId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.TechnicalLocation).WithMany().HasForeignKey(x => x.TechnicalLocationId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.OperationalState).WithMany().HasForeignKey(x => x.OperationalStateId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(x => x.Code).IsUnique(); builder.HasIndex(x => x.FaenaId); builder.HasIndex(x => x.FamilyId); builder.HasIndex(x => x.OperationalStateId); builder.HasOne(x => x.AssetTypeDefinition).WithMany().HasForeignKey(x => x.AssetTypeId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.Faena).WithMany().HasForeignKey(x => x.FaenaId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.Family).WithMany().HasForeignKey(x => x.FamilyId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.OperationalState).WithMany().HasForeignKey(x => x.OperationalStateId).OnDelete(DeleteBehavior.Restrict);
         builder.ToTable(t => { t.HasCheckConstraint("ck_activos_tipo_medicion_uso", "tipo_medicion_uso IS NULL OR tipo_medicion_uso IN ('HOROMETRO','KILOMETRAJE')"); t.HasCheckConstraint("ck_activos_anio_fabricacion", "anio_fabricacion IS NULL OR anio_fabricacion BETWEEN 1900 AND 2200"); t.HasCheckConstraint("ck_activos_fecha_baja", "fecha_baja IS NULL OR fecha_puesta_servicio IS NULL OR fecha_baja >= fecha_puesta_servicio"); });
     }
 }

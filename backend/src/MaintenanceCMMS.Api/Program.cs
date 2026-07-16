@@ -129,6 +129,38 @@ builder.Services.AddAuthorization(options =>
             context.User.HasClaim("permission", AuthPermissions.Administration));
     });
 
+    options.AddPolicy("VerFaenas", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context =>
+            context.User.IsInRole(AuthRoles.Admin) ||
+            context.User.HasClaim("permission", AuthPermissions.ViewFaenas));
+    });
+
+    options.AddPolicy("CrearFaenas", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context =>
+            context.User.IsInRole(AuthRoles.Admin) ||
+            context.User.HasClaim("permission", AuthPermissions.CreateFaenas));
+    });
+
+    options.AddPolicy("EditarFaenas", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context =>
+            context.User.IsInRole(AuthRoles.Admin) ||
+            context.User.HasClaim("permission", AuthPermissions.EditFaenas));
+    });
+
+    options.AddPolicy("DesactivarFaenas", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context =>
+            context.User.IsInRole(AuthRoles.Admin) ||
+            context.User.HasClaim("permission", AuthPermissions.DeactivateFaenas));
+    });
+
     options.AddPolicy("Importaciones", policy =>
     {
         policy.RequireAuthenticatedUser();
@@ -375,6 +407,16 @@ api.MapGet("/auth/me", async (ClaimsPrincipal user, IAuthService authService, Ca
 api.MapGet("/faenas", async (
         string? search,
         bool? includeInactive,
+        string? codigo,
+        string? nombre,
+        string? zona,
+        string? cliente,
+        string? tipoFaena,
+        string? region,
+        string? comuna,
+        Guid? responsableUsuarioId,
+        bool? activo,
+        string? ubicacionTecnicaCodigo,
         ClaimsPrincipal user,
         IFaenaService faenaService,
         CancellationToken cancellationToken) =>
@@ -382,7 +424,19 @@ api.MapGet("/faenas", async (
         try
         {
             return Results.Ok(await faenaService.ListAsync(
-                new FaenaQuery(search, includeInactive ?? false),
+                new FaenaQuery(
+                    Search: search,
+                    IncludeInactive: includeInactive ?? false,
+                    Codigo: codigo,
+                    Nombre: nombre,
+                    Zona: zona,
+                    Cliente: cliente,
+                    TipoFaena: tipoFaena,
+                    Region: region,
+                    Comuna: comuna,
+                    ResponsableUsuarioId: responsableUsuarioId,
+                    Activa: activo,
+                    UbicacionTecnicaCodigo: ubicacionTecnicaCodigo),
                 UserAccessContext.FromClaims(user),
                 cancellationToken));
         }
@@ -395,8 +449,74 @@ api.MapGet("/faenas", async (
             return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
         }
     })
-    .RequireAuthorization()
+    .RequireAuthorization("VerFaenas")
     .WithName("ListFaenas");
+
+api.MapGet("/faenas/{code}", async (
+        string code,
+        ClaimsPrincipal user,
+        IFaenaService faenaService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var result = await faenaService.GetByCodeAsync(code, UserAccessContext.FromClaims(user), cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .RequireAuthorization("VerFaenas")
+    .WithName("GetFaena");
+
+api.MapPost("/faenas", async (
+        UpsertFaenaRequest request,
+        ClaimsPrincipal user,
+        IFaenaService faenaService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var created = await faenaService.CreateAsync(request, UserAccessContext.FromClaims(user), cancellationToken);
+            return Results.Created($"/api/faenas/{created.Codigo}", created);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .RequireAuthorization("CrearFaenas")
+    .WithName("CreateFaena");
+
+api.MapPut("/faenas/{code}", async (
+        string code,
+        UpsertFaenaRequest request,
+        ClaimsPrincipal user,
+        IFaenaService faenaService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var updated = await faenaService.UpdateAsync(code, request, UserAccessContext.FromClaims(user), cancellationToken);
+            return updated is null ? Results.NotFound() : Results.Ok(updated);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .RequireAuthorization("EditarFaenas")
+    .WithName("UpdateFaena");
 
 var usersApi = api.MapGroup("/users")
     .RequireAuthorization("Administracion");
@@ -3982,8 +4102,17 @@ importsApi.MapPost("/{id}/approve", async (
     {
         try
         {
+            var preview = await importWorkflowService.GetPreviewAsync(id, cancellationToken);
+            if (preview is null) return Results.NotFound();
+            if (RequiresFaenaDeactivationPermission(preview) &&
+                !user.IsInRole(AuthRoles.Admin) &&
+                !user.HasClaim("permission", AuthPermissions.DeactivateFaenas))
+            {
+                return Results.Forbid();
+            }
+
             var result = await importWorkflowService.ApproveAsync(id, GetActorId(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
+            return Results.Ok(result);
         }
         catch (DomainException ex)
         {
@@ -4204,6 +4333,23 @@ static bool IsLegacyOperationalDataSetBlock(PostgresException? postgresException
 static string GetActorId(ClaimsPrincipal user)
 {
     return user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "system";
+}
+
+static bool RequiresFaenaDeactivationPermission(ExcelImportPreviewResult preview)
+{
+    return string.Equals(preview.Import.SchemaName, "faenas", StringComparison.OrdinalIgnoreCase) &&
+           preview.Rows.Any(row => IsExplicitInactiveFaenaState(row.Values));
+}
+
+static bool IsExplicitInactiveFaenaState(IReadOnlyDictionary<string, string?> values)
+{
+    if (!values.TryGetValue("Estado", out var raw) || string.IsNullOrWhiteSpace(raw)) return false;
+
+    return raw.Trim().ToUpperInvariant() switch
+    {
+        "NO" or "INACTIVO" or "INACTIVA" or "FALSE" or "0" => true,
+        _ => false
+    };
 }
 
 static bool ParseEnumOrDefault<TEnum>(string? value, out TEnum parsed)

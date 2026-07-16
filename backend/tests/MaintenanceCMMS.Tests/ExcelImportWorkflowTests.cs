@@ -30,7 +30,7 @@ public sealed class ExcelImportWorkflowTests
     public async Task UploadAsync_DetectsDuplicateNaturalKeysWithoutExcelPersistence()
     {
         await using var fixture = await CreateFixtureAsync();
-        var result = await fixture.Service.UploadAsync(new ExcelImportUploadCommand("faenas", "faenas.xlsx", Workbook(["Codigo", "Nombre", "Empresa"], [["F-001", "Uno", "Empresa"], ["F-001", "Dos", "Empresa"]]), "admin", false), CancellationToken.None);
+        var result = await fixture.Service.UploadAsync(new ExcelImportUploadCommand("faenas", "faenas.xlsx", Workbook(FaenaHeaders, [FaenaRow("F-001", "UT-001", "Activo"), FaenaRow("F-001", "UT-002", "Activo")]), "admin", false), CancellationToken.None);
         Assert.Equal(2, result.Import.Summary.DuplicateRows);
         Assert.All(result.Rows, row => Assert.Equal("Error", row.Operation));
         Assert.Equal(2, await fixture.Database.DbContext.ImportErrors.CountAsync());
@@ -40,12 +40,12 @@ public sealed class ExcelImportWorkflowTests
     public async Task ApproveAsync_AppliesTypedFaenaAndRecordsRelationalTrace()
     {
         await using var fixture = await CreateFixtureAsync();
-        var upload = await fixture.Service.UploadAsync(new ExcelImportUploadCommand("faenas", "faenas.xlsx", Workbook(["Codigo", "Nombre", "Empresa", "Estado"], [["F-100", "Faena nueva", "Empresa", "Activa"]]), "admin", false), CancellationToken.None);
+        var upload = await fixture.Service.UploadAsync(new ExcelImportUploadCommand("faenas", "faenas.xlsx", ValidFaenaWorkbook("F-100", "UT-F-100", "Activo"), "admin", false), CancellationToken.None);
         var approved = await fixture.Service.ApproveAsync(upload.Import.Id, "admin", CancellationToken.None);
         var faena = await fixture.Database.DbContext.Faenas.SingleAsync(item => item.Code == "F-100");
         await using var verification = fixture.Database.NewContext();
         var import = await verification.Imports.AsNoTracking().Include(item => item.Rows).Include(item => item.Events).SingleAsync(item => item.Id.ToString() == upload.Import.Id);
-        Assert.NotNull(approved); Assert.Equal(ImportStatus.Applied, approved!.Import.Status); Assert.Equal("Faena nueva", faena.Name); Assert.True(faena.IsActive); Assert.Contains(import.Events, item => item.Status == (int)ImportStatus.Applied); Assert.NotNull(import.FileId);
+        Assert.NotNull(approved); Assert.Equal(ImportStatus.Applied, approved!.Import.Status); Assert.Equal("Faena nueva", faena.Name); Assert.True(faena.IsActive); Assert.True(await fixture.Database.DbContext.TechnicalLocations.AnyAsync(item => item.Code == "UT-F-100" && item.FaenaId == faena.Id)); Assert.Contains(import.Events, item => item.Status == (int)ImportStatus.Applied); Assert.NotNull(import.FileId);
     }
 
     [Fact]
@@ -83,6 +83,14 @@ public sealed class ExcelImportWorkflowTests
         for (var row = 0; row < rows.Length; row++) for (var column = 0; column < rows[row].Length; column++) sheet.Cell(row + 2, column + 1).Value = rows[row][column];
         using var stream = new MemoryStream(); workbook.SaveAs(stream); return stream.ToArray();
     }
+
+    private static readonly string[] FaenaHeaders = ["Codigo", "Nombre", "UbicacionTecnicaCodigo", "UbicacionTecnicaNombre", "Zona", "Cliente", "CentroCostes", "TipoFaena", "Region", "Comuna", "Latitud", "Longitud", "ResponsableUsername", "Estado"];
+
+    private static byte[] ValidFaenaWorkbook(string code, string locationCode, string state) =>
+        Workbook(FaenaHeaders, [FaenaRow(code, locationCode, state)]);
+
+    private static string[] FaenaRow(string code, string locationCode, string state) =>
+        [code, "Faena nueva", locationCode, "Ubicacion " + locationCode, "Zona Norte", "Cliente", "CC-01", "Operacion", "Antofagasta", "Antofagasta", "-23.6500", "-70.4000", "admin", state];
 
     private sealed record Fixture(PostgreSqlWorkTestFixture Database, IExcelImportWorkflowService Service) : IAsyncDisposable
     { public ValueTask DisposeAsync() => Database.DisposeAsync(); }

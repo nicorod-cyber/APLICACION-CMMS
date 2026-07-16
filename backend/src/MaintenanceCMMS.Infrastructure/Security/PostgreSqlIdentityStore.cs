@@ -1,4 +1,5 @@
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -279,8 +280,7 @@ public sealed class PostgreSqlIdentityStore : IIdentityStore
             var faena = await _dbContext.Faenas.FirstOrDefaultAsync(item => item.Code == faenaCode, cancellationToken);
             if (faena is null)
             {
-                faena = new FaenaEntity { Code = faenaCode, Name = faenaCode, IsActive = true };
-                _dbContext.Faenas.Add(faena);
+                throw new DomainException($"La faena '{faenaCode}' no existe. Debe crearse con su responsable y ubicaci?n t?cnica.");
             }
 
             if (!user.Faenas.Any(item => item.FaenaId == faena.Id && item.IsActive))

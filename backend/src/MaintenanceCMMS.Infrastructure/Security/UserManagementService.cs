@@ -1,6 +1,8 @@
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Domain.Common;
+using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Security;
 
@@ -9,15 +11,18 @@ public sealed class UserManagementService : IUserManagementService
     private readonly IIdentityStore _identityStore;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IAuditService _auditService;
+    private readonly CmmsDbContext _dbContext;
 
     public UserManagementService(
         IIdentityStore identityStore,
         IPasswordHasher passwordHasher,
-        IAuditService auditService)
+        IAuditService auditService,
+        CmmsDbContext dbContext)
     {
         _identityStore = identityStore;
         _passwordHasher = passwordHasher;
         _auditService = auditService;
+        _dbContext = dbContext;
     }
 
     public async Task<IReadOnlyList<CurrentUserResponse>> ListAsync(CancellationToken cancellationToken)
@@ -88,6 +93,11 @@ public sealed class UserManagementService : IUserManagementService
         if (user is null)
         {
             return null;
+        }
+
+        if (user.IsActive && !request.IsActive)
+        {
+            await EnsureCanDeactivateOrLockAsync(user.Id, cancellationToken);
         }
 
         ValidateUserInput(user.Username, request.Email, request.DisplayName);
@@ -212,6 +222,11 @@ public sealed class UserManagementService : IUserManagementService
             return null;
         }
 
+        if (isLocked && !user.IsLocked)
+        {
+            await EnsureCanDeactivateOrLockAsync(user.Id, cancellationToken);
+        }
+
         var updated = user with
         {
             IsLocked = isLocked,
@@ -233,6 +248,24 @@ public sealed class UserManagementService : IUserManagementService
         return await MapUserAsync(updated, cancellationToken);
     }
 
+    private async Task EnsureCanDeactivateOrLockAsync(string userId, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(userId, out var parsedUserId))
+        {
+            throw new DomainException("El identificador del usuario responsable no es valido.");
+        }
+
+        var activeFaenaCodes = await _dbContext.Faenas
+            .AsNoTracking()
+            .Where(faena => faena.ResponsibleUserId == parsedUserId && faena.IsActive)
+            .OrderBy(faena => faena.Code)
+            .Select(faena => faena.Code)
+            .ToArrayAsync(cancellationToken);
+        if (activeFaenaCodes.Length > 0)
+        {
+            throw new DomainException($"No se puede desactivar o bloquear al responsable mientras tenga faenas activas: {string.Join(", ", activeFaenaCodes)}. Reasigne primero las faenas.");
+        }
+    }
     private async Task<IReadOnlyList<CurrentUserResponse>> MapUsersAsync(
         IReadOnlyCollection<UserAccount> users,
         CancellationToken cancellationToken)

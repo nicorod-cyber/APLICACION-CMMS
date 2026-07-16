@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
-import { FaenaSelect } from "../faenas/FaenaSelect";
+import { FaenaSelect, type FaenaRecord, useFaenas } from "../faenas/FaenaSelect";
 
 type TechnicalHierarchyLevel = "Sistema" | "Subsistema" | "Componente" | "Subcomponente";
 
@@ -25,7 +25,6 @@ type TechnicalNode = {
   nivel: TechnicalHierarchyLevel;
   codigoPadre?: string | null;
   faenaCodigo?: string | null;
-  ubicacionTecnicaCodigo?: string | null;
   familiasEquipo: string[];
   activosAsignados: string[];
   aliasHistoricos: string[];
@@ -64,7 +63,6 @@ type FormState = {
   nivel: TechnicalHierarchyLevel;
   codigoPadre: string;
   faenaCodigo: string;
-  ubicacionTecnicaCodigo: string;
   familiasEquipo: string;
   activosAsignados: string;
   aliasHistoricos: string;
@@ -85,7 +83,6 @@ const emptyForm: FormState = {
   nivel: "Sistema",
   codigoPadre: "",
   faenaCodigo: "",
-  ubicacionTecnicaCodigo: "",
   familiasEquipo: "",
   activosAsignados: "",
   aliasHistoricos: "",
@@ -111,6 +108,7 @@ export function TechnicalHierarchyPage() {
   const [mergeReason, setMergeReason] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { faenas: faenaOptions } = useFaenas(true);
 
   useEffect(() => {
     void loadHierarchy();
@@ -124,6 +122,11 @@ export function TechnicalHierarchyPage() {
   const familyOptions = useMemo(
     () => unique(nodes.flatMap((node) => node.familiasEquipo)),
     [nodes]
+  );
+
+  const selectedFormFaena = useMemo(
+    () => faenaOptions.find((faena) => faena.codigo === form.faenaCodigo) ?? null,
+    [faenaOptions, form.faenaCodigo]
   );
 
   async function loadHierarchy(nextFilters = filters) {
@@ -471,12 +474,13 @@ export function TechnicalHierarchyPage() {
               <Field label="Nombre" value={form.nombre} onChange={(value) => setForm({ ...form, nombre: value })} />
               <SelectField label="Nivel" disabled={!isCreating} value={form.nivel} options={levelOptions} onChange={(value) => setForm({ ...form, nivel: value as TechnicalHierarchyLevel })} />
               <Field label="Codigo padre" value={form.codigoPadre} onChange={(value) => setForm({ ...form, codigoPadre: value })} />
-              <FaenaSelect emptyLabel="Selecciona faena" value={form.faenaCodigo} onChange={(value) => setForm({ ...form, faenaCodigo: value })} />
-              <Field
-                label="Ubicacion tecnica"
-                value={form.ubicacionTecnicaCodigo}
-                onChange={(value) => setForm({ ...form, ubicacionTecnicaCodigo: value })}
+              <FaenaSelect
+                emptyLabel="Selecciona faena"
+                includeInactive={false}
+                value={form.faenaCodigo}
+                onChange={(value) => setForm({ ...form, faenaCodigo: value })}
               />
+              <DerivedTechnicalLocation faena={selectedFormFaena} />
             </div>
 
             <div className="mt-4 grid gap-3">
@@ -803,6 +807,21 @@ function FilterSelect({
   );
 }
 
+function DerivedTechnicalLocation({ faena }: { faena: FaenaRecord | null }) {
+  const location = faena?.ubicacionTecnica;
+  return (
+    <div className="rounded-md border border-slate-200 px-3 py-2 text-sm dark:border-slate-700">
+      <span className="block text-xs font-medium text-slate-500 dark:text-slate-400">Ubicación técnica derivada</span>
+      {location ? (
+        <span className="block font-medium text-slate-800 dark:text-slate-100">
+          {location.codigo} · {location.nombre}{location.obsoleto ? " (obsoleta)" : ""}
+        </span>
+      ) : (
+        <span className="block text-slate-500 dark:text-slate-400">Selecciona una faena con ubicación técnica.</span>
+      )}
+    </div>
+  );
+}
 function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -844,7 +863,6 @@ function toForm(node: TechnicalNode): FormState {
     nivel: node.nivel,
     codigoPadre: node.codigoPadre ?? "",
     faenaCodigo: node.faenaCodigo ?? "",
-    ubicacionTecnicaCodigo: node.ubicacionTecnicaCodigo ?? "",
     familiasEquipo: node.familiasEquipo.join("; "),
     activosAsignados: node.activosAsignados.join("; "),
     aliasHistoricos: node.aliasHistoricos.join("; "),
@@ -859,7 +877,6 @@ function toPayload(form: FormState) {
     nivel: form.nivel,
     codigoPadre: emptyToNull(form.codigoPadre),
     faenaCodigo: emptyToNull(form.faenaCodigo),
-    ubicacionTecnicaCodigo: emptyToNull(form.ubicacionTecnicaCodigo),
     familiasEquipo: parseList(form.familiasEquipo),
     activosAsignados: parseList(form.activosAsignados),
     aliasHistoricos: parseList(form.aliasHistoricos),

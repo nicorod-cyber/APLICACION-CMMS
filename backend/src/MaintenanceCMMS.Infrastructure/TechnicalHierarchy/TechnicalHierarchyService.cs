@@ -46,10 +46,10 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
     {
         EnsureCanManage(user);Req(r.Codigo,nameof(r.Codigo));Req(r.Nombre,nameof(r.Nombre));var code=Code(r.Codigo)!;
         if(await _db.TechnicalNodes.AnyAsync(x=>x.Code.ToUpper()==code,ct))throw new DomainException($"Ya existe un nodo tecnico con codigo '{r.Codigo}'.");
-        var parent=await ValidateParentAsync(null,r.Nivel,r.CodigoPadre,ct);var faena=await ResolveFaenaAsync(r.FaenaCodigo,user,ct);var loc=await ResolveLocationAsync(r.UbicacionTecnicaCodigo,ct);
+        var parent=await ValidateParentAsync(null,r.Nivel,r.CodigoPadre,ct);var faena=await ResolveFaenaAsync(r.FaenaCodigo,user,ct);
         var fams=await ResolveFamiliesAsync(r.FamiliasEquipo??[],ct);var assets=await ResolveAssetsAsync(r.ActivosAsignados??[],user,ct);var norm=NormalizeName(r.Nombre);
         await EnsureNoDuplicateAsync(null,r.Nivel,parent?.Id,norm,ct);
-        var node=new TechnicalNodeEntity{Code=code,Name=r.Nombre.Trim(),NormalizedName=norm,Level=r.Nivel.ToString(),ParentId=parent?.Id,FaenaId=faena?.Id,TechnicalLocationId=loc?.Id,CreatedByUserId=user.UserId};
+        var node=new TechnicalNodeEntity{Code=code,Name=r.Nombre.Trim(),NormalizedName=norm,Level=r.Nivel.ToString(),ParentId=parent?.Id,FaenaId=faena?.Id,CreatedByUserId=user.UserId};
         foreach(var f in fams)node.Families.Add(new TechnicalNodeFamilyEntity{EquipmentFamilyId=f.Id});
         foreach(var a in assets)node.Assets.Add(new TechnicalNodeAssetEntity{AssetId=a.Id});
         AddAliases(node,r.AliasHistoricos??[],"Manual");_db.TechnicalNodes.Add(node);await _db.SaveChangesAsync(ct);DetachTrackedTechnicalHierarchy();
@@ -60,10 +60,10 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
     public async Task<TechnicalNodeResponse?> UpdateAsync(string code, UpdateTechnicalNodeRequest r, UserAccessContext user, CancellationToken ct)
     {
         EnsureCanManage(user);Req(r.Nombre,nameof(r.Nombre));var node=await BaseQuery(true).SingleOrDefaultAsync(x=>x.Code.ToUpper()==Code(code),ct);if(node is null)return null;
-        var level=ParseLevel(node.Level);var parent=await ValidateParentAsync(node.Id,level,r.CodigoPadre,ct);var faena=await ResolveFaenaAsync(r.FaenaCodigo,user,ct);var loc=await ResolveLocationAsync(r.UbicacionTecnicaCodigo,ct);
+        var level=ParseLevel(node.Level);var parent=await ValidateParentAsync(node.Id,level,r.CodigoPadre,ct);var faena=await ResolveFaenaAsync(r.FaenaCodigo,user,ct);
         var fams=await ResolveFamiliesAsync(r.FamiliasEquipo??node.Families.Select(x=>x.EquipmentFamily.Code).ToArray(),ct);var assets=await ResolveAssetsAsync(r.ActivosAsignados??node.Assets.Select(x=>x.Asset.Code).ToArray(),user,ct);
         var norm=NormalizeName(r.Nombre);await EnsureNoDuplicateAsync(node.Id,level,parent?.Id,norm,ct);var prev=JsonSerializer.Serialize(AuditShape(node));var oldName=node.Name;
-        node.Name=r.Nombre.Trim();node.NormalizedName=norm;node.ParentId=parent?.Id;node.FaenaId=faena?.Id;node.TechnicalLocationId=loc?.Id;node.UpdatedByUserId=user.UserId;node.UpdatedAtUtc=DateTimeOffset.UtcNow;
+        node.Name=r.Nombre.Trim();node.NormalizedName=norm;node.ParentId=parent?.Id;node.FaenaId=faena?.Id;node.UpdatedByUserId=user.UserId;node.UpdatedAtUtc=DateTimeOffset.UtcNow;
         ReplaceFamilies(node,fams);ReplaceAssets(node,assets);if(!string.Equals(oldName,node.Name,StringComparison.OrdinalIgnoreCase))AddAliases(node,[oldName],"Rename");AddAliases(node,r.AliasHistoricos??[],"Manual");
         await _db.SaveChangesAsync(ct);await Audit(user,"Updated",node.Code,prev,JsonSerializer.Serialize(AuditShape(node)),r.Reason??"Nodo tecnico actualizado",ct);return await GetByCodeAsync(node.Code,user,ct);
     }
@@ -118,7 +118,7 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
 
     private IQueryable<TechnicalNodeEntity> BaseQuery(bool tracked=false)
     {
-        var q=_db.TechnicalNodes.Include(x=>x.Parent).Include(x=>x.Faena).Include(x=>x.TechnicalLocation).Include(x=>x.MergedIntoNode).Include(x=>x.Families).ThenInclude(x=>x.EquipmentFamily).Include(x=>x.Assets).ThenInclude(x=>x.Asset).ThenInclude(x=>x.Faena).Include(x=>x.Aliases).AsSplitQuery();
+        var q=_db.TechnicalNodes.Include(x=>x.Parent).Include(x=>x.Faena).ThenInclude(x=>x.TechnicalLocation).Include(x=>x.MergedIntoNode).Include(x=>x.Families).ThenInclude(x=>x.EquipmentFamily).Include(x=>x.Assets).ThenInclude(x=>x.Asset).ThenInclude(x=>x.Faena).Include(x=>x.Aliases).AsSplitQuery();
         return tracked?q:q.AsNoTracking();
     }
 
@@ -152,12 +152,9 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
     private async Task<FaenaEntity?> ResolveFaenaAsync(string? faenaCode, UserAccessContext user, CancellationToken ct)
     {
         if(string.IsNullOrWhiteSpace(faenaCode))return null;if(!_auth.CanViewFaena(user,faenaCode))throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena indicada.");var code=Code(faenaCode)!;
-        return await _db.Faenas.SingleOrDefaultAsync(x=>x.Code.ToUpper()==code,ct)??throw new DomainException("La faena indicada no existe.");
-    }
-
-    private async Task<TechnicalLocationEntity?> ResolveLocationAsync(string? locationCode, CancellationToken ct)
-    {
-        if(string.IsNullOrWhiteSpace(locationCode))return null;var code=Code(locationCode)!;return await _db.TechnicalLocations.SingleOrDefaultAsync(x=>x.Code.ToUpper()==code,ct)??throw new DomainException("La ubicacion tecnica indicada no existe.");
+        var faena = await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x=>x.Code.ToUpper()==code,ct)??throw new DomainException("La faena indicada no existe.");
+        if (faena.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene una ubicación técnica configurada.");
+        return faena;
     }
 
     private async Task<IReadOnlyCollection<EquipmentFamilyEntity>> ResolveFamiliesAsync(IReadOnlyCollection<string> values, CancellationToken ct)
@@ -194,7 +191,7 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
         var assets=n.Assets.Select(x=>x.Asset.Code).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToArray();
         var aliases=n.Aliases.Select(x=>x.Alias).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToArray();
         var children=all.Values.Any(x=>x.ParentId==n.Id&&!x.IsObsolete);
-        return new TechnicalNodeResponse(n.Code,n.Name,n.NormalizedName,ParseLevel(n.Level),n.Parent?.Code,n.Faena?.Code,n.TechnicalLocation?.Code,fams,assets,aliases,n.IsObsolete,n.MergedIntoNode?.Code,n.CreatedAtUtc,n.UpdatedAtUtc,PathOf(n,all),children,children||assets.Length>0);
+        return new TechnicalNodeResponse(n.Code,n.Name,n.NormalizedName,ParseLevel(n.Level),n.Parent?.Code,n.Faena?.Code,n.Faena?.TechnicalLocation?.Code,fams,assets,aliases,n.IsObsolete,n.MergedIntoNode?.Code,n.CreatedAtUtc,n.UpdatedAtUtc,PathOf(n,all),children,children||assets.Length>0);
     }
 
     private static string PathOf(TechnicalNodeEntity node,IReadOnlyDictionary<string,TechnicalNodeEntity> all)

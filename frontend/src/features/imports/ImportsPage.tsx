@@ -51,7 +51,6 @@ type ImportPreview = {
 
 const importEntities = [
   ["faenas", "Faenas"],
-  ["ubicaciones_tecnicas", "Ubicaciones tecnicas"],
   ["usuarios", "Usuarios"],
   ["bodegas", "Bodegas"],
   ["repuestos", "Repuestos"],
@@ -465,7 +464,7 @@ function inferEntityFromFileName(fileName: string) {
     return "faenas";
   }
   if (value.includes("ubicacion")) {
-    return "ubicaciones_tecnicas";
+    return "faenas";
   }
   if (value.includes("bodega") || value.includes("almacen")) {
     return "bodegas";

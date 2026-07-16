@@ -10,6 +10,7 @@ import {
   GitBranch,
   History,
   LayoutDashboard,
+  MapPinned,
   Package,
   PackageCheck,
   Settings,
@@ -32,6 +33,13 @@ export type NavigationItem = {
 
 export const navigationItems: NavigationItem[] = [
   { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, accent: "bg-teal-500" },
+  {
+    label: "Faenas",
+    path: "/faenas",
+    icon: MapPinned,
+    accent: "bg-teal-600",
+    roles: [AUTH_ROLES.admin]
+  },
   {
     label: "Activos",
     path: "/activos",

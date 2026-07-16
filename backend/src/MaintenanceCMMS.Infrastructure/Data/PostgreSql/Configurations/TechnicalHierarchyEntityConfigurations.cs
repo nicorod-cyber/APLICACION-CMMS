@@ -12,22 +12,13 @@ public sealed class TechnicalLocationConfiguration : IEntityTypeConfiguration<Te
         builder.ConfigureBase();
         builder.Property(entity => entity.Code).HasColumnName("codigo").HasMaxLength(120).IsRequired();
         builder.Property(entity => entity.Name).HasColumnName("nombre").HasMaxLength(240).IsRequired();
-        builder.Property(entity => entity.NormalizedName).HasColumnName("nombre_normalizado").HasMaxLength(240).IsRequired();
         builder.Property(entity => entity.FaenaId).HasColumnName("faena_id");
-        builder.Property(entity => entity.ParentId).HasColumnName("ubicacion_padre_id");
-        builder.Property(entity => entity.Type).HasColumnName("tipo").HasMaxLength(80);
         builder.Property(entity => entity.IsObsolete).HasColumnName("obsoleto");
-        builder.Property(entity => entity.CreatedByUserId).HasColumnName("creado_por_usuario_id").HasMaxLength(120);
-        builder.Property(entity => entity.UpdatedByUserId).HasColumnName("actualizado_por_usuario_id").HasMaxLength(120);
-        builder.HasOne(entity => entity.Faena).WithMany().HasForeignKey(entity => entity.FaenaId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasOne(entity => entity.Parent).WithMany(entity => entity.Children).HasForeignKey(entity => entity.ParentId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.Faena).WithOne(faena => faena.TechnicalLocation).HasForeignKey<TechnicalLocationEntity>(entity => entity.FaenaId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(entity => entity.Code).IsUnique();
-        builder.HasIndex(entity => entity.FaenaId);
-        builder.HasIndex(entity => entity.ParentId);
+        builder.HasIndex(entity => entity.FaenaId).IsUnique();
         builder.HasIndex(entity => entity.Name);
-        builder.HasIndex(entity => entity.NormalizedName);
         builder.HasIndex(entity => entity.IsObsolete);
-        builder.ToTable(table => table.HasCheckConstraint("ck_ubicaciones_tecnicas_no_self_parent", "ubicacion_padre_id IS NULL OR ubicacion_padre_id <> id"));
     }
 }
 
@@ -43,14 +34,12 @@ public sealed class TechnicalNodeConfiguration : IEntityTypeConfiguration<Techni
         builder.Property(entity => entity.Level).HasColumnName("nivel").HasMaxLength(40).IsRequired();
         builder.Property(entity => entity.ParentId).HasColumnName("nodo_padre_id");
         builder.Property(entity => entity.FaenaId).HasColumnName("faena_id");
-        builder.Property(entity => entity.TechnicalLocationId).HasColumnName("ubicacion_tecnica_id");
         builder.Property(entity => entity.IsObsolete).HasColumnName("obsoleto");
         builder.Property(entity => entity.MergedIntoNodeId).HasColumnName("fusionado_en_nodo_id");
         builder.Property(entity => entity.CreatedByUserId).HasColumnName("creado_por_usuario_id").HasMaxLength(120);
         builder.Property(entity => entity.UpdatedByUserId).HasColumnName("actualizado_por_usuario_id").HasMaxLength(120);
         builder.HasOne(entity => entity.Parent).WithMany(entity => entity.Children).HasForeignKey(entity => entity.ParentId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.Faena).WithMany().HasForeignKey(entity => entity.FaenaId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasOne(entity => entity.TechnicalLocation).WithMany().HasForeignKey(entity => entity.TechnicalLocationId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.MergedIntoNode).WithMany().HasForeignKey(entity => entity.MergedIntoNodeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(entity => entity.Code).IsUnique();
         builder.HasIndex(entity => entity.ParentId);

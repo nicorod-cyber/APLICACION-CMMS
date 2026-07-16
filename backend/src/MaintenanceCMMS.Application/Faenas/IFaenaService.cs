@@ -8,4 +8,20 @@ public interface IFaenaService
         FaenaQuery query,
         UserAccessContext user,
         CancellationToken cancellationToken);
+
+    Task<FaenaResponse?> GetByCodeAsync(
+        string code,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
+    Task<FaenaResponse> CreateAsync(
+        UpsertFaenaRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
+    Task<FaenaResponse?> UpdateAsync(
+        string code,
+        UpsertFaenaRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
 }

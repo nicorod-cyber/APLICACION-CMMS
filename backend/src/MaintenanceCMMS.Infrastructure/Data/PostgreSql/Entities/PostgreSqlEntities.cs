@@ -18,6 +18,7 @@ public sealed class AppUserEntity : PostgreSqlEntity
     public string PasswordHash { get; set; } = string.Empty;
     public List<UserRoleEntity> Roles { get; set; } = [];
     public List<UserFaenaEntity> Faenas { get; set; } = [];
+    public List<FaenaEntity> ResponsibleFaenas { get; set; } = [];
 }
 
 public sealed class RoleEntity : PostgreSqlEntity
@@ -77,6 +78,17 @@ public sealed class FaenaEntity : PostgreSqlEntity
 {
     public string Code { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public string? Zone { get; set; }
+    public string? Client { get; set; }
+    public string? CostCenter { get; set; }
+    public string? FaenaType { get; set; }
+    public string? Region { get; set; }
+    public string? Commune { get; set; }
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
+    public Guid? ResponsibleUserId { get; set; }
+    public AppUserEntity? ResponsibleUser { get; set; }
+    public TechnicalLocationEntity? TechnicalLocation { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
@@ -124,8 +136,6 @@ public sealed class AssetEntity : PostgreSqlEntity
     public FaenaEntity? Faena { get; set; }
     public Guid? FamilyId { get; set; }
     public EquipmentFamilyEntity? Family { get; set; }
-    public Guid? TechnicalLocationId { get; set; }
-    public TechnicalLocationEntity? TechnicalLocation { get; set; }
     public Guid OperationalStateId { get; set; }
     public AssetOperationalStateEntity OperationalState { get; set; } = null!;
     public string? Brand { get; set; }
@@ -402,8 +412,6 @@ public sealed class OperationalUnitEntity : PostgreSqlEntity
     public OperationalUnitTypeEntity OperationalUnitType { get; set; } = null!;
     public Guid? FaenaId { get; set; }
     public FaenaEntity? Faena { get; set; }
-    public Guid? TechnicalLocationId { get; set; }
-    public TechnicalLocationEntity? TechnicalLocation { get; set; }
     public Guid OperationalStateId { get; set; }
     public AssetOperationalStateEntity OperationalState { get; set; } = null!;
     public string? Criticality { get; set; }

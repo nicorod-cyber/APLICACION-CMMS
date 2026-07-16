@@ -29,6 +29,10 @@ public static class AuthPermissions
     public const string Administration = "administracion";
     public const string ManageUsers = "usuarios.gestionar";
     public const string AssignFaenas = "faenas.asignar";
+    public const string ViewFaenas = "faenas.ver";
+    public const string CreateFaenas = "faenas.crear";
+    public const string EditFaenas = "faenas.editar";
+    public const string DeactivateFaenas = "faenas.desactivar";
     public const string ApproveImports = "importaciones.aprobar";
     public const string ChangeAssetFaena = "activos.cambiar_faena";
     public const string ManageEquipmentFamilies = "familias_equipo.gestionar";

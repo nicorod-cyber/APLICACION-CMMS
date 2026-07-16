@@ -77,6 +77,8 @@ public interface IAuthorizationPolicyService
 
     bool CanImport(UserAccessContext user);
 
+    bool CanDeactivateFaena(UserAccessContext user);
+
     bool CanChangeAssetFaena(UserAccessContext user);
 
     bool CanManageTechnicalHierarchy(UserAccessContext user);

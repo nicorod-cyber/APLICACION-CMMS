@@ -6,7 +6,7 @@ public sealed record OperationalUnitTypeRequest(string Codigo, string Nombre, st
 public sealed record OperationalUnitRoleRequest(string Codigo, string Nombre, string? Descripcion = null);
 public sealed record AllowedComponentRequest(string? TipoActivoCodigo = null, string? FamiliaEquipoCodigo = null);
 public sealed record OperationalUnitRuleRequest(string TipoUnidadCodigo, string RolComponenteCodigo, int CantidadMinima, int CantidadMaxima, bool Obligatorio, IReadOnlyCollection<AllowedComponentRequest>? Permitidos = null);
-public sealed record OperationalUnitRequest(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string? UbicacionTecnicaCodigo, string EstadoOperacionalCodigo, string? Criticidad = null, DateOnly? FechaPuestaServicio = null, DateOnly? FechaBaja = null, string? Observaciones = null);
+public sealed record OperationalUnitRequest(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string EstadoOperacionalCodigo, string? Criticidad = null, DateOnly? FechaPuestaServicio = null, DateOnly? FechaBaja = null, string? Observaciones = null);
 public sealed record MountOperationalUnitComponentRequest(string ActivoCodigo, string RolComponenteCodigo, string? OrdenTrabajoNumero = null, DateTimeOffset? FechaMontajeUtc = null, string? Observaciones = null);
 public sealed record UnmountOperationalUnitComponentRequest(string? OrdenTrabajoNumero = null, DateTimeOffset? FechaDesmontajeUtc = null, string? Observaciones = null);
 public sealed record ReplaceOperationalUnitComponentRequest(string ActivoSalienteCodigo, string ActivoEntranteCodigo, string RolComponenteCodigo, string? OrdenTrabajoNumero = null, DateTimeOffset? FechaOperacionUtc = null, string? Observaciones = null);

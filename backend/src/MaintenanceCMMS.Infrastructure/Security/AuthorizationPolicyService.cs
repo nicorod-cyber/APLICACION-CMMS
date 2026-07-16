@@ -54,6 +54,11 @@ public sealed class AuthorizationPolicyService : IAuthorizationPolicyService
         return CanAdminister(user) || HasPermission(user, AuthPermissions.ApproveImports);
     }
 
+    public bool CanDeactivateFaena(UserAccessContext user)
+    {
+        return CanAdminister(user) || HasPermission(user, AuthPermissions.DeactivateFaenas);
+    }
+
     public bool CanChangeAssetFaena(UserAccessContext user)
     {
         return CanAdminister(user) || HasPermission(user, AuthPermissions.ChangeAssetFaena);
