@@ -34,7 +34,7 @@ type WorkOrderStatus =
   | "Anulada";
 
 type SparePartStatus = "Solicitado" | "Reservado" | "Entregado" | "Utilizado" | "Devuelto" | "Cancelado";
-type EvidenceType = "FotoAntes" | "FotoDespues" | "Archivo" | "Comentario" | "Otro";
+type EvidenceType = "FotoAntes" | "FotoDurante" | "FotoDespues" | "FotoPrueba";
 type ChecklistResponseType = "CumpleNoCumpleNoAplica" | "BuenoRegularMalo" | "SiNo" | "Numerico" | "Texto" | "FotoObligatoria" | "Archivo" | "Firma";
 
 type WorkOrderSummary = {
@@ -78,11 +78,12 @@ type WorkOrderTask = {
 };
 
 type WorkOrderTechnician = {
-  asignacionId: string;
-  numeroOT: string;
-  codigoTarea: string;
-  tecnicoUserId: string;
-  tecnicoNombre?: string | null;
+  usuarioId: string;
+  nombre: string;
+  asignadoEnUtc: string;
+  vigente: boolean;
+  desasignadoEnUtc?: string | null;
+  motivoDesasignacion?: string | null;
 };
 
 type WorkOrderLabor = {
@@ -237,13 +238,13 @@ export function WorkOrdersPage() {
   const [filters, setFilters] = useState({ status: "", faenaCodigo: "", technicianId: "", activoCodigo: "", unidadOperativaCodigo: "", includeClosed: false });
   const [orderForm, setOrderForm] = useState(emptyOrderForm);
   const [taskForm, setTaskForm] = useState(emptyTaskForm);
-  const [technicianForm, setTechnicianForm] = useState({ codigoTarea: "", tecnicoUserId: currentUser?.id ?? "", tecnicoNombre: "" });
-  const [laborForm, setLaborForm] = useState({ codigoTarea: "", tecnicoUserId: currentUser?.id ?? "", fechaTrabajo: "", horaInicio: "", horaTermino: "", horas: "1", descripcion: "", comentario: "" });
-  const [evidenceForm, setEvidenceForm] = useState({ codigoTarea: "", nombre: "", tipoEvidencia: "FotoDespues" as EvidenceType, archivoKey: "", sharePointUrl: "", localPath: "", storageProvider: "", offlineId: "", esObligatoria: false });
+  const [technicianForm, setTechnicianForm] = useState({ tecnicoUsuarioId: "" });
+  const [laborForm, setLaborForm] = useState({ codigoTarea: "", fechaTrabajo: "", horaInicio: "", horaTermino: "", horas: "1", descripcion: "" });
+  const [evidenceForm, setEvidenceForm] = useState({ codigoTarea: "", tipoEvidencia: "FotoDespues" as EvidenceType, descripcion: "", file: null as File | null });
   const [spareForm, setSpareForm] = useState({ codigoTarea: "", repuestoCodigo: "", cantidad: "1", unidad: "UN", estado: "Solicitado" as SparePartStatus });
   const [checklistForm, setChecklistForm] = useState({ codigoTarea: "", item: "", tipoRespuesta: "CumpleNoCumpleNoAplica" as ChecklistResponseType, requiereFoto: false, requiereArchivo: false, requiereFirma: false });
   const [templateForm, setTemplateForm] = useState({ codigoTarea: "", templateCode: "" });
-  const [signatureForm, setSignatureForm] = useState({ codigoTarea: "", scope: "OT", signatureFileKey: "", signatureImageDataUrl: "", comentario: "" });
+  const [signatureForm, setSignatureForm] = useState({ signatureImageDataUrl: "", comentario: "" });
   const [scheduleForm, setScheduleForm] = useState({ fechaInicioProgramada: "", fechaFinProgramada: "", reason: "" });
   const [actionReason, setActionReason] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -311,13 +312,12 @@ export function WorkOrdersPage() {
       const data = await apiFetch<WorkOrderDetail>(`/api/work-orders/${encodeURIComponent(id)}`);
       setDetail(data);
       const firstTask = data.tasks[0]?.codigoTarea ?? "";
-      setTechnicianForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
       setLaborForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
       setEvidenceForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
       setSpareForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
       setChecklistForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
       setTemplateForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
-      setSignatureForm((current) => ({ ...current, codigoTarea: current.codigoTarea || firstTask }));
+
     } catch (detailError) {
       setError(detailError instanceof Error ? detailError.message : "No fue posible cargar la ficha OT.");
     }
@@ -341,7 +341,7 @@ export function WorkOrdersPage() {
         fechaProgramada: toIsoOrNull(orderForm.fechaProgramada),
         requiereFirma: orderForm.requiereFirma
       };
-      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo físico.");
+      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo fÃƒÂ­sico.");
       const created = orderForm.preventive
         ? await apiFetch<WorkOrderDetail>("/api/work-orders/preventive", { method: "POST", body: JSON.stringify(body) })
         : await apiFetch<WorkOrderDetail>("/api/work-orders", { method: "POST", body: JSON.stringify(body) });
@@ -368,10 +368,7 @@ export function WorkOrdersPage() {
     event.preventDefault();
     if (!selected) return;
     await saveAction(async () => {
-      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/tasks/${encodeURIComponent(technicianForm.codigoTarea)}/technicians`, {
-        method: "POST",
-        body: JSON.stringify({ tecnicoUserId: technicianForm.tecnicoUserId, tecnicoNombre: emptyToNull(technicianForm.tecnicoNombre) })
-      });
+      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/technicians`, { method: "POST", body: JSON.stringify({ tecnicoUsuarioIds: [technicianForm.tecnicoUsuarioId] }) });
       setMessage("Tecnico asignado.");
     });
   }
@@ -382,29 +379,18 @@ export function WorkOrdersPage() {
     await saveAction(async () => {
       await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/tasks/${encodeURIComponent(laborForm.codigoTarea)}/labor`, {
         method: "POST",
-        body: JSON.stringify({
-          tecnicoUserId: laborForm.tecnicoUserId,
-          horas: laborForm.horaInicio && laborForm.horaTermino ? null : Number(laborForm.horas),
-          descripcion: laborForm.descripcion,
-          fechaTrabajo: toIsoOrNull(laborForm.fechaTrabajo),
-          horaInicio: toIsoDateTimeOrNull(laborForm.fechaTrabajo, laborForm.horaInicio),
-          horaTermino: toIsoDateTimeOrNull(laborForm.fechaTrabajo, laborForm.horaTermino),
-          comentario: emptyToNull(laborForm.comentario)
-        })
+        body: JSON.stringify({ fechaTrabajo: laborForm.fechaTrabajo, horaInicio: laborForm.horaInicio || null, horaFin: laborForm.horaTermino || null, horas: laborForm.horaInicio && laborForm.horaTermino ? null : Number(laborForm.horas), tipoHora: "NORMAL", descripcionTrabajo: laborForm.descripcion })
       });
-      setLaborForm({ ...laborForm, horas: "1", descripcion: "", comentario: "" });
+      setLaborForm({ ...laborForm, horas: "1", descripcion: "" });
       setMessage("HH registradas.");
     });
   }
 
-  async function validateLabor(item: WorkOrderLabor, validado: boolean) {
+  async function approveLabor(item: WorkOrderLabor) {
     if (!selected) return;
     await saveAction(async () => {
-      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/labor/${encodeURIComponent(item.hhId)}/validate`, {
-        method: "POST",
-        body: JSON.stringify({ validado, reason: validado ? "HH validada por supervisor" : "HH observada por supervisor" })
-      });
-      setMessage(validado ? "HH validada." : "Validacion HH retirada.");
+      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/labor/${encodeURIComponent(item.hhId)}/approve`, { method: "POST", body: JSON.stringify({ motivo: "HH validada por supervisor" }) });
+      setMessage("HH validada.");
     });
   }
 
@@ -412,24 +398,14 @@ export function WorkOrdersPage() {
     event.preventDefault();
     if (!selected) return;
     await saveAction(async () => {
-      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/evidences`, {
-        method: "POST",
-        body: JSON.stringify({
-          codigoTarea: emptyToNull(evidenceForm.codigoTarea),
-          nombre: evidenceForm.nombre,
-          archivoKey: emptyToNull(evidenceForm.archivoKey),
-          sharePointUrl: emptyToNull(evidenceForm.sharePointUrl),
-          localPath: emptyToNull(evidenceForm.localPath),
-          storageProvider: emptyToNull(evidenceForm.storageProvider),
-          offlineId: emptyToNull(evidenceForm.offlineId),
-          tipoEvidencia: evidenceForm.tipoEvidencia,
-          esFoto: evidenceForm.tipoEvidencia === "FotoAntes" || evidenceForm.tipoEvidencia === "FotoDespues",
-          esObligatoria: evidenceForm.esObligatoria,
-          cubreEvidenciaObligatoria: evidenceForm.esObligatoria || evidenceForm.tipoEvidencia === "FotoDespues"
-        })
-      });
-      setEvidenceForm({ ...evidenceForm, nombre: "", archivoKey: "", sharePointUrl: "", localPath: "", offlineId: "" });
-      setMessage("Evidencia registrada.");
+      if (!evidenceForm.file) throw new Error("Seleccione una fotografía.");
+      const form = new FormData();
+      form.set("file", evidenceForm.file);
+      form.set("tipo", evidenceForm.tipoEvidencia);
+      if (evidenceForm.descripcion.trim()) form.set("descripcion", evidenceForm.descripcion.trim());
+      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/tasks/${encodeURIComponent(evidenceForm.codigoTarea)}/evidences`, { method: "POST", body: form });
+      setEvidenceForm({ ...evidenceForm, descripcion: "", file: null });
+      setMessage("Fotografía cargada.");
     });
   }
 
@@ -516,18 +492,14 @@ export function WorkOrdersPage() {
   async function registerSignature() {
     if (!selected) return;
     await saveAction(async () => {
-      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/signatures`, {
-        method: "POST",
-        body: JSON.stringify({
-          signatureFileKey: emptyToNull(signatureForm.signatureFileKey),
-          signatureImageDataUrl: emptyToNull(signatureForm.signatureImageDataUrl),
-          usuarioId: currentUser?.id,
-          codigoTarea: emptyToNull(signatureForm.codigoTarea),
-          scope: signatureForm.scope,
-          comentario: emptyToNull(signatureForm.comentario)
-        })
-      });
-      setSignatureForm({ ...signatureForm, signatureFileKey: "", signatureImageDataUrl: "", comentario: "" });
+      if (!signatureForm.signatureImageDataUrl) throw new Error("Capture la firma antes de enviarla.");
+      const response = await fetch(signatureForm.signatureImageDataUrl);
+      const blob = await response.blob();
+      const form = new FormData();
+      form.set("file", blob, "firma.png");
+      if (signatureForm.comentario.trim()) form.set("comentario", signatureForm.comentario.trim());
+      await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/signatures`, { method: "POST", body: form });
+      setSignatureForm({ signatureImageDataUrl: "", comentario: "" });
       setMessage("Firma registrada.");
     });
   }
@@ -826,8 +798,8 @@ export function WorkOrdersPage() {
             <button className="secondary-button" type="button" disabled={isSaving || !canPlan} onClick={() => void runAction("/start", "OT iniciada.")}><PlayCircle size={18} /> Iniciar</button>
             <button className="secondary-button" type="button" disabled={isSaving} onClick={() => void runAction("/pause", "OT pausada.")}><PauseCircle size={18} /> Pausar</button>
             <button className="secondary-button" type="button" disabled={isSaving} onClick={() => void runAction("/finish-technician", "OT finalizada por tecnico.")}><CheckCircle2 size={18} /> Finalizar tecnico</button>
-            <button className="secondary-button" type="button" disabled={isSaving || !canClose} onClick={() => void runAction("/close-technical", "OT cerrada tecnicamente.")}><ClipboardCheck size={18} /> Cierre supervisor</button>
-            <button className="secondary-button" type="button" disabled={isSaving || !canValidate} onClick={() => void runAction("/validate-planning", "OT validada por planificacion.")}><CalendarClock size={18} /> Validar</button>
+            <button className="secondary-button" type="button" disabled={isSaving || !canClose} onClick={() => void runAction("/technical-close", "OT cerrada tecnicamente.")}><ClipboardCheck size={18} /> Cierre supervisor</button>
+            <button className="secondary-button" type="button" disabled={isSaving || !canValidate} onClick={() => void runAction("/planning-validation", "OT validada por planificacion.")}><CalendarClock size={18} /> Validar</button>
             <button className="danger-button" type="button" disabled={isSaving || !canPlan} onClick={() => void runAction("/annul", "OT anulada.")}><XCircle size={18} /> Anular</button>
           </div>
 
@@ -856,49 +828,41 @@ export function WorkOrdersPage() {
 
             <form className="panel-muted stack" onSubmit={assignTechnician}>
               <h3>Tecnicos asignados</h3>
-              <TaskSelect tasks={detail.tasks} value={technicianForm.codigoTarea} onChange={(value) => setTechnicianForm({ ...technicianForm, codigoTarea: value })} />
-              <div className="form-grid">
-                <label>Tecnico ID<input value={technicianForm.tecnicoUserId} onChange={(event) => setTechnicianForm({ ...technicianForm, tecnicoUserId: event.target.value })} required /></label>
-                <label>Nombre<input value={technicianForm.tecnicoNombre} onChange={(event) => setTechnicianForm({ ...technicianForm, tecnicoNombre: event.target.value })} /></label>
+                            <div className="form-grid">
+                <label>TÃ©cnico usuario ID<input value={technicianForm.tecnicoUsuarioId} onChange={(event) => setTechnicianForm({ tecnicoUsuarioId: event.target.value })} required /></label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving || !canPlan}><UserPlus size={18} /> Asignar</button>
-              <MiniTable rows={detail.technicians.map((item) => [item.codigoTarea, item.tecnicoUserId, item.tecnicoNombre ?? "-"])} />
+              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "HistÃ³rico"])} />
             </form>
 
             <form className="panel-muted stack" onSubmit={registerLabor}>
               <h3>HH</h3>
               <TaskSelect tasks={detail.tasks} value={laborForm.codigoTarea} onChange={(value) => setLaborForm({ ...laborForm, codigoTarea: value })} />
               <div className="form-grid">
-                <label>Tecnico<input value={laborForm.tecnicoUserId} onChange={(event) => setLaborForm({ ...laborForm, tecnicoUserId: event.target.value })} required /></label>
-                <label>Fecha<input type="date" value={laborForm.fechaTrabajo} onChange={(event) => setLaborForm({ ...laborForm, fechaTrabajo: event.target.value })} /></label>
+                                <label>Fecha<input type="date" value={laborForm.fechaTrabajo} onChange={(event) => setLaborForm({ ...laborForm, fechaTrabajo: event.target.value })} /></label>
                 <label>Inicio<input type="time" value={laborForm.horaInicio} onChange={(event) => setLaborForm({ ...laborForm, horaInicio: event.target.value })} /></label>
                 <label>Termino<input type="time" value={laborForm.horaTermino} onChange={(event) => setLaborForm({ ...laborForm, horaTermino: event.target.value })} /></label>
                 <label>HH manual<input type="number" min="0.1" step="0.1" value={laborForm.horas} onChange={(event) => setLaborForm({ ...laborForm, horas: event.target.value })} required={!laborForm.horaInicio || !laborForm.horaTermino} /></label>
                 <label className="span-2">Trabajo<input value={laborForm.descripcion} onChange={(event) => setLaborForm({ ...laborForm, descripcion: event.target.value })} required /></label>
-                <label className="span-2">Comentario<input value={laborForm.comentario} onChange={(event) => setLaborForm({ ...laborForm, comentario: event.target.value })} /></label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving}><Clock size={18} /> Registrar HH</button>
               <MiniTable rows={detail.labor.map((item) => [
                 item.codigoTarea,
                 item.tecnicoUserId,
                 `${item.horas} h`,
-                item.validadoSupervisor ? "Validada" : <button key={item.hhId} type="button" className="text-teal-700" onClick={() => void validateLabor(item, true)}>validar</button>
+                item.validadoSupervisor ? "Validada" : <button key={item.hhId} type="button" className="text-teal-700" onClick={() => void approveLabor(item)}>validar</button>
               ])} />
             </form>
 
             <form className="panel-muted stack" onSubmit={registerEvidence}>
               <h3>Evidencias</h3>
-              <TaskSelect tasks={detail.tasks} value={evidenceForm.codigoTarea} onChange={(value) => setEvidenceForm({ ...evidenceForm, codigoTarea: value })} allowEmpty />
+              <TaskSelect tasks={detail.tasks} value={evidenceForm.codigoTarea} onChange={(value) => setEvidenceForm({ ...evidenceForm, codigoTarea: value })} />
               <div className="form-grid">
-                <label>Nombre<input value={evidenceForm.nombre} onChange={(event) => setEvidenceForm({ ...evidenceForm, nombre: event.target.value })} required /></label>
-                <label>Tipo<select value={evidenceForm.tipoEvidencia} onChange={(event) => setEvidenceForm({ ...evidenceForm, tipoEvidencia: event.target.value as EvidenceType })}><option value="FotoAntes">Foto antes</option><option value="FotoDespues">Foto despues</option><option value="Archivo">Archivo</option><option value="Comentario">Comentario</option><option value="Otro">Otro</option></select></label>
-                <label>ArchivoKey<input value={evidenceForm.archivoKey} onChange={(event) => setEvidenceForm({ ...evidenceForm, archivoKey: event.target.value })} /></label>
-                <label>SharePoint URL<input value={evidenceForm.sharePointUrl} onChange={(event) => setEvidenceForm({ ...evidenceForm, sharePointUrl: event.target.value })} /></label>
-                <label>Ruta local<input value={evidenceForm.localPath} onChange={(event) => setEvidenceForm({ ...evidenceForm, localPath: event.target.value })} /></label>
-                <label>Offline ID<input value={evidenceForm.offlineId} onChange={(event) => setEvidenceForm({ ...evidenceForm, offlineId: event.target.value })} /></label>
-                <label className="check-row"><input type="checkbox" checked={evidenceForm.esObligatoria} onChange={(event) => setEvidenceForm({ ...evidenceForm, esObligatoria: event.target.checked })} />Obligatoria</label>
+                <label>Tipo<select value={evidenceForm.tipoEvidencia} onChange={(event) => setEvidenceForm({ ...evidenceForm, tipoEvidencia: event.target.value as EvidenceType })}><option value="FotoAntes">Foto antes</option><option value="FotoDurante">Foto durante</option><option value="FotoDespues">Foto después</option><option value="FotoPrueba">Foto prueba</option></select></label>
+                <label>Fotografía<input type="file" accept="image/*" onChange={(event) => setEvidenceForm({ ...evidenceForm, file: event.target.files?.[0] ?? null })} required /></label>
+                <label className="span-2">Descripción<input value={evidenceForm.descripcion} onChange={(event) => setEvidenceForm({ ...evidenceForm, descripcion: event.target.value })} /></label>
               </div>
-              <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Registrar evidencia</button>
+              <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Cargar fotografía</button>
               <MiniTable rows={detail.evidences.map((item) => [item.codigoTarea ?? "OT", item.tipoEvidencia, item.nombre, item.sharePointUrl ?? item.localPath ?? item.archivoKey ?? "-"])} />
             </form>
 
@@ -946,13 +910,11 @@ export function WorkOrdersPage() {
               </div>
               <MiniTable rows={detail.checklist.map((item) => [item.codigoTarea, item.item, item.tipoRespuesta, <button key={item.itemId} type="button" className={item.completado ? "text-emerald-700" : "text-amber-700"} onClick={() => void toggleChecklist(item)}>{item.completado ? "Completo" : "Pendiente"}</button>])} />
               <div className="form-grid">
-                <TaskSelect tasks={detail.tasks} value={signatureForm.codigoTarea} onChange={(value) => setSignatureForm({ ...signatureForm, codigoTarea: value, scope: value ? "Tarea" : "OT" })} allowEmpty />
-                <label>Firma archivo<input value={signatureForm.signatureFileKey} onChange={(event) => setSignatureForm({ ...signatureForm, signatureFileKey: event.target.value })} placeholder="firma/usuario.svg" /></label>
-                <label>Comentario<input value={signatureForm.comentario} onChange={(event) => setSignatureForm({ ...signatureForm, comentario: event.target.value })} /></label>
+                <label className="span-2">Comentario<input value={signatureForm.comentario} onChange={(event) => setSignatureForm({ ...signatureForm, comentario: event.target.value })} /></label>
               </div>
               <SignaturePad value={signatureForm.signatureImageDataUrl} onChange={(value) => setSignatureForm({ ...signatureForm, signatureImageDataUrl: value })} />
-              <button className="secondary-button" type="button" disabled={isSaving || (!signatureForm.signatureFileKey && !signatureForm.signatureImageDataUrl)} onClick={() => void registerSignature()}><PenLine size={18} /> Registrar firma</button>
-              <MiniTable rows={detail.signatures.map((item) => [item.usuarioId, item.codigoTarea ?? "OT", item.signatureFileKey ?? "firma dibujada", item.firmaId])} />
+              <button className="secondary-button" type="button" disabled={isSaving || !signatureForm.signatureImageDataUrl} onClick={() => void registerSignature()}><PenLine size={18} /> Registrar firma</button>
+              <MiniTable rows={detail.signatures.map((item) => [item.usuarioId, "OT", item.signatureFileKey ?? "firma", item.firmaId])} />
             </form>
           </section>
         </section>

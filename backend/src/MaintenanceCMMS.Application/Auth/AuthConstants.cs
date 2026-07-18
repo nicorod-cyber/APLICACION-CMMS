@@ -52,7 +52,17 @@ public static class AuthPermissions
     public const string ManageAlerts = "alertas.gestionar";
     public const string ConfigureAlerts = "alertas.configurar";
     public const string AdjustStock = "stock.ajustar";
-    public const string CloseWorkOrders = "ot.cerrar";
+    public const string CreateWorkOrders = "ot.crear";
+    public const string AssignWorkOrderSupervisor = "ot.asignar_supervisor";
+    public const string SendWorkOrderToSupervisor = "ot.enviar_supervisor";
+    public const string ManageWorkOrderTasks = "ot.tareas.gestionar";
+    public const string ManageWorkOrderTechnicians = "ot.tecnicos.gestionar";
+    public const string ExecuteAssignedWorkOrders = "ot.ejecutar_asignadas";
+    public const string RegisterWorkOrderLabor = "ot.hh.registrar";
+    public const string ReviewWorkOrderLabor = "ot.hh.revisar";
+    public const string RegisterWorkOrderEvidence = "ot.evidencias.registrar";
+    public const string SignWorkOrders = "ot.firmar";
+    public const string ReviewWorkOrderTasks = "ot.tareas.revisar";    public const string CloseWorkOrders = "ot.cerrar";
     public const string FinalValidateWorkOrders = "ot.validar_final";
     public const string ViewCosts = "costos.ver";
     public const string ViewGlobalWarehouses = "bodegas.global";

@@ -56,6 +56,46 @@ public sealed class RelationalOperationalModulesTests
     }
 
     [Fact]
+    public async Task Preventive_Generation_CopiesChecklistTasksAsAnImmutableSnapshot()
+    {
+        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        var db = fixture.DbContext;
+        var service = new PreventiveMaintenanceService(db);
+        var template = await db.ChecklistTemplates.SingleAsync(x => x.Code == "TPL-BASE");
+        var firstItem = await db.ChecklistTemplateItems.SingleAsync(x => x.TemplateId == template.Id && x.SortOrder == 1);
+        db.ChecklistTemplateItems.Add(new ChecklistTemplateItemEntity
+        {
+            TemplateId = template.Id,
+            SortOrder = 2,
+            ItemText = "Medicion preventiva",
+            Mandatory = true,
+            ResponseTypeId = firstItem.ResponseTypeId,
+            RequiresPhoto = true,
+            IsActive = true
+        });
+        await db.SaveChangesAsync();
+
+        await service.UpsertPlanAsync(new("PM-SNAPSHOT", "Plan con snapshot", ActivoCodigo: "ACT-1", FrecuenciaDias: 30, ChecklistCodigo: template.Code, FechaInicio: DateTimeOffset.UtcNow), Admin, CancellationToken.None);
+        var generated = await service.GenerateWorkOrderAsync("PM-SNAPSHOT", new("ACT-1", "Generacion de prueba"), Admin, CancellationToken.None);
+
+        var order = await db.WorkOrders.Include(x => x.MaintenanceType).Include(x => x.Tasks).Include(x => x.Checklist).SingleAsync(x => x.WorkOrderNumber == generated.NumeroOT);
+        Assert.Equal(PreventiveStatus.OTGenerada, generated.Estado);
+        Assert.True(order.IsAutomaticPreventive);
+        Assert.Equal("PM-SNAPSHOT", order.PreventivePlanCode);
+        Assert.Equal("Preventive", order.MaintenanceType.Code);
+        Assert.Equal(2, order.Tasks.Count);
+        Assert.All(order.Tasks, task => Assert.Equal("PautaPreventiva", task.Origin));
+        Assert.Equal(2, order.Checklist.Count);
+
+        firstItem.ItemText = "Pauta modificada despues de generar la OT";
+        await db.SaveChangesAsync();
+        await using var verification = fixture.NewContext();
+        var snapshotTitles = await verification.WorkOrderTasks.Where(x => x.WorkOrderId == order.Id).OrderBy(x => x.TaskCode).Select(x => x.Title).ToArrayAsync();
+        Assert.Contains("Verificacion base", snapshotTitles);
+        Assert.Contains("Medicion preventiva", snapshotTitles);
+        Assert.DoesNotContain("Pauta modificada despues de generar la OT", snapshotTitles);
+    }
+    [Fact]
     public async Task Scheduling_DependencyRejectsDuplicateAndCycle_AndPersists()
     {
         await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();

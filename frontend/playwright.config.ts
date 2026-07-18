@@ -1,0 +1,14 @@
+import { defineConfig } from "@playwright/test";
+
+export default defineConfig({
+  testDir: "./e2e",
+  fullyParallel: false,
+  reporter: [["list"], ["html", { outputFolder: "../artifacts/playwright-report", open: "never" }]],
+  outputDir: "../artifacts/playwright-results",
+  use: {
+    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:8080",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure"
+  }
+});

@@ -146,19 +146,6 @@ public sealed class WorkOrderTask : AuditableEntity
     public bool RequiresLabor { get; private set; }
 }
 
-public sealed class WorkOrderTaskTechnician : AuditableEntity
-{
-    public WorkOrderTaskTechnician(EntityId taskId, EntityId technicianUserId)
-    {
-        TaskId = taskId;
-        TechnicianUserId = technicianUserId;
-    }
-
-    public EntityId TaskId { get; private set; }
-
-    public EntityId TechnicianUserId { get; private set; }
-}
-
 public sealed class WorkOrderStatusHistory : AuditableEntity
 {
     public WorkOrderStatusHistory(EntityId workOrderId, WorkOrderStatus fromStatus, WorkOrderStatus toStatus)

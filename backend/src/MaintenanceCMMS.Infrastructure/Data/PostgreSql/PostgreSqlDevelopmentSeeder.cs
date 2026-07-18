@@ -150,6 +150,7 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         foreach (var value in Enum.GetNames<WorkFailureClassification>()) await UpsertWorkCatalogAsync("WorkFailureClassification", value, order++, cancellationToken);
         order = 1;
         foreach (var value in Enum.GetNames<WorkOrderLifecycleStatus>()) await UpsertWorkCatalogAsync("WorkOrderLifecycleStatus", value, order++, cancellationToken);
+        foreach (var value in Enum.GetNames<WorkOrderTaskStatus>()) await UpsertWorkCatalogAsync("WorkOrderTaskStatus", value, order++, cancellationToken);
         order = 1;
         foreach (var value in Enum.GetNames<WorkOrderSparePartStatus>()) await UpsertWorkCatalogAsync("WorkOrderSparePartStatus", value, order++, cancellationToken);
         order = 1;

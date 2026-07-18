@@ -44,7 +44,8 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<WorkOrderEntity> WorkOrders => Set<WorkOrderEntity>();
     public DbSet<WorkOrderAssetEntity> WorkOrderAssets => Set<WorkOrderAssetEntity>();
     public DbSet<WorkOrderTaskEntity> WorkOrderTasks => Set<WorkOrderTaskEntity>();
-    public DbSet<WorkOrderTaskTechnicianEntity> WorkOrderTaskTechnicians => Set<WorkOrderTaskTechnicianEntity>();
+    public DbSet<WorkOrderTechnicianEntity> WorkOrderTechnicians => Set<WorkOrderTechnicianEntity>();
+    public DbSet<WorkOrderTaskStatusHistoryEntity> WorkOrderTaskStatusHistory => Set<WorkOrderTaskStatusHistoryEntity>();
     public DbSet<WorkOrderLaborEntity> WorkOrderLabor => Set<WorkOrderLaborEntity>();
     public DbSet<WorkOrderEvidenceEntity> WorkOrderEvidences => Set<WorkOrderEvidenceEntity>();
     public DbSet<WorkOrderSparePartEntity> WorkOrderSpareParts => Set<WorkOrderSparePartEntity>();

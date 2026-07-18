@@ -13,7 +13,8 @@ public enum WorkOrderLifecycleStatus
     EnRevisionSupervisor = 8,
     CerradaTecnicamente = 9,
     ValidadaPlanificacion = 10,
-    Anulada = 11
+    Anulada = 11,
+    EnviadaSupervisor = 12
 }
 
 public enum WorkOrderSparePartStatus
@@ -26,13 +27,34 @@ public enum WorkOrderSparePartStatus
     Cancelado = 5
 }
 
+public enum WorkOrderTaskStatus
+{
+    PendienteAsignacion = 0,
+    Asignada = 1,
+    EnEjecucion = 2,
+    CompletadaTecnico = 3,
+    EnRevisionSupervisor = 4,
+    Observada = 5,
+    AprobadaSupervisor = 6,
+    Cancelada = 7
+}
+
+public enum WorkOrderTaskOrigin
+{
+    ManualSupervisor = 0,
+    PautaPreventiva = 1,
+    HallazgoEjecucion = 2
+}
+
 public enum WorkOrderEvidenceType
 {
     FotoAntes = 0,
-    FotoDespues = 1,
-    Archivo = 2,
-    Comentario = 3,
-    Otro = 4
+    FotoDurante = 1,
+    FotoDespues = 2,
+    FotoPrueba = 3,
+    Archivo = 4,
+    Comentario = 5,
+    Otro = 6
 }
 
 public enum WorkOrderChecklistResponseType
@@ -95,10 +117,6 @@ public sealed record CreateWorkOrderTaskRequest(
     bool RequiereHH = true,
     bool ChecklistObligatorio = false,
     string? Observaciones = null);
-
-public sealed record AssignTaskTechnicianRequest(
-    string TecnicoUserId,
-    string? TecnicoNombre = null);
 
 public sealed record RegisterLaborRequest(
     string TecnicoUserId,
@@ -212,7 +230,7 @@ public sealed record WorkOrderSummaryResponse(
 public sealed record WorkOrderDetailResponse(
     WorkOrderSummaryResponse Summary,
     IReadOnlyCollection<WorkOrderTaskResponse> Tasks,
-    IReadOnlyCollection<WorkOrderTaskTechnicianResponse> Technicians,
+    IReadOnlyCollection<WorkOrderTechnicianResponse> Technicians,
     IReadOnlyCollection<WorkOrderLaborResponse> Labor,
     IReadOnlyCollection<WorkOrderEvidenceResponse> Evidences,
     IReadOnlyCollection<WorkOrderSparePartResponse> SpareParts,
@@ -232,16 +250,15 @@ public sealed record WorkOrderTaskResponse(
     bool RequiereEvidencia,
     bool RequiereHH,
     bool ChecklistObligatorio,
-    string? Observaciones);
-
-public sealed record WorkOrderTaskTechnicianResponse(
-    string AsignacionId,
-    string NumeroOT,
-    string CodigoTarea,
-    string TecnicoUserId,
-    string? TecnicoNombre,
-    DateTimeOffset AsignadoEnUtc,
-    string AsignadoPor);
+    string? Observaciones,
+    string Titulo = "",
+    string? CriterioAceptacion = null,
+    decimal HorasEstimadas = 0,
+    WorkOrderTaskStatus Estado = WorkOrderTaskStatus.PendienteAsignacion,
+    WorkOrderTaskOrigin OrigenTarea = WorkOrderTaskOrigin.ManualSupervisor,
+    DateTimeOffset? InicioRealUtc = null,
+    DateTimeOffset? CompletadaTecnicoUtc = null,
+    string? MotivoObservacion = null);
 
 public sealed record WorkOrderLaborResponse(
     string HHId,

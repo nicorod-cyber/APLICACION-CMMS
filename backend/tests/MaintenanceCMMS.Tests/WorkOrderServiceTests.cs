@@ -2,254 +2,143 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using MaintenanceCMMS.Infrastructure.WorkOrders;
-using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace MaintenanceCMMS.Tests;
 
 public sealed class WorkOrderServiceTests
 {
-    private static readonly UserAccessContext Planner = new(
-        "planner",
-        [AuthRoles.Planner],
-        [AuthPermissions.FinalValidateWorkOrders],
-        ["FAE-1"]);
-
-    private static readonly UserAccessContext Supervisor = new(
-        "supervisor",
-        [AuthRoles.MaintenanceSupervisor],
-        [AuthPermissions.CloseWorkOrders],
-        ["FAE-1"]);
-
-    private static readonly UserAccessContext Technician = new(
-        "tech-1",
-        [AuthRoles.Technician],
-        [AuthPermissions.ViewAssignedWorkOrders],
-        ["FAE-1"]);
+    private const string FaenaCode = "FAE-1";
+    private static readonly UserAccessContext Planner = new(PostgreSqlWorkTestFixture.PlannerUserId.ToString("D"), [AuthRoles.Planner], [AuthPermissions.CreateWorkOrders, AuthPermissions.AssignWorkOrderSupervisor, AuthPermissions.SendWorkOrderToSupervisor, AuthPermissions.FinalValidateWorkOrders], [FaenaCode]);
+    private static readonly UserAccessContext Supervisor = new(PostgreSqlWorkTestFixture.SupervisorUserId.ToString("D"), [AuthRoles.MaintenanceSupervisor], [AuthPermissions.ManageWorkOrderTasks, AuthPermissions.ManageWorkOrderTechnicians, AuthPermissions.ReviewWorkOrderLabor, AuthPermissions.ReviewWorkOrderTasks, AuthPermissions.CloseWorkOrders], [FaenaCode]);
+    private static readonly UserAccessContext TechnicianOne = new(PostgreSqlWorkTestFixture.TechnicianOneUserId.ToString("D"), [AuthRoles.Technician], [AuthPermissions.ExecuteAssignedWorkOrders, AuthPermissions.RegisterWorkOrderLabor, AuthPermissions.RegisterWorkOrderEvidence, AuthPermissions.SignWorkOrders], [FaenaCode]);
+    private static readonly UserAccessContext TechnicianTwo = new(PostgreSqlWorkTestFixture.TechnicianTwoUserId.ToString("D"), [AuthRoles.Technician], [AuthPermissions.ExecuteAssignedWorkOrders, AuthPermissions.RegisterWorkOrderLabor, AuthPermissions.RegisterWorkOrderEvidence, AuthPermissions.SignWorkOrders], [FaenaCode]);
 
     [Fact]
-    public async Task CompleteFlow_ClosesAndValidatesWorkOrder()
+    public async Task CorrectiveFlow_ClosesAndPlanningValidatesWithOrderScopedTechnicians()
     {
-        await using var fixture = await CreateFixtureAsync();
-        var created = await fixture.Service.CreateAsync(OrderRequest(requiresSignature: true), Planner, CancellationToken.None);
-        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest(
-            "Inspeccionar fuga",
-            RequiereEvidencia: true,
-            RequiereHH: true,
-            ChecklistObligatorio: true), Planner, CancellationToken.None);
-        Assert.NotNull(task);
+        await using var fixture = await Fixture.CreateAsync();
+        var order = await CreateAndSendAsync(fixture);
+        var taskOne = await fixture.Service.AddTaskAsync(order.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Reparar fuga hidráulica", "SMOKE-1", RequiereEvidencia: true, RequiereHH: true), Supervisor, default);
+        var taskTwo = await fixture.Service.AddTaskAsync(order.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Probar equipo reparado", "SMOKE-2", RequiereEvidencia: true, RequiereHH: true), Supervisor, default);
+        Assert.NotNull(taskOne);
+        Assert.NotNull(taskTwo);
 
-        await fixture.Service.AssignTechnicianAsync(created.Summary.NumeroOT, task.CodigoTarea, new AssignTaskTechnicianRequest("tech-1", "Tecnico Uno"), Planner, CancellationToken.None);
-        await fixture.Service.AddChecklistItemAsync(created.Summary.NumeroOT, new AddWorkOrderChecklistItemRequest(task.CodigoTarea, "Equipo bloqueado", true), Planner, CancellationToken.None);
-        var spare = await fixture.Service.AddSparePartAsync(created.Summary.NumeroOT, new AddWorkOrderSparePartRequest(task.CodigoTarea, "REP-001", 1, "UN", Estado: WorkOrderSparePartStatus.Entregado), Planner, CancellationToken.None);
-        Assert.NotNull(spare);
+        var technicians = await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([PostgreSqlWorkTestFixture.TechnicianOneUserId, PostgreSqlWorkTestFixture.TechnicianTwoUserId]), Supervisor, default);
+        Assert.Equal(2, technicians!.Count);
+        Assert.Equal(2, (await fixture.Service.ListTasksAsync(order.Summary.NumeroOT, TechnicianOne, default))!.Count);
+        Assert.Single(await fixture.Service.ListMyAssignedAsync(TechnicianOne, default));
 
-        await fixture.Service.ScheduleAsync(created.Summary.NumeroOT, new ScheduleWorkOrderRequest(Day(2), "Programada"), Planner, CancellationToken.None);
-        await fixture.Service.StartAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Inicio"), Technician, CancellationToken.None);
-        var labor = await fixture.Service.RegisterLaborAsync(created.Summary.NumeroOT, task.CodigoTarea, new RegisterLaborRequest("tech-1", 2, "Cambio de sello", Day(2)), Technician, CancellationToken.None);
-        Assert.NotNull(labor);
-        await fixture.Service.ValidateLaborAsync(created.Summary.NumeroOT, labor.HHId, new ValidateLaborRequest(true, "HH conforme"), Supervisor, CancellationToken.None);
-        await fixture.Service.RegisterEvidenceAsync(created.Summary.NumeroOT, new RegisterEvidenceRequest("Foto final", task.CodigoTarea, ArchivoKey: "evidencia/final.jpg"), Technician, CancellationToken.None);
-        var checklist = (await fixture.Service.GetByIdAsync(created.Summary.NumeroOT, Planner, CancellationToken.None))!.Checklist.Single();
-        await fixture.Service.UpdateChecklistItemAsync(created.Summary.NumeroOT, checklist.ItemId, new UpdateChecklistItemRequest(true, "Completo"), Technician, CancellationToken.None);
-        await fixture.Service.UpdateSparePartUsageAsync(created.Summary.NumeroOT, spare.ItemId, new UpdateWorkOrderSparePartUsageRequest(WorkOrderSparePartStatus.Utilizado, "Utilizado", CantidadUtilizada: 1), Planner, CancellationToken.None);
-        await fixture.Service.RegisterSignatureAsync(created.Summary.NumeroOT, new RegisterWorkOrderSignatureRequest("firma/tech-1.svg", "tech-1"), Technician, CancellationToken.None);
-        await fixture.Service.FinishByTechnicianAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Finalizada por tecnico"), Technician, CancellationToken.None);
+        var laborOne = await ExecuteTaskAsync(fixture, order.Summary.NumeroOT, taskOne!, TechnicianOne);
+        var laborTwo = await ExecuteTaskAsync(fixture, order.Summary.NumeroOT, taskTwo!, TechnicianTwo);
+        await fixture.Service.ApproveLaborAsync(order.Summary.NumeroOT, Guid.Parse(laborOne.HHId), new WorkOrderTaskActionRequest("HH conforme"), Supervisor, default);
+        await fixture.Service.ApproveLaborAsync(order.Summary.NumeroOT, Guid.Parse(laborTwo.HHId), new WorkOrderTaskActionRequest("HH conforme"), Supervisor, default);
 
-        var closed = await fixture.Service.CloseTechnicallyAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Cierre conforme"), Supervisor, CancellationToken.None);
-        var validated = await fixture.Service.ValidatePlanningAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Validada"), Planner, CancellationToken.None);
+        var signatureOne = await AddImageAsync(fixture.DbContext, order.Summary.NumeroOT, "firma-tech-1.png", TechnicianOne.UserId);
+        var signatureTwo = await AddImageAsync(fixture.DbContext, order.Summary.NumeroOT, "firma-tech-2.png", TechnicianTwo.UserId);
+        await fixture.Service.RegisterOwnSignatureAsync(order.Summary.NumeroOT, new RegisterOwnWorkOrderSignatureRequest("Firma técnico uno"), signatureOne.Id, TechnicianOne, default);
+        await fixture.Service.RegisterOwnSignatureAsync(order.Summary.NumeroOT, new RegisterOwnWorkOrderSignatureRequest("Firma técnico dos"), signatureTwo.Id, TechnicianTwo, default);
+        await fixture.Service.ApproveTaskAsync(order.Summary.NumeroOT, taskOne!.CodigoTarea, new WorkOrderTaskActionRequest("Tarea aprobada"), Supervisor, default);
+        await fixture.Service.ApproveTaskAsync(order.Summary.NumeroOT, taskTwo!.CodigoTarea, new WorkOrderTaskActionRequest("Tarea aprobada"), Supervisor, default);
 
-        Assert.NotNull(closed);
-        Assert.NotNull(validated);
-        Assert.Equal(WorkOrderLifecycleStatus.CerradaTecnicamente, closed.Summary.Estado);
-        Assert.Equal(WorkOrderLifecycleStatus.ValidadaPlanificacion, validated.Summary.Estado);
+        var closed = await fixture.Service.CloseTechnicallyAsync(order.Summary.NumeroOT, new WorkOrderActionRequest("Cierre técnico conforme"), Supervisor, default);
+        var validated = await fixture.Service.ValidatePlanningAsync(order.Summary.NumeroOT, new WorkOrderActionRequest("Validación de planificación"), Planner, default);
+
+        Assert.Equal(WorkOrderLifecycleStatus.CerradaTecnicamente, closed!.Summary.Estado);
+        Assert.Equal(WorkOrderLifecycleStatus.ValidadaPlanificacion, validated!.Summary.Estado);
         Assert.Empty(validated.ClosureBlockers);
     }
 
     [Fact]
-    public async Task CloseTechnicallyAsync_BlocksWhenRequiredEvidenceIsMissing()
+    public async Task TechnicianCannotReadForeignOrder_AndDuplicateAssignmentIsRejected()
     {
-        await using var fixture = await CreateFixtureAsync();
-        var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
-        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest(
-            "Tomar muestra",
-            RequiereEvidencia: true,
-            RequiereHH: false), Planner, CancellationToken.None);
-        Assert.NotNull(task);
-        await fixture.Service.AssignTechnicianAsync(created.Summary.NumeroOT, task.CodigoTarea, new AssignTaskTechnicianRequest("tech-1"), Planner, CancellationToken.None);
-        await fixture.Service.StartAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Inicio"), Technician, CancellationToken.None);
-        await fixture.Service.FinishByTechnicianAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Trabajo terminado"), Technician, CancellationToken.None);
+        await using var fixture = await Fixture.CreateAsync();
+        var order = await CreateAndSendAsync(fixture);
+        await fixture.Service.AddTaskAsync(order.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Tarea compartida", "SMOKE-READ"), Supervisor, default);
 
-        var exception = await Assert.ThrowsAsync<DomainException>(() =>
-            fixture.Service.CloseTechnicallyAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Cerrar"), Supervisor, CancellationToken.None));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.GetByIdAsync(order.Summary.NumeroOT, TechnicianOne, default));
 
-        Assert.Contains("requiere evidencia", exception.Message);
+        await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([PostgreSqlWorkTestFixture.TechnicianOneUserId]), Supervisor, default);
+        var duplicate = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([PostgreSqlWorkTestFixture.TechnicianOneUserId]), Supervisor, default));
+        Assert.Contains("ya está asignado", duplicate.Message);
     }
 
     [Fact]
-    public async Task AssignTechnicianAsync_AllowsMultipleTechniciansPerTask()
+    public async Task CompleteTask_BlocksWithoutPhoto()
     {
-        await using var fixture = await CreateFixtureAsync();
-        var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
-        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Trabajo compartido"), Planner, CancellationToken.None);
+        await using var fixture = await Fixture.CreateAsync();
+        var order = await CreateAndSendAsync(fixture);
+        var task = await fixture.Service.AddTaskAsync(order.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Inspección visual", "SMOKE-BLOCK", RequiereEvidencia: true, RequiereHH: true), Supervisor, default);
         Assert.NotNull(task);
+        await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([PostgreSqlWorkTestFixture.TechnicianOneUserId]), Supervisor, default);
+        await fixture.Service.StartTaskAsync(order.Summary.NumeroOT, task!.CodigoTarea, new WorkOrderTaskActionRequest("Inicio"), TechnicianOne, default);
+        await fixture.Service.RegisterOwnLaborAsync(order.Summary.NumeroOT, task.CodigoTarea, new RegisterOwnLaborRequest(DateOnly.FromDateTime(DateTime.UtcNow), new TimeOnly(8, 0), new TimeOnly(9, 0), null, "NORMAL", "Inspección"), TechnicianOne, default);
 
-        await fixture.Service.AssignTechnicianAsync(created.Summary.NumeroOT, task.CodigoTarea, new AssignTaskTechnicianRequest("tech-1"), Planner, CancellationToken.None);
-        await fixture.Service.AssignTechnicianAsync(created.Summary.NumeroOT, task.CodigoTarea, new AssignTaskTechnicianRequest("tech-2"), Planner, CancellationToken.None);
-
-        var detail = await fixture.Service.GetByIdAsync(created.Summary.NumeroOT, Planner, CancellationToken.None);
-        var technicianView = await fixture.Service.ListAsync(new WorkOrderQuery(TechnicianId: "tech-1"), Technician, CancellationToken.None);
-
-        Assert.NotNull(detail);
-        Assert.Equal(2, detail.Technicians.Count);
-        Assert.Single(technicianView);
+        var blocked = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.CompleteTaskAsync(order.Summary.NumeroOT, task.CodigoTarea, new WorkOrderTaskActionRequest("Completar"), TechnicianOne, default));
+        Assert.Contains("fotografía", blocked.Message);
     }
 
-    [Fact]
-    public async Task RegisterLaborAsync_CalculatesHoursAcrossSeveralDaysAndSupervisorValidates()
+    private static async Task<WorkOrderDetailResponse> CreateAndSendAsync(Fixture fixture)
     {
-        await using var fixture = await CreateFixtureAsync();
-        var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
-        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Trabajo por turnos"), Planner, CancellationToken.None);
-        Assert.NotNull(task);
-        await fixture.Service.AssignTechnicianAsync(created.Summary.NumeroOT, task.CodigoTarea, new AssignTaskTechnicianRequest("tech-1"), Planner, CancellationToken.None);
-
-        var firstDay = await fixture.Service.RegisterLaborAsync(
-            created.Summary.NumeroOT,
-            task.CodigoTarea,
-            new RegisterLaborRequest("tech-1", null, "Turno dia 1", Day(2), Day(2).AddHours(8), Day(2).AddHours(12), "Sin novedades"),
-            Technician,
-            CancellationToken.None);
-        var secondDay = await fixture.Service.RegisterLaborAsync(
-            created.Summary.NumeroOT,
-            task.CodigoTarea,
-            new RegisterLaborRequest("tech-1", null, "Turno dia 2", Day(3), Day(3).AddHours(9), Day(3).AddHours(11.5), "Cierre"),
-            Technician,
-            CancellationToken.None);
-
-        Assert.NotNull(firstDay);
-        Assert.NotNull(secondDay);
-        Assert.Equal(4, firstDay.Horas);
-        Assert.Equal(2.5m, secondDay.Horas);
-
-        var validated = await fixture.Service.ValidateLaborAsync(created.Summary.NumeroOT, firstDay.HHId, new ValidateLaborRequest(true, "Validado"), Supervisor, CancellationToken.None);
-
-        Assert.NotNull(validated);
-        Assert.True(validated.ValidadoSupervisor);
-        Assert.Equal("supervisor", validated.ValidadoPor);
+        var order = await fixture.Service.CreateAsync(new CreateWorkOrderRequest("ACT-1", "OT de regresión operacional", "Corrective", FaenaCodigo: FaenaCode, FechaProgramada: DateTimeOffset.UtcNow), Planner, default);
+        await fixture.Service.AssignSupervisorAsync(order.Summary.NumeroOT, new AssignWorkOrderSupervisorRequest(PostgreSqlWorkTestFixture.SupervisorUserId, "Asignación de prueba"), Planner, default);
+        return (await fixture.Service.SendToSupervisorAsync(order.Summary.NumeroOT, new WorkOrderActionRequest("Envío a supervisor"), Planner, default))!;
     }
 
-    [Fact]
-    public async Task RegisterSignatureAsync_AllowsTaskSignatureWithDrawnImage()
+    private static async Task<WorkOrderLaborResponse> ExecuteTaskAsync(Fixture fixture, string orderNumber, WorkOrderTaskResponse task, UserAccessContext technician)
     {
-        await using var fixture = await CreateFixtureAsync();
-        var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
-        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Firmar tarea"), Planner, CancellationToken.None);
-        Assert.NotNull(task);
-        await fixture.Service.AssignTechnicianAsync(created.Summary.NumeroOT, task.CodigoTarea, new AssignTaskTechnicianRequest("tech-1"), Planner, CancellationToken.None);
-
-        var signature = await fixture.Service.RegisterSignatureAsync(
-            created.Summary.NumeroOT,
-            new RegisterWorkOrderSignatureRequest(SignatureFileKey: "firma/tech-1.png", UsuarioId: "tech-1", CodigoTarea: task.CodigoTarea, Scope: "Tarea"),
-            Technician,
-            CancellationToken.None);
-
-        Assert.NotNull(signature);
-        Assert.Equal(task.CodigoTarea, signature.CodigoTarea);
-        Assert.Equal("Tarea", signature.Scope);
-        Assert.Equal("firma/tech-1.png", signature.SignatureFileKey);
+        await fixture.Service.StartTaskAsync(orderNumber, task.CodigoTarea, new WorkOrderTaskActionRequest("Inicio"), technician, default);
+        var labor = await fixture.Service.RegisterOwnLaborAsync(orderNumber, task.CodigoTarea, new RegisterOwnLaborRequest(DateOnly.FromDateTime(DateTime.UtcNow), new TimeOnly(8, 0), new TimeOnly(10, 0), null, "NORMAL", "Trabajo ejecutado"), technician, default);
+        var image = await AddImageAsync(fixture.DbContext, orderNumber, $"{task.CodigoTarea}-{technician.UserId}.png", technician.UserId);
+        await fixture.Service.RegisterUploadedEvidenceAsync(orderNumber, task.CodigoTarea, new UploadWorkOrderEvidenceRequest("FotoDespues", "Evidencia de prueba", DateTimeOffset.UtcNow), image.Id, technician, default);
+        var completed = await fixture.Service.CompleteTaskAsync(orderNumber, task.CodigoTarea, new WorkOrderTaskActionRequest("Completar"), technician, default);
+        Assert.Equal(WorkOrderTaskStatus.EnRevisionSupervisor, completed!.Estado);
+        return labor!;
     }
 
-    [Fact]
-    public async Task CloseTechnicallyAsync_BlocksWhenMandatoryChecklistIsIncomplete()
+    private static async Task<FileMetadataEntity> AddImageAsync(CmmsDbContext db, string orderNumber, string fileName, string authorUserId)
     {
-        await using var fixture = await CreateFixtureAsync();
-        var created = await fixture.Service.CreateAsync(OrderRequest(), Planner, CancellationToken.None);
-        var task = await fixture.Service.AddTaskAsync(created.Summary.NumeroOT, new CreateWorkOrderTaskRequest(
-            "Checklist obligatorio",
-            RequiereEvidencia: false,
-            RequiereHH: false,
-            ChecklistObligatorio: true), Planner, CancellationToken.None);
-        Assert.NotNull(task);
-        await fixture.Service.AddChecklistItemAsync(created.Summary.NumeroOT, new AddWorkOrderChecklistItemRequest(task.CodigoTarea, "Prueba funcional", true), Planner, CancellationToken.None);
-        await fixture.Service.ScheduleAsync(created.Summary.NumeroOT, new ScheduleWorkOrderRequest(Day(2), "Programada"), Planner, CancellationToken.None);
-        await fixture.Service.StartAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Inicio"), Planner, CancellationToken.None);
-        await fixture.Service.FinishByTechnicianAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Lista para cierre"), Planner, CancellationToken.None);
-
-        var exception = await Assert.ThrowsAsync<DomainException>(() =>
-            fixture.Service.CloseTechnicallyAsync(created.Summary.NumeroOT, new WorkOrderActionRequest("Cerrar"), Supervisor, CancellationToken.None));
-
-        Assert.Contains("Checklist", exception.Message);
-    }
-
-    [Fact]
-    public async Task CreateAsync_AllowsOperationalUnitTargetAndSnapshotsRelatedAssets()
-    {
-        await using var fixture = await CreateFixtureAsync();
-        var faena = await fixture.DbContext.Faenas.SingleAsync(x => x.Code == "FAE-1");
-        var state = await fixture.DbContext.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO_FAENA");
-        var type = new OperationalUnitTypeEntity { Code = "CFA", Name = "Unidad CFA", IsActive = true };
-        fixture.DbContext.OperationalUnitTypes.Add(type);
-        await fixture.DbContext.SaveChangesAsync();
-        fixture.DbContext.OperationalUnits.Add(new OperationalUnitEntity
+        var file = new FileMetadataEntity
         {
-            Code = "CFA-1000", Name = "CFA 1000", OperationalUnitTypeId = type.Id,
-            FaenaId = faena.Id, OperationalStateId = state.Id
-        });
-        await fixture.DbContext.SaveChangesAsync();
-
-        var created = await fixture.Service.CreateAsync(new CreateWorkOrderRequest(
-            null, "Inspecci�n integral de CFA-1000", "Corrective", FaenaCodigo: "FAE-1",
-            UnidadOperativaCodigo: "CFA-1000",
-            ActivosRelacionados:
-            [new WorkOrderAssetInput("ACT-1", "MONTAJE"), new WorkOrderAssetInput("ACT-2", "DESMONTAJE")]),
-            Planner, CancellationToken.None);
-
-        Assert.Equal("CFA-1000", created.Summary.UnidadOperativaCodigo);
-        Assert.Equal(string.Empty, created.Summary.ActivoCodigo);
-        Assert.Equal(2, created.Summary.ActivosRelacionados.Count);
-        Assert.Contains(created.Summary.ActivosRelacionados, x => x.ActivoCodigo == "ACT-1" && x.Rol == "MONTAJE");
-        Assert.Single(await fixture.Service.ListAsync(new WorkOrderQuery(UnidadOperativaCodigo: "CFA-1000"), Planner, CancellationToken.None));
-    }
-    private static CreateWorkOrderRequest OrderRequest(bool requiresSignature = false)
-    {
-        return new CreateWorkOrderRequest(
-            "ACT-1",
-            "Atender fuga hidraulica",
-            "Corrective",
-            FaenaCodigo: "FAE-1",
-            Sistema: "Hidraulico",
-            Subsistema: "Levante",
-            Componente: "Cilindro",
-            Prioridad: "Alta",
-            Criticidad: "Critica",
-            FechaProgramada: Day(1),
-            RequiereFirma: requiresSignature);
+            FileKey = $"tests/{Guid.NewGuid():N}/{fileName}",
+            FileName = fileName,
+            StoredFileName = fileName,
+            Extension = ".png",
+            Provider = "LocalSimulation",
+            StorageMode = "LocalSimulation",
+            Purpose = "Evidence",
+            Module = "WorkOrders",
+            EntityType = "WorkOrder",
+            EntityId = orderNumber,
+            WorkOrderNumber = orderNumber,
+            LogicalUri = $"/tests/{fileName}",
+            MimeType = "image/png",
+            SizeBytes = 1,
+            Status = "Stored",
+            AuthorUserId = authorUserId
+        };
+        db.Files.Add(file);
+        await db.SaveChangesAsync();
+        return file;
     }
 
-    private static DateTimeOffset Day(int offset) => new(2026, 2, 1 + offset, 0, 0, 0, TimeSpan.Zero);
+    private sealed record Fixture(PostgreSqlWorkTestFixture Database, CmmsDbContext DbContext, WorkOrderService Service) : IAsyncDisposable
+    {
+        public static async Task<Fixture> CreateAsync()
+        {
+            var database = await PostgreSqlWorkTestFixture.CreateAsync();
+            return new Fixture(database, database.DbContext, new WorkOrderService(database.DbContext, new NullAuditService()));
+        }
 
-    private static async Task<Fixture> CreateFixtureAsync()
-    {
-        var database = await PostgreSqlWorkTestFixture.CreateAsync();
-        var service = new WorkOrderService(database.DbContext, new NullAuditService());
-        return new Fixture(database, database.DbContext, service);
-    }
-    private sealed record Fixture(
-        PostgreSqlWorkTestFixture Database,
-        CmmsDbContext DbContext,
-        WorkOrderService Service) : IAsyncDisposable
-    {
         public ValueTask DisposeAsync() => Database.DisposeAsync();
     }
+
     private sealed class NullAuditService : IAuditService
     {
         public Task<string> RecordAsync(AuditEventRequest auditEvent, CancellationToken cancellationToken) => Task.FromResult(Guid.NewGuid().ToString("N"));
-
         public Task<AuditQueryResult> QueryAsync(AuditQuery query, CancellationToken cancellationToken) => Task.FromResult(new AuditQueryResult(0, []));
     }
 }

@@ -1,6 +1,8 @@
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.PreventiveMaintenance;
+using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
+using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -56,7 +58,19 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
     {
         EnsureManage(user); var plan = await PlanQuery().SingleOrDefaultAsync(x => x.Code == Code(planCode), ct) ?? throw new DomainException($"El plan '{planCode}' no existe."); var assets = await ResolveAssetsAsync(plan, ct); if (!string.IsNullOrWhiteSpace(request.ActivoCodigo)) assets = assets.Where(x => x.Code == Code(request.ActivoCodigo)).ToList(); var asset = assets.SingleOrDefault() ?? throw new DomainException("El plan no tiene un activo objetivo unico."); if (asset.Faena is null) throw new DomainException("El activo objetivo no tiene faena."); EnsureAccess(user, asset.Faena.Code);
         var existing = await _db.WorkOrders.FirstOrDefaultAsync(x => x.PreventivePlanCode == plan.Code && x.AssetId == asset.Id && x.SupervisorClosedAtUtc == null, ct); if (existing is not null && !request.Force) return new(plan.Code, asset.Code, existing.WorkOrderNumber, PreventiveStatus.OTGenerada, ["Ya existe una OT preventiva abierta."]);
-        var status = await _db.WorkCatalogs.SingleAsync(x => x.Category == "WorkOrderLifecycleStatus" && x.Code == "Planificada", ct); var maintenanceType = await _db.WorkCatalogs.SingleAsync(x => x.Category == "MaintenanceType" && x.Code == "Preventivo", ct); var number = await NextWorkOrderNumberAsync(ct); var order = new WorkOrderEntity { WorkOrderNumber = number, AssetId = asset.Id, FaenaId = asset.FaenaId!.Value, StatusId = status.Id, MaintenanceTypeId = maintenanceType.Id, Description = $"Preventivo {plan.Code}: {plan.Name}", PreventivePlanCode = plan.Code, IsAutomaticPreventive = true, ScheduledAtUtc = plan.NextDueAtUtc, CreatedByUserId = user.UserId, CreatedByUserAtUtc = DateTimeOffset.UtcNow }; _db.WorkOrders.Add(order); var history = new PreventiveHistoryEntity { PreventivePlanId = plan.Id, AssetId = asset.Id, PreviousStatus = (int)await EvaluateStatusAsync(plan, asset, DateTimeOffset.UtcNow, ct), NewStatus = (int)PreventiveStatus.OTGenerada, OccurredAtUtc = DateTimeOffset.UtcNow, UserId = user.UserId, Reason = Text(request.Reason) ?? "OT preventiva generada", WorkOrder = order }; _db.PreventiveHistory.Add(history); await _db.SaveChangesAsync(ct); return new(plan.Code, asset.Code, number, PreventiveStatus.OTGenerada, []);
+        var status = await _db.WorkCatalogs.SingleAsync(x => x.Category == "WorkOrderLifecycleStatus" && x.Code == WorkOrderLifecycleStatus.OTCreada.ToString(), ct); var maintenanceType = await _db.WorkCatalogs.SingleAsync(x => x.Category == "MaintenanceType" && x.Code == MaintenanceType.Preventive.ToString(), ct); var number = await NextWorkOrderNumberAsync(ct); var order = new WorkOrderEntity { WorkOrderNumber = number, AssetId = asset.Id, FaenaId = asset.FaenaId!.Value, StatusId = status.Id, MaintenanceTypeId = maintenanceType.Id, Description = $"Preventivo {plan.Code}: {plan.Name}", PreventivePlanCode = plan.Code, PreventiveTemplateId = plan.ChecklistTemplateId, PreventiveTemplateVersionSnapshot = plan.ChecklistTemplateId.HasValue ? 1 : null, IsAutomaticPreventive = true, ScheduledAtUtc = plan.NextDueAtUtc, CreatedByUserId = user.UserId, CreatedByUserAtUtc = DateTimeOffset.UtcNow }; _db.WorkOrders.Add(order);
+        if (plan.ChecklistTemplateId.HasValue)
+        {
+            var items = await _db.ChecklistTemplateItems.Include(x => x.ResponseType).Where(x => x.TemplateId == plan.ChecklistTemplateId && x.IsActive).OrderBy(x => x.SortOrder).ToArrayAsync(ct);
+            var taskStatus = await _db.WorkCatalogs.SingleAsync(x => x.Category == "WorkOrderTaskStatus" && x.Code == "PendienteAsignacion", ct);
+            foreach (var item in items)
+            {
+                var task = new WorkOrderTaskEntity { Id = Guid.NewGuid(), WorkOrderId = order.Id, TaskCode = $"PP-{item.SortOrder:000}", Title = item.ItemText, Description = item.ItemText, StatusId = taskStatus.Id, Origin = "PautaPreventiva", PreventiveTemplateId = plan.ChecklistTemplateId, PreventiveTemplateItemId = item.Id, PreventiveTemplateVersionSnapshot = 1, IsMandatoryPreventive = item.Mandatory, RequiresEvidence = item.RequiresPhoto, RequiresLabor = true, ChecklistMandatory = item.Mandatory, CreatedByUserId = user.UserId };
+                _db.WorkOrderTasks.Add(task);
+                _db.WorkOrderChecklist.Add(new WorkOrderChecklistEntity { Id = Guid.NewGuid(), WorkOrderId = order.Id, TaskId = task.Id, TemplateId = plan.ChecklistTemplateId, TemplateItemId = item.Id, ItemText = item.ItemText, Mandatory = item.Mandatory, ResponseTypeId = item.ResponseTypeId, RequiresPhoto = item.RequiresPhoto, RequiresFile = item.RequiresFile, RequiresSignature = item.RequiresSignature });
+            }
+        }
+        var history = new PreventiveHistoryEntity { PreventivePlanId = plan.Id, AssetId = asset.Id, PreviousStatus = (int)await EvaluateStatusAsync(plan, asset, DateTimeOffset.UtcNow, ct), NewStatus = (int)PreventiveStatus.OTGenerada, OccurredAtUtc = DateTimeOffset.UtcNow, UserId = user.UserId, Reason = Text(request.Reason) ?? "OT preventiva generada", WorkOrder = order }; _db.PreventiveHistory.Add(history); await _db.SaveChangesAsync(ct); return new(plan.Code, asset.Code, number, PreventiveStatus.OTGenerada, []);
     }
 
     public async Task<PreventivePlanResponse?> ReprogramAsync(string planCode, ReprogramPreventivePlanRequest request, UserAccessContext user, CancellationToken ct)

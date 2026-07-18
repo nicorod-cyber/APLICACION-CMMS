@@ -80,6 +80,9 @@ public sealed class WorkOrderEntity : PostgreSqlEntity
     public Guid? FailureClassificationId { get; set; }
     public WorkCatalogEntity? FailureClassification { get; set; }
     public string? PreventivePlanCode { get; set; }
+    public Guid? PreventiveTemplateId { get; set; }
+    public ChecklistTemplateEntity? PreventiveTemplate { get; set; }
+    public int? PreventiveTemplateVersionSnapshot { get; set; }
     public bool IsAutomaticPreventive { get; set; }
     public bool RequiresSignature { get; set; }
     public DateTimeOffset? ScheduledAtUtc { get; set; }
@@ -87,6 +90,13 @@ public sealed class WorkOrderEntity : PostgreSqlEntity
     public DateTimeOffset? ScheduledEndUtc { get; set; }
     public string CreatedByUserId { get; set; } = string.Empty;
     public DateTimeOffset CreatedByUserAtUtc { get; set; }
+    public Guid? SupervisorUserId { get; set; }
+    public AppUserEntity? SupervisorUser { get; set; }
+    public string? SupervisorNameSnapshot { get; set; }
+    public DateTimeOffset? SupervisorAssignedAtUtc { get; set; }
+    public Guid? SupervisorAssignedByUserId { get; set; }
+    public AppUserEntity? SupervisorAssignedByUser { get; set; }
+    public string? SupervisorReassignmentReason { get; set; }
     public DateTimeOffset? ActualStartUtc { get; set; }
     public DateTimeOffset? TechnicianFinishedAtUtc { get; set; }
     public string? FinishedByUserId { get; set; }
@@ -100,7 +110,7 @@ public sealed class WorkOrderEntity : PostgreSqlEntity
     public string? UpdatedByUserId { get; set; }
     public DateTimeOffset? UpdatedByUserAtUtc { get; set; }
     public List<WorkOrderTaskEntity> Tasks { get; set; } = [];
-    public List<WorkOrderTaskTechnicianEntity> Technicians { get; set; } = [];
+    public List<WorkOrderTechnicianEntity> Technicians { get; set; } = [];
     public List<WorkOrderLaborEntity> Labor { get; set; } = [];
     public List<WorkOrderEvidenceEntity> Evidences { get; set; } = [];
     public List<WorkOrderSparePartEntity> SpareParts { get; set; } = [];
@@ -128,30 +138,73 @@ public sealed class WorkOrderTaskEntity : PostgreSqlEntity
     public Guid WorkOrderId { get; set; }
     public WorkOrderEntity WorkOrder { get; set; } = null!;
     public string TaskCode { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+    public string? AcceptanceCriteria { get; set; }
+    public Guid StatusId { get; set; }
+    public WorkCatalogEntity Status { get; set; } = null!;
+    public string Origin { get; set; } = "MANUAL_SUPERVISOR";
+    public decimal EstimatedHours { get; set; }
     public DateTimeOffset? ScheduledStartUtc { get; set; }
     public DateTimeOffset? ScheduledEndUtc { get; set; }
-    public bool RequiresEvidence { get; set; }
+    public DateTimeOffset? ActualStartUtc { get; set; }
+    public DateTimeOffset? TechnicianCompletedAtUtc { get; set; }
+    public Guid? CompletedByUserId { get; set; }
+    public AppUserEntity? CompletedByUser { get; set; }
+    public DateTimeOffset? SupervisorApprovedAtUtc { get; set; }
+    public Guid? ApprovedByUserId { get; set; }
+    public AppUserEntity? ApprovedByUser { get; set; }
+    public DateTimeOffset? ObservedAtUtc { get; set; }
+    public Guid? ObservedByUserId { get; set; }
+    public AppUserEntity? ObservedByUser { get; set; }
+    public string? ObservationReason { get; set; }
+    public DateTimeOffset? CancelledAtUtc { get; set; }
+    public Guid? CancelledByUserId { get; set; }
+    public AppUserEntity? CancelledByUser { get; set; }
+    public string? CancellationReason { get; set; }
+    public string? CreatedByUserId { get; set; }
+    public string? UpdatedByUserId { get; set; }
+    public Guid? PreventiveTemplateId { get; set; }
+    public Guid? PreventiveTemplateItemId { get; set; }
+    public int? PreventiveTemplateVersionSnapshot { get; set; }
+    public bool IsMandatoryPreventive { get; set; }
+    public bool RequiresEvidence { get; set; } = true;
     public bool RequiresLabor { get; set; } = true;
     public bool ChecklistMandatory { get; set; }
     public string? Observations { get; set; }
     public bool IsActive { get; set; } = true;
+    public List<WorkOrderTaskStatusHistoryEntity> StatusHistory { get; set; } = [];
 }
 
-public sealed class WorkOrderTaskTechnicianEntity : PostgreSqlEntity
+public sealed class WorkOrderTechnicianEntity : PostgreSqlEntity
 {
     public Guid WorkOrderId { get; set; }
     public WorkOrderEntity WorkOrder { get; set; } = null!;
-    public Guid TaskId { get; set; }
-    public WorkOrderTaskEntity Task { get; set; } = null!;
-    public string TechnicianUserId { get; set; } = string.Empty;
-    public string? TechnicianDisplayName { get; set; }
+    public Guid TechnicianUserId { get; set; }
+    public AppUserEntity TechnicianUser { get; set; } = null!;
+    public string TechnicianNameSnapshot { get; set; } = string.Empty;
     public DateTimeOffset AssignedAtUtc { get; set; } = DateTimeOffset.UtcNow;
-    public string AssignedByUserId { get; set; } = string.Empty;
+    public Guid AssignedByUserId { get; set; }
+    public AppUserEntity AssignedByUser { get; set; } = null!;
     public bool IsActive { get; set; } = true;
     public DateTimeOffset? UnassignedAtUtc { get; set; }
-    public string? UnassignedByUserId { get; set; }
+    public Guid? UnassignedByUserId { get; set; }
+    public AppUserEntity? UnassignedByUser { get; set; }
     public string? UnassignedReason { get; set; }
+}
+
+public sealed class WorkOrderTaskStatusHistoryEntity : PostgreSqlEntity
+{
+    public Guid TaskId { get; set; }
+    public WorkOrderTaskEntity Task { get; set; } = null!;
+    public Guid PreviousStatusId { get; set; }
+    public WorkCatalogEntity PreviousStatus { get; set; } = null!;
+    public Guid NewStatusId { get; set; }
+    public WorkCatalogEntity NewStatus { get; set; } = null!;
+    public Guid UserId { get; set; }
+    public AppUserEntity User { get; set; } = null!;
+    public DateTimeOffset OccurredAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string? Reason { get; set; }
 }
 
 public sealed class WorkOrderLaborEntity : PostgreSqlEntity
@@ -160,17 +213,24 @@ public sealed class WorkOrderLaborEntity : PostgreSqlEntity
     public WorkOrderEntity WorkOrder { get; set; } = null!;
     public Guid TaskId { get; set; }
     public WorkOrderTaskEntity Task { get; set; } = null!;
-    public string TechnicianUserId { get; set; } = string.Empty;
+    public Guid TechnicianUserId { get; set; }
+    public AppUserEntity TechnicianUser { get; set; } = null!;
     public decimal Hours { get; set; }
     public string Description { get; set; } = string.Empty;
     public DateTimeOffset WorkDateUtc { get; set; }
     public DateTimeOffset? StartTimeUtc { get; set; }
     public DateTimeOffset? EndTimeUtc { get; set; }
-    public string RegisteredByUserId { get; set; } = string.Empty;
+    public Guid RegisteredByUserId { get; set; }
+    public AppUserEntity RegisteredByUser { get; set; } = null!;
     public string? Comment { get; set; }
     public bool SupervisorValidated { get; set; }
-    public string? ValidatedByUserId { get; set; }
+    public Guid? ValidatedByUserId { get; set; }
+    public AppUserEntity? ValidatedByUser { get; set; }
     public DateTimeOffset? ValidatedAtUtc { get; set; }
+    public Guid? AnnulledByUserId { get; set; }
+    public AppUserEntity? AnnulledByUser { get; set; }
+    public DateTimeOffset? AnnulledAtUtc { get; set; }
+    public string? AnnulReason { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
@@ -178,8 +238,8 @@ public sealed class WorkOrderEvidenceEntity : PostgreSqlEntity
 {
     public Guid WorkOrderId { get; set; }
     public WorkOrderEntity WorkOrder { get; set; } = null!;
-    public Guid? TaskId { get; set; }
-    public WorkOrderTaskEntity? Task { get; set; }
+    public Guid TaskId { get; set; }
+    public WorkOrderTaskEntity Task { get; set; } = null!;
     public string Name { get; set; } = string.Empty;
     public Guid? FileId { get; set; }
     public FileMetadataEntity? File { get; set; }
@@ -195,8 +255,14 @@ public sealed class WorkOrderEvidenceEntity : PostgreSqlEntity
     public string? OfflineId { get; set; }
     public string? SyncStatus { get; set; }
     public string? Observations { get; set; }
-    public string CreatedByUserId { get; set; } = string.Empty;
-    public DateTimeOffset CreatedByUserAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public Guid UploadedByUserId { get; set; }
+    public AppUserEntity UploadedByUser { get; set; } = null!;
+    public DateTimeOffset UploadedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? CapturedAtUtc { get; set; }
+    public Guid? AnnulledByUserId { get; set; }
+    public AppUserEntity? AnnulledByUser { get; set; }
+    public DateTimeOffset? AnnulledAtUtc { get; set; }
+    public string? AnnulReason { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
@@ -280,16 +346,19 @@ public sealed class WorkOrderSignatureEntity : PostgreSqlEntity
 {
     public Guid WorkOrderId { get; set; }
     public WorkOrderEntity WorkOrder { get; set; } = null!;
-    public Guid? TaskId { get; set; }
-    public WorkOrderTaskEntity? Task { get; set; }
-    public string Scope { get; set; } = "OT";
-    public string SignerUserId { get; set; } = string.Empty;
+    public Guid SignerUserId { get; set; }
+    public AppUserEntity SignerUser { get; set; } = null!;
     public Guid? FileId { get; set; }
     public FileMetadataEntity? File { get; set; }
-    public string? SignatureFileKey { get; set; }
     public DateTimeOffset SignedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public string? Comment { get; set; }
+    public string ContentHash { get; set; } = string.Empty;
+    public int ContentVersion { get; set; }
     public bool IsActive { get; set; } = true;
+    public Guid? InvalidatedByUserId { get; set; }
+    public AppUserEntity? InvalidatedByUser { get; set; }
+    public DateTimeOffset? InvalidatedAtUtc { get; set; }
+    public string? InvalidationReason { get; set; }
 }
 
 public sealed class WorkOrderStatusHistoryEntity : PostgreSqlEntity
