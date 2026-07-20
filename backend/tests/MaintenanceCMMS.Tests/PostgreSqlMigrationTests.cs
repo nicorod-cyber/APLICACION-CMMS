@@ -370,7 +370,7 @@ public sealed class PostgreSqlMigrationTests
         public string FaenaTechnicalLocationMigrationId => "20260715201243_FaenaTechnicalLocationOneToOne";
         public static async Task<MigrationDatabase> CreateAsync()
         {
-            var name = $"cmms_migration_tests_{Guid.NewGuid():N}";
+            var name = $"cmms_test_migration_{Guid.NewGuid():N}";
             var admin = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
             await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name, admin);
             var options = new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(admin, name)).Options;

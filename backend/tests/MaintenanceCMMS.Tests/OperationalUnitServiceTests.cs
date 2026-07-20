@@ -55,7 +55,7 @@ public sealed class OperationalUnitServiceTests
     {
         public static async Task<Fixture> CreateAsync()
         {
-            var name = $"cmms_operational_unit_{Guid.NewGuid():N}";
+            var name = $"cmms_test_operational_unit_{Guid.NewGuid():N}";
             var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
             await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name, adminConnectionString);
             var db = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, name)).Options);

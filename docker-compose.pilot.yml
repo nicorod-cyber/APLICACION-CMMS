@@ -1,0 +1,17 @@
+services:
+  backend:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Pilot
+
+      # Se incluyen ambas variables para cubrir la configuración
+      # existente y la implementación específica realizada por Codex.
+      CMMS_PILOT_POSTGRESQL: Host=postgres;Port=5432;Database=cmms_pilot;Username=${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set};Password=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set}
+
+      DataProvider__PostgreSqlConnectionString: Host=postgres;Port=5432;Database=cmms_pilot;Username=${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set};Password=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set}
+
+      # Evita que el seeder anterior sobrescriba el comportamiento de Pilot.
+      Database__SeedReferenceCatalogs: "false"
+      Database__SeedDemoData: "false"
+
+      # Defensa adicional, aunque appsettings.Pilot.json ya debería desactivarlo.
+      JobsEnabled: "false"

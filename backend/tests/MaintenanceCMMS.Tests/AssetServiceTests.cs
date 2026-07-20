@@ -75,7 +75,7 @@ public sealed class AssetServiceTests
 
     private static async Task<AssetFixture> CreateFixtureAsync()
     {
-        var databaseName = $"cmms_asset_tests_{Guid.NewGuid():N}";
+        var databaseName = $"cmms_test_asset_{Guid.NewGuid():N}";
         var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
         await PostgreSqlWorkTestFixture.CreateDatabaseAsync(databaseName, adminConnectionString);
         var options = new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, databaseName)).Options;

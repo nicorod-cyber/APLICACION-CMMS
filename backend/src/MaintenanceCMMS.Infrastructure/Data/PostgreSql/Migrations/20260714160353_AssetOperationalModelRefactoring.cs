@@ -703,7 +703,8 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
 
                 INSERT INTO tipos_activo (id, codigo, nombre, categoria, es_movil, es_montable, puede_ser_portador, controla_mantenimiento, participa_en_disponibilidad, orden_visualizacion, activo, created_at_utc)
                 SELECT gen_random_uuid(), 'SIN_CLASIFICAR', 'Sin clasificar', 'LEGADO', false, false, false, true, true, 9999, true, now()
-                WHERE NOT EXISTS (SELECT 1 FROM tipos_activo WHERE codigo = 'SIN_CLASIFICAR');
+                WHERE (EXISTS (SELECT 1 FROM activos) OR EXISTS (SELECT 1 FROM familias_equipo))
+                  AND NOT EXISTS (SELECT 1 FROM tipos_activo WHERE codigo = 'SIN_CLASIFICAR');
 
                 UPDATE activos a
                 SET tipo_activo_id = t.id

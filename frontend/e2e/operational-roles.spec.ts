@@ -6,6 +6,14 @@ function password(): string {
   return value;
 }
 
+test.beforeEach(async ({ page }) => {
+  const response = await page.request.get("/api/system/info");
+  if (!response.ok()) throw new Error(`E2E target did not expose /api/system/info (${response.status()}).`);
+  const system = (await response.json()) as { environment?: string };
+  if (system.environment?.toLowerCase() === "pilot") {
+    throw new Error("E2E execution against the Pilot environment is blocked.");
+  }
+});
 async function login(page: Page, username: string) {
   await page.context().clearCookies();
   await page.goto("/login");

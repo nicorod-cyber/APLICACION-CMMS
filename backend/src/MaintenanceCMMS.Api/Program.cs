@@ -298,24 +298,16 @@ catch (Exception exception)
     return 1;
 }
 
-if (builder.Configuration.GetValue("Database:SeedReferenceCatalogs", true))
+await using (var structuralBootstrapScope = app.Services.CreateAsyncScope())
 {
-    await using var referenceSeedScope = app.Services.CreateAsyncScope();
-    var developmentSeeder = referenceSeedScope.ServiceProvider.GetService<IPostgreSqlDevelopmentSeeder>();
-    if (developmentSeeder is not null)
-    {
-        await developmentSeeder.SeedReferenceCatalogsAsync(CancellationToken.None);
-        if (app.Environment.IsDevelopment() && builder.Configuration.GetValue("Database:SeedDemoData", false))
-        {
-            await developmentSeeder.SeedDemoDataAsync(CancellationToken.None);
-        }
-    }
+    var structuralBootstrap = structuralBootstrapScope.ServiceProvider.GetRequiredService<IPostgreSqlStructuralBootstrap>();
+    await structuralBootstrap.BootstrapAsync(CancellationToken.None);
 }
-
-await using (var identitySeedScope = app.Services.CreateAsyncScope())
+if (app.Environment.IsDevelopment() && builder.Configuration.GetValue("Database:SeedDemoData", false))
 {
-    var identitySeedService = identitySeedScope.ServiceProvider.GetRequiredService<IIdentitySeedService>();
-    await identitySeedService.SeedAsync(CancellationToken.None);
+    await using var developmentDemoScope = app.Services.CreateAsyncScope();
+    var developmentSeeder = developmentDemoScope.ServiceProvider.GetRequiredService<IPostgreSqlDevelopmentSeeder>();
+    await developmentSeeder.SeedDemoDataAsync(CancellationToken.None);
 }
 
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>

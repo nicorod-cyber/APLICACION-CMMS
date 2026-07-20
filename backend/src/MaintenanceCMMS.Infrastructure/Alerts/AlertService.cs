@@ -5,7 +5,9 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace MaintenanceCMMS.Infrastructure.Alerts;
 
@@ -17,11 +19,13 @@ public sealed class AlertService : IAlertService
     private readonly IEmailService _emailService;
     private readonly IPdfService _pdfService;
     private readonly PdfTemplateService _templateService;
+    private readonly BootstrapDefaultsOptions _defaults;
 
-    public AlertService(CmmsDbContext dbContext, IAuditService auditService, IAuthorizationPolicyService authorizationPolicyService, IEmailService emailService, IPdfService pdfService, IPdfTemplateService templateService)
+    public AlertService(CmmsDbContext dbContext, IAuditService auditService, IAuthorizationPolicyService authorizationPolicyService, IEmailService emailService, IPdfService pdfService, IPdfTemplateService templateService, IOptions<BootstrapDefaultsOptions>? defaults = null)
     {
         _dbContext = dbContext; _auditService = auditService; _authorizationPolicyService = authorizationPolicyService; _emailService = emailService; _pdfService = pdfService;
         _templateService = templateService as PdfTemplateService ?? throw new InvalidOperationException("La implementacion de plantillas debe usar PostgreSQL.");
+        _defaults = defaults?.Value ?? new BootstrapDefaultsOptions();
     }
 
     public async Task<IReadOnlyCollection<AlertResponse>> ListAsync(AlertQuery query, UserAccessContext user, CancellationToken cancellationToken)
@@ -125,6 +129,7 @@ public sealed class AlertService : IAlertService
 
     private async Task EnsureDefaultsAsync(CancellationToken cancellationToken)
     {
+        if (!_defaults.CreateDefaultAlertConfiguration) return;
         await _templateService.ListAsync(cancellationToken); if (await _dbContext.AlertRules.AnyAsync(cancellationToken)) return; var template = await _dbContext.PdfTemplates.SingleAsync(item => item.Code == "alert-default", cancellationToken);
         foreach (var item in DefaultRules()) { var rule = new AlertRuleEntity { Code = item.Code, Name = item.Name, EventType = item.EventType, IsEnabled = true, Severity = item.Severity.ToString(), RepeatUntilResolved = item.Repeat, GenerateEmail = true, GeneratePdf = item.Pdf, Template = template, TemplateId = template.Id, CreatedByUserId = "system" }; foreach (var recipient in SplitRecipients(item.Recipients)) rule.Recipients.Add(new AlertRuleRecipientEntity { Destination = recipient, Channel = "Email", IsActive = true }); _dbContext.AlertRules.Add(rule); }
         await _dbContext.SaveChangesAsync(cancellationToken);

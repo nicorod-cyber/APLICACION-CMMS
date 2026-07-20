@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -52,17 +52,8 @@ public partial class DocumentDomainPostgreSql : Migration
             ON CONFLICT DO NOTHING;
             """);
 
-        migrationBuilder.Sql("""
-            INSERT INTO tipos_documentales (
-                id, codigo, nombre, aplica_a, obligatorio, critico, bloquea_disponibilidad,
-                dias_alerta, requiere_pdf_alerta, activo, created_by_user_id, created_at_utc)
-            VALUES
-                (gen_random_uuid(), 'REV-TEC', 'Revision tecnica', 'Activo', true, true, true, 30, false, true, 'migration', now()),
-                (gen_random_uuid(), 'PERMISO', 'Permiso operacional', 'Activo', true, false, false, 30, false, true, 'migration', now()),
-                (gen_random_uuid(), 'CERT', 'Certificado', 'Activo', false, false, false, 45, false, true, 'migration', now()),
-                (gen_random_uuid(), 'FAENA-GRAL', 'Documento general de faena', 'Faena', false, false, false, 30, false, true, 'migration', now())
-            ON CONFLICT DO NOTHING;
-            """);
+        // Configurable document types are migrated from legacy documents or managed through the application.
+
 
         migrationBuilder.AddColumn<string>("ruta_logica", "archivos", type: "character varying(1000)", maxLength: 1000, nullable: true);
 

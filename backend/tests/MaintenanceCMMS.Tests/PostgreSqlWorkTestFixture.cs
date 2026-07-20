@@ -13,6 +13,7 @@ namespace MaintenanceCMMS.Tests;
 
 internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
 {
+    private const string TestDatabasePrefix = "cmms_test_";
     private PostgreSqlWorkTestFixture(string databaseName, string adminConnectionString, CmmsDbContext dbContext)
     {
         DatabaseName = databaseName;
@@ -36,7 +37,7 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
 
     public static async Task<PostgreSqlWorkTestFixture> CreateAsync()
     {
-        var databaseName = $"cmms_work_tests_{Guid.NewGuid():N}";
+        var databaseName = $"cmms_test_work_{Guid.NewGuid():N}";
         var adminConnectionString = await GetAdminConnectionStringAsync();
         var templateDatabaseName = await GetTemplateDatabaseNameAsync(adminConnectionString);
         await CreateDatabaseAsync(databaseName, adminConnectionString, templateDatabaseName);
@@ -64,6 +65,7 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
 
     public static async Task CreateDatabaseAsync(string databaseName, string? adminConnectionString = null, string? templateDatabaseName = null)
     {
+        EnsureTestDatabaseName(databaseName);
         await using var connection = new NpgsqlConnection(adminConnectionString ?? await GetAdminConnectionStringAsync());
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
@@ -78,7 +80,7 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         try
         {
             if (TemplateDatabaseName is not null) return TemplateDatabaseName;
-            var templateDatabaseName = $"cmms_work_template_{Guid.NewGuid():N}";
+            var templateDatabaseName = $"cmms_test_work_template_{Guid.NewGuid():N}";
             await CreateDatabaseAsync(templateDatabaseName, adminConnectionString);
             await using (var template = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(ConnectionString(adminConnectionString, templateDatabaseName)).Options))
             {
@@ -94,8 +96,15 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
 
     public static async Task DropDatabaseAsync(string databaseName, string? adminConnectionString = null)
     {
+        EnsureTestDatabaseName(databaseName);
         await using var connection = new NpgsqlConnection(adminConnectionString ?? await GetAdminConnectionStringAsync());
         await connection.OpenAsync(); await using var command = connection.CreateCommand(); command.CommandText = $"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE)"; await command.ExecuteNonQueryAsync();
+    }
+
+    private static void EnsureTestDatabaseName(string databaseName)
+    {
+        if (!databaseName.StartsWith(TestDatabasePrefix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Las fixtures solo pueden crear o eliminar bases con prefijo 'cmms_test_'.");
     }
 
     public static string ConnectionString(string adminConnectionString, string databaseName)
@@ -130,11 +139,11 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         var admin = new AppUserEntity { Username = "admin", Email = "admin@example.test", DisplayName = "Administrador", PasswordHash = "test-hash", IsActive = true };
         var planner = new AppUserEntity { Id = PlannerUserId, Username = "planner", Email = "planner@example.test", DisplayName = "Planificador", PasswordHash = "test-hash", IsActive = true };
         var supervisor = new AppUserEntity { Id = SupervisorUserId, Username = "supervisor", Email = "supervisor@example.test", DisplayName = "Supervisor", PasswordHash = "test-hash", IsActive = true };
-        var technicianOne = new AppUserEntity { Id = TechnicianOneUserId, Username = "tech-1", Email = "tech1@example.test", DisplayName = "Técnico Uno", PasswordHash = "test-hash", IsActive = true };
-        var technicianTwo = new AppUserEntity { Id = TechnicianTwoUserId, Username = "tech-2", Email = "tech2@example.test", DisplayName = "Técnico Dos", PasswordHash = "test-hash", IsActive = true };
+        var technicianOne = new AppUserEntity { Id = TechnicianOneUserId, Username = "tech-1", Email = "tech1@example.test", DisplayName = "TÃƒÂ©cnico Uno", PasswordHash = "test-hash", IsActive = true };
+        var technicianTwo = new AppUserEntity { Id = TechnicianTwoUserId, Username = "tech-2", Email = "tech2@example.test", DisplayName = "TÃƒÂ©cnico Dos", PasswordHash = "test-hash", IsActive = true };
         var plannerRole = new RoleEntity { Code = AuthRoles.Planner, Name = "Planificador", Type = "System", IsActive = true };
         var supervisorRole = new RoleEntity { Code = AuthRoles.MaintenanceSupervisor, Name = "Supervisor", Type = "System", IsActive = true };
-        var technicianRole = new RoleEntity { Code = AuthRoles.Technician, Name = "Técnico", Type = "System", IsActive = true };
+        var technicianRole = new RoleEntity { Code = AuthRoles.Technician, Name = "TÃƒÂ©cnico", Type = "System", IsActive = true };
         var faena = new FaenaEntity { Code = "FAE-1", Name = "Faena Uno", IsActive = true };
         var technicalLocation = new TechnicalLocationEntity { Code = "UT-FAE-1", Name = "Ubicacion FAE-1", Faena = faena, IsObsolete = false };
         var type = new AssetTypeEntity { Code = "EQUIPO", Name = "Equipo", IsActive = true };

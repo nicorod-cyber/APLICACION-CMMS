@@ -5,7 +5,9 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace MaintenanceCMMS.Infrastructure.Alerts;
 
@@ -15,15 +17,17 @@ public sealed class PdfTemplateService : IPdfTemplateService
     private readonly CmmsDbContext _dbContext;
     private readonly IAuditService _auditService;
     private readonly IAuthorizationPolicyService _authorizationPolicyService;
+    private readonly BootstrapDefaultsOptions _defaults;
 
     public PdfTemplateService(
         CmmsDbContext dbContext,
         IAuditService auditService,
-        IAuthorizationPolicyService authorizationPolicyService)
+        IAuthorizationPolicyService authorizationPolicyService, IOptions<BootstrapDefaultsOptions>? defaults = null)
     {
         _dbContext = dbContext;
         _auditService = auditService;
         _authorizationPolicyService = authorizationPolicyService;
+        _defaults = defaults?.Value ?? new BootstrapDefaultsOptions();
     }
 
     public async Task<IReadOnlyCollection<PdfTemplateResponse>> ListAsync(CancellationToken cancellationToken)
@@ -73,6 +77,7 @@ public sealed class PdfTemplateService : IPdfTemplateService
 
     private async Task EnsureDefaultTemplateAsync(CancellationToken cancellationToken)
     {
+        if (!_defaults.CreateDefaultPdfTemplate) return;
         if (await _dbContext.PdfTemplates.AnyAsync(item => item.Code == "alert-default", cancellationToken)) return;
         _dbContext.PdfTemplates.Add(new PdfTemplateEntity
         {

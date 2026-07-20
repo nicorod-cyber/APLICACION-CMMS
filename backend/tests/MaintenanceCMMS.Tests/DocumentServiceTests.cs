@@ -232,7 +232,7 @@ public sealed class DocumentServiceTests
 
     private static async Task<DocumentFixture> CreateFixtureAsync()
     {
-        var databaseName = $"cmms_document_tests_{Guid.NewGuid():N}";
+        var databaseName = $"cmms_test_document_{Guid.NewGuid():N}";
         var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
         await PostgreSqlWorkTestFixture.CreateDatabaseAsync(databaseName, adminConnectionString);
         var connectionString = PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, databaseName);

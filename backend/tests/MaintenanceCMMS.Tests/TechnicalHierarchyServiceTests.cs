@@ -128,7 +128,7 @@ public sealed class TechnicalHierarchyServiceTests
         public string Name{get;}public string AdminConnectionString{get;}public CmmsDbContext Db{get;}public ITechnicalHierarchyService Service{get;}
         public static async Task<Fixture> CreateAsync()
         {
-            var name=$"cmms_th_tests_{Guid.NewGuid():N}";var adminConnectionString=await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name,adminConnectionString);
+            var name=$"cmms_test_th_{Guid.NewGuid():N}";var adminConnectionString=await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name,adminConnectionString);
             var db=CreateContext(name,adminConnectionString);await db.Database.MigrateAsync();await SeedAsync(db);return new Fixture(name,adminConnectionString,db);
         }
         public CmmsDbContext NewContext()=>CreateContext(Name,AdminConnectionString);

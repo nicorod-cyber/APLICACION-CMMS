@@ -76,6 +76,7 @@ public static class DependencyInjection
         services.Configure<DataProviderOptions>(configuration.GetSection("DataProviders"));
         services.Configure<JwtOptions>(configuration.GetSection("Jwt"));
         services.Configure<AuthSeedOptions>(configuration.GetSection("Auth:SeedAdmin"));
+        services.Configure<BootstrapDefaultsOptions>(configuration.GetSection("Database"));
         services.Configure<SharePointOptions>(configuration.GetSection("SharePoint"));
         services.Configure<MailOptions>(configuration.GetSection("Mail"));
         services.Configure<PdfOptions>(configuration.GetSection("Pdf"));
@@ -88,6 +89,7 @@ public static class DependencyInjection
         {
             options.UseNpgsql(dataProviderSettings.PostgreSqlConnectionString);
         });
+        services.AddScoped<IPostgreSqlStructuralBootstrap, PostgreSqlStructuralBootstrap>();
         services.AddScoped<IPostgreSqlDevelopmentSeeder, PostgreSqlDevelopmentSeeder>();
         services.AddScoped<IIdentityStore, PostgreSqlIdentityStore>();
         services.AddSingleton<IIdentitySeedTransaction, PostgreSqlIdentitySeedTransaction>();
@@ -162,16 +164,19 @@ public static class DependencyInjection
         var legacySqlServerName = configuration["DataProviders:SqlServer:ConnectionStringName"];
         var legacyPostgreSqlName = configuration["DataProviders:PostgreSql:ConnectionStringName"];
 
+        var configuredSqlServerConnectionString = section["SqlServerConnectionString"];
+        var configuredPostgreSqlConnectionString = section["PostgreSqlConnectionString"];
+
         return new DataProviderSettings
         {
             Provider = provider,
             ExcelPath = section["ExcelPath"] ?? legacyExcelPath ?? "data/excel",
-            SqlServerConnectionString = section["SqlServerConnectionString"]
-                ?? ResolveConnectionString(configuration, legacySqlServerName)
-                ?? string.Empty,
-            PostgreSqlConnectionString = section["PostgreSqlConnectionString"]
-                ?? ResolveConnectionString(configuration, legacyPostgreSqlName)
-                ?? string.Empty
+            SqlServerConnectionString = !string.IsNullOrWhiteSpace(configuredSqlServerConnectionString)
+                ? configuredSqlServerConnectionString
+                : ResolveConnectionString(configuration, legacySqlServerName) ?? string.Empty,
+            PostgreSqlConnectionString = !string.IsNullOrWhiteSpace(configuredPostgreSqlConnectionString)
+                ? configuredPostgreSqlConnectionString
+                : ResolveConnectionString(configuration, legacyPostgreSqlName) ?? string.Empty
         };
     }
 
