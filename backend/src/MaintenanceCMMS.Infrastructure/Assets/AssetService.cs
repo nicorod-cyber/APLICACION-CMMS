@@ -30,7 +30,11 @@ public sealed class AssetService : IAssetService
         var locations = (await _db.TechnicalLocations.AsNoTracking().Include(x => x.Faena).Where(x => !x.IsObsolete).OrderBy(x => x.Code).ToListAsync(ct))
             .Where(x => x.Faena is null || _authorization.CanViewFaena(user, x.Faena.Code))
             .Select(x => new AssetCatalogItem(x.Code, x.Name, null, x.Faena?.Code)).ToArray();
-        return new AssetCatalogResponse(types, families, states, locations);
+var criticalities = await _db.WorkCatalogs.AsNoTracking()
+            .Where(x => x.Category == "WorkNotificationCriticality" && x.IsActive)
+            .OrderBy(x => x.SortOrder).ThenBy(x => x.Code)
+            .Select(x => new AssetCatalogItem(x.Code, x.Name, null, null)).ToArrayAsync(ct);
+        return new AssetCatalogResponse(types, families, states, locations, criticalities);
     }
 
     public async Task<IReadOnlyCollection<AssetAttributeDefinitionResponse>> GetApplicableDefinitionsAsync(string typeCode, string? familyCode, UserAccessContext user, CancellationToken ct)
@@ -64,20 +68,18 @@ public sealed class AssetService : IAssetService
 
     public async Task<AssetDetail> CreateAsync(CreateAssetRequest r, UserAccessContext u, CancellationToken ct)
     {
-        Maintain(u); Require(r.Codigo, nameof(r.Codigo)); Require(r.Nombre, nameof(r.Nombre)); var code = Code(r.Codigo);
-        if (await _db.Assets.AnyAsync(x => x.Code == code, ct)) throw new DomainException("Ya existe un activo con ese codigo.");
+        Maintain(u); Require(r.Nombre, nameof(r.Nombre)); var code = await NextCodeAsync(ct);
         var refs = await ReferencesAsync(r.TipoActivoCodigo, r.FamiliaEquipoCodigo, r.FaenaCodigo, r.EstadoOperacionalCodigo, u, ct); ValidateDates(r.AnioFabricacion, r.FechaPuestaServicio, r.FechaBaja);
-        var entity = new AssetEntity { Code = code, Name = r.Nombre.Trim(), AssetTypeId = refs.Type.Id, FamilyId = refs.Family?.Id, FaenaId = refs.Faena?.Id, OperationalStateId = refs.State.Id, Brand = Empty(r.Marca), Model = Empty(r.Modelo), SerialNumber = Empty(r.NumeroSerie), Ownership = Empty(r.Propiedad), Criticality = Empty(r.Criticidad), ManufacturingYear = r.AnioFabricacion, AcquisitionDate = r.FechaAdquisicion, CommissioningDate = r.FechaPuestaServicio, DecommissioningDate = r.FechaBaja, UsageMeasurementType = Measurement(r.TipoMedicionUso), Observations = Empty(r.Observaciones) };
+        var entity = new AssetEntity { Code = code, Name = r.Nombre.Trim(), AssetTypeId = refs.Type.Id, FamilyId = refs.Family?.Id, FaenaId = refs.Faena?.Id, OperationalStateId = refs.State.Id, Brand = Empty(r.Marca), Model = Empty(r.Modelo), SerialNumber = Empty(r.NumeroSerie), Ownership = Empty(r.Propiedad), Criticality = await CriticalityAsync(r.Criticidad, ct), ManufacturingYear = r.AnioFabricacion, AcquisitionDate = r.FechaAdquisicion, CommissioningDate = r.FechaPuestaServicio, DecommissioningDate = r.FechaBaja, UsageMeasurementType = Measurement(r.TipoMedicionUso), Observations = Empty(r.Observaciones) };
         _db.Assets.Add(entity); await AttributesAsync(entity, r.Atributos ?? [], refs.Type.Id, refs.Family?.Id, true, ct); await _db.SaveChangesAsync(ct); await AuditAsync(u, "asset.created", entity, null, entity, ct); return (await GetByIdAsync(code, u, ct))!;
     }
-
-    public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r, UserAccessContext u, CancellationToken ct)
+public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r, UserAccessContext u, CancellationToken ct)
     {
         Maintain(u); Require(r.Nombre, nameof(r.Nombre)); var asset = await FindAsync(codigo, true, ct); if (asset is null) return null; View(u, asset);
         var refs = await ReferencesAsync(r.TipoActivoCodigo, r.FamiliaEquipoCodigo, r.FaenaCodigo, r.EstadoOperacionalCodigo, u, ct); var measurement = Measurement(r.TipoMedicionUso);
         if (!Same(asset.UsageMeasurementType, measurement) && await _db.AssetReadings.AnyAsync(x => x.AssetId == asset.Id, ct)) throw new DomainException("No se puede cambiar el tipo de medicion cuando existen lecturas.");
         ValidateDates(r.AnioFabricacion, r.FechaPuestaServicio, r.FechaBaja); var old = new { asset.AssetTypeId, asset.FamilyId, asset.FaenaId, asset.OperationalStateId };
-        asset.Name = r.Nombre.Trim(); asset.AssetTypeId = refs.Type.Id; asset.FamilyId = refs.Family?.Id; asset.FaenaId = refs.Faena?.Id; asset.OperationalStateId = refs.State.Id; asset.Brand = Empty(r.Marca); asset.Model = Empty(r.Modelo); asset.SerialNumber = Empty(r.NumeroSerie); asset.Ownership = Empty(r.Propiedad); asset.Criticality = Empty(r.Criticidad); asset.ManufacturingYear = r.AnioFabricacion; asset.AcquisitionDate = r.FechaAdquisicion; asset.CommissioningDate = r.FechaPuestaServicio; asset.DecommissioningDate = r.FechaBaja; asset.UsageMeasurementType = measurement; asset.Observations = Empty(r.Observaciones); asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        asset.Name = r.Nombre.Trim(); asset.AssetTypeId = refs.Type.Id; asset.FamilyId = refs.Family?.Id; asset.FaenaId = refs.Faena?.Id; asset.OperationalStateId = refs.State.Id; asset.Brand = Empty(r.Marca); asset.Model = Empty(r.Modelo); asset.SerialNumber = Empty(r.NumeroSerie); asset.Ownership = Empty(r.Propiedad); asset.Criticality = await CriticalityAsync(r.Criticidad, ct); asset.ManufacturingYear = r.AnioFabricacion; asset.AcquisitionDate = r.FechaAdquisicion; asset.CommissioningDate = r.FechaPuestaServicio; asset.DecommissioningDate = r.FechaBaja; asset.UsageMeasurementType = measurement; asset.Observations = Empty(r.Observaciones); asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
         if (r.Atributos is not null) await AttributesAsync(asset, r.Atributos, refs.Type.Id, refs.Family?.Id, true, ct); await _db.SaveChangesAsync(ct); await AuditAsync(u, "asset.updated", asset, old, asset, ct); return await GetByIdAsync(asset.Code, u, ct);
     }
 
@@ -135,7 +137,7 @@ public sealed class AssetService : IAssetService
     {
         Require(type, "TipoActivoCodigo"); Require(state, "EstadoOperacionalCodigo"); var typeEntity = await _db.AssetTypes.SingleOrDefaultAsync(x => x.Code == Code(type) && x.IsActive, ct) ?? throw new DomainException("Tipo de activo inexistente.");
         var familyEntity = family is null or "" ? null : await _db.EquipmentFamilies.SingleOrDefaultAsync(x => x.Code == Code(family) && x.IsActive, ct) ?? throw new DomainException("Familia inexistente."); if (familyEntity is not null && familyEntity.AssetTypeId != typeEntity.Id) throw new DomainException("La familia no pertenece al tipo indicado.");
-        var faenaEntity = faena is null or "" ? null : await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(faena) && x.IsActive, ct) ?? throw new DomainException("Faena inexistente."); if (faenaEntity is not null && !_authorization.CanViewFaena(u, faenaEntity.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena indicada."); if (faenaEntity is not null && faenaEntity.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene una ubicación técnica configurada.");
+        var faenaEntity = faena is null or "" ? null : await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(faena) && x.IsActive, ct) ?? throw new DomainException("Faena inexistente."); if (faenaEntity is not null && !_authorization.CanViewFaena(u, faenaEntity.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena indicada."); if (faenaEntity is not null && faenaEntity.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene una ubicacion tecnica configurada.");
         var stateEntity = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(state) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente."); return (typeEntity, familyEntity, faenaEntity, stateEntity);
     }
     private static AssetAttributeDefinitionResponse ToDefinition(AssetAttributeDefinitionEntity x) => new(x.Code, x.Name, x.DataType, x.Unit, x.IsRequired, x.IsIdentifier, x.IsUnique, x.IsSearchable, x.IsFilterable, x.ShowInList, x.MinimumValue, x.MaximumValue, x.ValidationPattern, x.OptionsJson, x.DisplayGroup, x.SortOrder);
@@ -190,10 +192,23 @@ public sealed class AssetService : IAssetService
     private static IReadOnlyCollection<AssetReadingResponse> MapReadings(IReadOnlyCollection<AssetReadingEntity> readings, string? measurement) { AssetReadingEntity? previous = null; return readings.OrderBy(x => x.ReadAtUtc).ThenBy(x => x.CreatedAtUtc).Select(x => { var result = new AssetReadingResponse(x.Id.ToString("D"), x.ReadAtUtc, x.Value, Unit(measurement) ?? string.Empty, previous is null ? null : x.Value - previous.Value, x.Source, x.IsCorrection, x.CorrectedReadingId?.ToString("D"), x.IsAnomalous, x.ValidationMessage, x.Observations); previous = x; return result; }).ToArray(); }
     private static string DocumentState(IReadOnlyCollection<AssetDocumentMatrixRow> rows) => rows.Any(x => x.Obligatorio && x.Estado == "PENDIENTE_CARGA") ? "PENDIENTE_CARGA" : rows.Any(x => x.Obligatorio && x.Estado == "PENDIENTE_VALIDACION") ? "PENDIENTE_VALIDACION" : rows.Any(x => x.Obligatorio && x.Estado == "VENCIDO") ? "VENCIDO" : rows.Any(x => x.Obligatorio && x.Estado == "POR_VENCER") ? "POR_VENCER" : "VALIDADO";
     private static string? Unit(string? type) => type == "HOROMETRO" ? "horas" : type == "KILOMETRAJE" ? "kilometros" : null;
+    private async Task<string> NextCodeAsync(CancellationToken ct)
+    {
+        var number = await _db.Database.SqlQueryRaw<long>("SELECT nextval('asset_number_seq') AS \"Value\"").SingleAsync(ct);
+        return $"ACT-{number:D6}";
+    }
+    private async Task<string?> CriticalityAsync(string? value, CancellationToken ct)
+    {
+        var requested = Empty(value);
+        if (requested is null) return null;
+        var items = await _db.WorkCatalogs.AsNoTracking().Where(x => x.Category == "WorkNotificationCriticality" && x.IsActive).ToListAsync(ct);
+        var match = items.SingleOrDefault(x => Same(x.Name, requested) || Same(x.Code, requested));
+        return match?.Name ?? throw new DomainException($"La criticidad '{requested}' no existe en el catalogo WorkNotificationCriticality.");
+    }
     private static bool Option(string? json, string value) { try { using var d = JsonDocument.Parse(json ?? "[]"); return d.RootElement.ValueKind == JsonValueKind.Array && d.RootElement.EnumerateArray().Any(x => string.Equals(x.ValueKind == JsonValueKind.String ? x.GetString() : x.ToString(), value, StringComparison.OrdinalIgnoreCase)); } catch { return false; } }
     private static string? Measurement(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var type = Code(value); if (!Measurements.Contains(type)) throw new DomainException("TipoMedicionUso solo permite HOROMETRO, KILOMETRAJE o null."); return type; }
     private static string Source(string value) { var source = Code(value); if (!Sources.Contains(source)) throw new DomainException("Origen de lectura invalido."); return source; }
-    private static void ValidateDates(short? year, DateOnly? start, DateOnly? end) { if (year is { } y && (y < 1900 || y > DateTime.UtcNow.Year + 2)) throw new DomainException("A�o de fabricacion invalido."); if (start is { } a && end is { } b && b < a) throw new DomainException("La fecha de baja no puede ser anterior a la puesta en servicio."); }
+    private static void ValidateDates(short? year, DateOnly? start, DateOnly? end) { if (year is { } y && (y < 1900 || y > DateTime.UtcNow.Year + 2)) throw new DomainException("Año de fabricacion invalido."); if (start is { } a && end is { } b && b < a) throw new DomainException("La fecha de baja no puede ser anterior a la puesta en servicio."); }
     private void RegisterReadings(UserAccessContext u)
     {
         if (u.Permissions.Contains(AuthPermissions.RegisterAssetReadings, StringComparer.OrdinalIgnoreCase) || _authorization.CanAdminister(u)) return;

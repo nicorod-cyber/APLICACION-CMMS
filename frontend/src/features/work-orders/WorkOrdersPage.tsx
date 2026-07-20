@@ -341,7 +341,7 @@ export function WorkOrdersPage() {
         fechaProgramada: toIsoOrNull(orderForm.fechaProgramada),
         requiereFirma: orderForm.requiereFirma
       };
-      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo fÃƒÂ­sico.");
+      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo físico.");
       const created = orderForm.preventive
         ? await apiFetch<WorkOrderDetail>("/api/work-orders/preventive", { method: "POST", body: JSON.stringify(body) })
         : await apiFetch<WorkOrderDetail>("/api/work-orders", { method: "POST", body: JSON.stringify(body) });
@@ -829,10 +829,10 @@ export function WorkOrdersPage() {
             <form className="panel-muted stack" onSubmit={assignTechnician}>
               <h3>Tecnicos asignados</h3>
                             <div className="form-grid">
-                <label>TÃ©cnico usuario ID<input value={technicianForm.tecnicoUsuarioId} onChange={(event) => setTechnicianForm({ tecnicoUsuarioId: event.target.value })} required /></label>
+                <label>Tecnico usuario ID<input value={technicianForm.tecnicoUsuarioId} onChange={(event) => setTechnicianForm({ tecnicoUsuarioId: event.target.value })} required /></label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving || !canPlan}><UserPlus size={18} /> Asignar</button>
-              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "HistÃ³rico"])} />
+              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "Histórico"])} />
             </form>
 
             <form className="panel-muted stack" onSubmit={registerLabor}>

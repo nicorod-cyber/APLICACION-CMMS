@@ -24,36 +24,35 @@ public sealed class AssetServiceTests
     {
         await using var fixture = await CreateFixtureAsync();
         var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-100"), Admin, CancellationToken.None);
-        var persisted = await fixture.DbContext.Assets.SingleAsync(item => item.Code == "EQ-100");
+        var persisted = await fixture.DbContext.Assets.SingleAsync(item => item.Code == asset.Resumen.Codigo);
 
-        Assert.Equal("EQ-100", asset.Resumen.Codigo);
+        Assert.Matches("^ACT-[0-9]{6}$", asset.Resumen.Codigo);
         Assert.Equal("COMPLETA", asset.Resumen.CompletitudTecnica.State);
         Assert.Equal(100, asset.Resumen.CompletitudTecnica.Percentage);
-        Assert.Equal(persisted.Id, (await fixture.DbContext.Assets.SingleAsync(item => item.Code == "EQ-100")).Id);
+        Assert.Equal(persisted.Id, (await fixture.DbContext.Assets.SingleAsync(item => item.Code == asset.Resumen.Codigo)).Id);
     }
 
     [Fact]
-    public async Task CreateAsync_BlocksDuplicatedAssetCode()
+    public async Task CreateAsync_GeneratesDistinctCodes()
     {
         await using var fixture = await CreateFixtureAsync();
-        await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-200"), Admin, CancellationToken.None);
-        var exception = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.CreateAsync(CompleteCreateRequest("eq-200"), Admin, CancellationToken.None));
-        Assert.Contains("Ya existe un activo", exception.Message);
+        var first = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-200"), Admin, CancellationToken.None);
+        var second = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-201"), Admin, CancellationToken.None);
+        Assert.NotEqual(first.Resumen.Codigo, second.Resumen.Codigo);
     }
-
     [Fact]
     public async Task StateAndReadings_UseOperationalStateAndImmutableCorrection()
     {
         await using var fixture = await CreateFixtureAsync();
-        await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-300"), Admin, CancellationToken.None);
-        await fixture.Service.AddStateEventAsync("EQ-300", new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Ingreso a taller"), Admin, CancellationToken.None);
-        var original = await fixture.Service.AddReadingAsync("EQ-300", new CreateAssetReadingRequest(100m), Admin, CancellationToken.None);
-        var corrected = await fixture.Service.CorrectReadingAsync("EQ-300", original!.Id, new CorrectAssetReadingRequest(110m, "Correcci�n respaldada"), Admin, CancellationToken.None);
-        var updated = await fixture.Service.GetByIdAsync("EQ-300", Admin, CancellationToken.None);
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-300"), Admin, CancellationToken.None);
+        await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Ingreso a taller"), Admin, CancellationToken.None);
+        var original = await fixture.Service.AddReadingAsync(asset.Resumen.Codigo, new CreateAssetReadingRequest(100m), Admin, CancellationToken.None);
+        var corrected = await fixture.Service.CorrectReadingAsync(asset.Resumen.Codigo, original!.Id, new CorrectAssetReadingRequest(110m, "Correccion respaldada"), Admin, CancellationToken.None);
+        var updated = await fixture.Service.GetByIdAsync(asset.Resumen.Codigo, Admin, CancellationToken.None);
 
         Assert.Equal("FUERA_SERVICIO_TALLER", updated!.Resumen.EstadoOperacionalCodigo);
         Assert.NotNull(corrected);
-        var readings = await fixture.Service.GetReadingsAsync("EQ-300", Admin, CancellationToken.None);
+        var readings = await fixture.Service.GetReadingsAsync(asset.Resumen.Codigo, Admin, CancellationToken.None);
         Assert.Single(readings);
         Assert.Equal(110m, readings.Single().Valor);
     }
@@ -62,14 +61,14 @@ public sealed class AssetServiceTests
     public async Task Readings_AuthorizesTechnicianRegistrationButNotCorrection()
     {
         await using var fixture = await CreateFixtureAsync();
-        await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-401"), Admin, CancellationToken.None);
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-401"), Admin, CancellationToken.None);
         var technician = new UserAccessContext("tech-1", [AuthRoles.Technician], [AuthPermissions.RegisterAssetReadings], ["F001"]);
-        var reading = await fixture.Service.AddReadingAsync("EQ-401", new CreateAssetReadingRequest(10m), technician, CancellationToken.None);
+        var reading = await fixture.Service.AddReadingAsync(asset.Resumen.Codigo, new CreateAssetReadingRequest(10m), technician, CancellationToken.None);
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.CorrectReadingAsync("EQ-401", reading.Id, new CorrectAssetReadingRequest(11m, "Sin autorización"), technician, CancellationToken.None));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.CorrectReadingAsync(asset.Resumen.Codigo, reading.Id, new CorrectAssetReadingRequest(11m, "Sin autorizacion"), technician, CancellationToken.None));
     }
     private static CreateAssetRequest CompleteCreateRequest(string code) => new(
-        code, "Camion tolva", "CAMION", "CAMIONES", "F001", "OPERATIVO_FAENA",
+        "Camion tolva", "CAMION", "CAMIONES", "F001", "OPERATIVO_FAENA",
         Marca: "CAT", Modelo: "777", NumeroSerie: "SER-777", Propiedad: "Propio", Criticidad: "ALTA",
         TipoMedicionUso: "HOROMETRO", Atributos: [new AssetAttributeValueInput("IDENTIFICADOR", ValorTexto: "ID-" + code)]);
 
@@ -93,13 +92,14 @@ public sealed class AssetServiceTests
             new TechnicalLocationEntity
             {
                 Code = "UT-F001",
-                Name = "Ubicación técnica Faena Norte",
+                Name = "Ubicacion tecnica Faena Norte",
                 FaenaId = faena.Id,
                 Faena = faena,
                 IsObsolete = false
             });
-        var type = new AssetTypeEntity { Code = "CAMION", Name = "Cami�n", IsActive = true };
+        var type = new AssetTypeEntity { Code = "CAMION", Name = "Camion", IsActive = true };
         dbContext.AssetTypes.Add(type);
+        dbContext.WorkCatalogs.AddRange(new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Baja", Name = "Baja", SortOrder = 1 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Media", Name = "Media", SortOrder = 2 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Alta", Name = "Alta", SortOrder = 3 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Critica", Name = "Critica", SortOrder = 4 });
         dbContext.AssetOperationalStates.AddRange(
             new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo en Faena", IsActive = true },
             new AssetOperationalStateEntity { Code = "FUERA_SERVICIO_TALLER", Name = "Fuera de servicio en Taller", IsActive = true });

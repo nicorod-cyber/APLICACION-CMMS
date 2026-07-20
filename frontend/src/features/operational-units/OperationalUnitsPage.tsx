@@ -14,6 +14,8 @@ type Component = {
   observaciones?: string | null;
 };
 
+type AssetOption = { codigo: string; nombre?: string | null; numeroSerie?: string | null; tipoActivoNombre?: string | null };
+
 type Unit = {
   codigo: string;
   nombre: string;
@@ -36,6 +38,7 @@ const unitBlank = {
 
 export function OperationalUnitsPage() {
   const [units, setUnits] = useState<Unit[]>([]);
+  const [assets, setAssets] = useState<AssetOption[]>([]);
   const [selected, setSelected] = useState<Unit | null>(null);
   const [unitForm, setUnitForm] = useState(unitBlank);
   const [selectedUnitFaena, setSelectedUnitFaena] = useState<FaenaRecord | null>(null);
@@ -80,7 +83,7 @@ export function OperationalUnitsPage() {
       setNotice(success);
       await load(selected?.codigo);
     } catch (actionError) {
-      setError(message(actionError, "Operación no válida."));
+      setError(message(actionError, "Operacion no valida."));
     } finally {
       setSaving(false);
     }
@@ -131,7 +134,7 @@ export function OperationalUnitsPage() {
                 : []
           })
         }),
-      "Regla de composición guardada."
+      "Regla de composicion guardada."
     );
   }
 
@@ -187,7 +190,7 @@ export function OperationalUnitsPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Unidades operativas</h1>
-          <p className="text-sm text-slate-500">Composición de portador, componentes, reglas y trazabilidad de montaje.</p>
+          <p className="text-sm text-slate-500">Composicion de portador, componentes, reglas y trazabilidad de montaje.</p>
         </div>
         <button className="secondary-button" type="button" onClick={() => void load()}>
           <RefreshCw className="h-4 w-4" />
@@ -210,7 +213,7 @@ export function OperationalUnitsPage() {
             >
               <b>{unit.codigo}</b>
               <div>{unit.nombre}</div>
-              <small>{unit.tipoUnidadCodigo} · {unit.composicion.completa ? "Composición completa" : `Faltan: ${unit.composicion.faltantes.join(", ")}`}</small>
+              <small>{unit.tipoUnidadCodigo} Â· {unit.composicion.completa ? "Composicion completa" : `Faltan: ${unit.composicion.faltantes.join(", ")}`}</small>
             </button>
           ))}
         </section>
@@ -221,22 +224,22 @@ export function OperationalUnitsPage() {
               <div className="section-heading">
                 <div>
                   <h2>{selected.nombre}</h2>
-                  <p>{selected.codigo} · {selected.faenaCodigo ?? "Sin faena"} · {selected.estadoOperacionalCodigo}</p>
+                  <p>{selected.codigo} Â· {selected.faenaCodigo ?? "Sin faena"} Â· {selected.estadoOperacionalCodigo}</p>
                 </div>
                 <span className={`status-pill ${selected.composicion.completa ? "success" : "danger"}`}>{selected.composicion.completa ? "Completa" : "Incompleta"}</span>
               </div>
               <div>
-                <h3>Composición vigente</h3>
+                <h3>Composicion vigente</h3>
                 {selected.composicion.vigentes.map((component) => (
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border p-2" key={component.activoCodigo}>
-                    <span><b>{component.rolComponenteCodigo}</b>: {component.activoNombre} ({component.activoCodigo})</span>
+                    <span><b>{component.rolComponenteCodigo}</b>: {component.activoNombre || "Activo sin nombre"}</span>
                     <button className="secondary-button" disabled={saving} onClick={() => unmount(component)} type="button">Desmontar</button>
                   </div>
                 ))}
               </div>
               <form className="form-grid" onSubmit={mountComponent}>
                 <h3 className="span-2">Montar componente</h3>
-                <Field label="Código activo" value={mount.activoCodigo} change={(activoCodigo) => setMount({ ...mount, activoCodigo })} />
+                <AssetSelect label="Activo" value={mount.activoCodigo} assets={assets} onChange={(activoCodigo) => setMount({ ...mount, activoCodigo })} />
                 <Field label="Rol de componente" value={mount.rolComponenteCodigo} change={(rolComponenteCodigo) => setMount({ ...mount, rolComponenteCodigo })} />
                 <Field label="OT origen (opcional)" value={mount.ordenTrabajoNumero} change={(ordenTrabajoNumero) => setMount({ ...mount, ordenTrabajoNumero })} />
                 <Field label="Observaciones" value={mount.observaciones} change={(observaciones) => setMount({ ...mount, observaciones })} />
@@ -244,8 +247,8 @@ export function OperationalUnitsPage() {
               </form>
               <form className="form-grid" onSubmit={replaceComponent}>
                 <h3 className="span-2">Reemplazar componente</h3>
-                <Field label="Activo saliente" value={replace.activoSalienteCodigo} change={(activoSalienteCodigo) => setReplace({ ...replace, activoSalienteCodigo })} />
-                <Field label="Activo entrante" value={replace.activoEntranteCodigo} change={(activoEntranteCodigo) => setReplace({ ...replace, activoEntranteCodigo })} />
+                <AssetSelect label="Activo saliente" value={replace.activoSalienteCodigo} assets={assets} onChange={(activoSalienteCodigo) => setReplace({ ...replace, activoSalienteCodigo })} />
+                <AssetSelect label="Activo entrante" value={replace.activoEntranteCodigo} assets={assets} onChange={(activoEntranteCodigo) => setReplace({ ...replace, activoEntranteCodigo })} />
                 <Field label="Rol" value={replace.rolComponenteCodigo} change={(rolComponenteCodigo) => setReplace({ ...replace, rolComponenteCodigo })} />
                 <Field label="OT origen" value={replace.ordenTrabajoNumero} change={(ordenTrabajoNumero) => setReplace({ ...replace, ordenTrabajoNumero })} />
                 <button className="secondary-button" disabled={saving}><RotateCcw className="h-4 w-4" />Reemplazar</button>
@@ -254,7 +257,7 @@ export function OperationalUnitsPage() {
                 <h3>Historial</h3>
                 {selected.composicion.historial.map((component, index) => (
                   <p className="text-sm" key={`${component.activoCodigo}-${index}`}>
-                    {component.rolComponenteCodigo}: {component.activoCodigo} · {new Date(component.fechaMontajeUtc).toLocaleString()} {component.fechaDesmontajeUtc ? `a ${new Date(component.fechaDesmontajeUtc).toLocaleString()}` : "(vigente)"}
+                    {component.rolComponenteCodigo}: {component.activoNombre || "Activo sin nombre"} Â· {new Date(component.fechaMontajeUtc).toLocaleString()} {component.fechaDesmontajeUtc ? `a ${new Date(component.fechaDesmontajeUtc).toLocaleString()}` : "(vigente)"}
                   </p>
                 ))}
               </div>
@@ -268,7 +271,7 @@ export function OperationalUnitsPage() {
       <div className="grid gap-5 xl:grid-cols-2">
         <form className="panel form-grid" onSubmit={submitUnit}>
           <h2 className="span-2">Crear unidad</h2>
-          <Field label="Código" value={unitForm.codigo} change={(codigo) => setUnitForm({ ...unitForm, codigo })} />
+          <Field label="Codigo" value={unitForm.codigo} change={(codigo) => setUnitForm({ ...unitForm, codigo })} />
           <Field label="Nombre" value={unitForm.nombre} change={(nombre) => setUnitForm({ ...unitForm, nombre })} />
           <Field label="Tipo de unidad" value={unitForm.tipoUnidadCodigo} change={(tipoUnidadCodigo) => setUnitForm({ ...unitForm, tipoUnidadCodigo })} />
           <FaenaSelect
@@ -289,22 +292,22 @@ export function OperationalUnitsPage() {
 
         <div className="grid gap-5">
           <form className="panel form-grid" onSubmit={submitType}>
-            <h2 className="span-2">Catálogo de tipos y roles</h2>
-            <Field label="Tipo código" value={typeForm.codigo} change={(codigo) => setTypeForm({ ...typeForm, codigo })} />
+            <h2 className="span-2">Catalogo de tipos y roles</h2>
+            <Field label="Tipo codigo" value={typeForm.codigo} change={(codigo) => setTypeForm({ ...typeForm, codigo })} />
             <Field label="Tipo nombre" value={typeForm.nombre} change={(nombre) => setTypeForm({ ...typeForm, nombre })} />
             <button className="secondary-button" disabled={saving}>Crear tipo</button>
           </form>
           <form className="panel form-grid" onSubmit={submitRole}>
-            <Field label="Rol código" value={roleForm.codigo} change={(codigo) => setRoleForm({ ...roleForm, codigo })} />
+            <Field label="Rol codigo" value={roleForm.codigo} change={(codigo) => setRoleForm({ ...roleForm, codigo })} />
             <Field label="Rol nombre" value={roleForm.nombre} change={(nombre) => setRoleForm({ ...roleForm, nombre })} />
             <button className="secondary-button" disabled={saving}>Crear rol</button>
           </form>
           <form className="panel form-grid" onSubmit={submitRule}>
-            <h2 className="span-2">Regla de composición</h2>
+            <h2 className="span-2">Regla de composicion</h2>
             <Field label="Tipo unidad" value={ruleForm.tipoUnidadCodigo} change={(tipoUnidadCodigo) => setRuleForm({ ...ruleForm, tipoUnidadCodigo })} />
             <Field label="Rol" value={ruleForm.rolComponenteCodigo} change={(rolComponenteCodigo) => setRuleForm({ ...ruleForm, rolComponenteCodigo })} />
-            <Field label="Mínimo" value={ruleForm.cantidadMinima} change={(cantidadMinima) => setRuleForm({ ...ruleForm, cantidadMinima })} />
-            <Field label="Máximo" value={ruleForm.cantidadMaxima} change={(cantidadMaxima) => setRuleForm({ ...ruleForm, cantidadMaxima })} />
+            <Field label="Minimo" value={ruleForm.cantidadMinima} change={(cantidadMinima) => setRuleForm({ ...ruleForm, cantidadMinima })} />
+            <Field label="Maximo" value={ruleForm.cantidadMaxima} change={(cantidadMaxima) => setRuleForm({ ...ruleForm, cantidadMaxima })} />
             <Field label="Tipo activo permitido" value={ruleForm.tipoActivoCodigo} change={(tipoActivoCodigo) => setRuleForm({ ...ruleForm, tipoActivoCodigo })} />
             <Field label="Familia permitida" value={ruleForm.familiaEquipoCodigo} change={(familiaEquipoCodigo) => setRuleForm({ ...ruleForm, familiaEquipoCodigo })} />
             <button className="secondary-button" disabled={saving}>Guardar regla</button>
@@ -319,14 +322,18 @@ function DerivedTechnicalLocation({ faena }: { faena: FaenaRecord | null }) {
   const location = faena?.ubicacionTecnica;
   return (
     <div className="rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-700">
-      <span className="block text-xs font-medium text-slate-500 dark:text-slate-400">Ubicación técnica derivada</span>
+      <span className="block text-xs font-medium text-slate-500 dark:text-slate-400">Ubicacion tecnica derivada</span>
       {location ? (
         <span className="block font-medium">{location.codigo} · {location.nombre}{location.obsoleto ? " (obsoleta)" : ""}</span>
       ) : (
-        <span className="block text-slate-500 dark:text-slate-400">Selecciona una faena con ubicación técnica.</span>
+        <span className="block text-slate-500 dark:text-slate-400">Selecciona una faena con ubicacion tecnica.</span>
       )}
     </div>
   );
+}
+
+function AssetSelect({ label, value, assets, onChange }: { label: string; value: string; assets: AssetOption[]; onChange: (value: string) => void }) {
+  return <label>{label}<select required className="input mt-1" value={value} onChange={(event) => onChange(event.target.value)}><option value="">Selecciona un activo</option>{assets.map((asset) => <option key={asset.codigo} value={asset.codigo}>{asset.nombre || "Activo sin nombre"}{asset.numeroSerie ? ` · ${asset.numeroSerie}` : ""}{asset.tipoActivoNombre ? ` · ${asset.tipoActivoNombre}` : ""}</option>)}</select></label>;
 }
 
 function Field({ label, value, change }: { label: string; value: string; change: (value: string) => void }) {

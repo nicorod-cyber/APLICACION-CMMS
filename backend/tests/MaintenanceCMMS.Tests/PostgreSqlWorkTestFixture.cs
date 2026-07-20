@@ -139,11 +139,11 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         var admin = new AppUserEntity { Username = "admin", Email = "admin@example.test", DisplayName = "Administrador", PasswordHash = "test-hash", IsActive = true };
         var planner = new AppUserEntity { Id = PlannerUserId, Username = "planner", Email = "planner@example.test", DisplayName = "Planificador", PasswordHash = "test-hash", IsActive = true };
         var supervisor = new AppUserEntity { Id = SupervisorUserId, Username = "supervisor", Email = "supervisor@example.test", DisplayName = "Supervisor", PasswordHash = "test-hash", IsActive = true };
-        var technicianOne = new AppUserEntity { Id = TechnicianOneUserId, Username = "tech-1", Email = "tech1@example.test", DisplayName = "TÃƒÂ©cnico Uno", PasswordHash = "test-hash", IsActive = true };
-        var technicianTwo = new AppUserEntity { Id = TechnicianTwoUserId, Username = "tech-2", Email = "tech2@example.test", DisplayName = "TÃƒÂ©cnico Dos", PasswordHash = "test-hash", IsActive = true };
+        var technicianOne = new AppUserEntity { Id = TechnicianOneUserId, Username = "tech-1", Email = "tech1@example.test", DisplayName = "Técnico Uno", PasswordHash = "test-hash", IsActive = true };
+        var technicianTwo = new AppUserEntity { Id = TechnicianTwoUserId, Username = "tech-2", Email = "tech2@example.test", DisplayName = "Técnico Dos", PasswordHash = "test-hash", IsActive = true };
         var plannerRole = new RoleEntity { Code = AuthRoles.Planner, Name = "Planificador", Type = "System", IsActive = true };
         var supervisorRole = new RoleEntity { Code = AuthRoles.MaintenanceSupervisor, Name = "Supervisor", Type = "System", IsActive = true };
-        var technicianRole = new RoleEntity { Code = AuthRoles.Technician, Name = "TÃƒÂ©cnico", Type = "System", IsActive = true };
+        var technicianRole = new RoleEntity { Code = AuthRoles.Technician, Name = "Técnico", Type = "System", IsActive = true };
         var faena = new FaenaEntity { Code = "FAE-1", Name = "Faena Uno", IsActive = true };
         var technicalLocation = new TechnicalLocationEntity { Code = "UT-FAE-1", Name = "Ubicacion FAE-1", Faena = faena, IsObsolete = false };
         var type = new AssetTypeEntity { Code = "EQUIPO", Name = "Equipo", IsActive = true };

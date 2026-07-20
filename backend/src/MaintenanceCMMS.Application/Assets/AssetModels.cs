@@ -9,7 +9,7 @@ public sealed record AssetListQuery(
     string? Texto = null);
 
 public sealed record AssetCatalogItem(string Codigo, string Nombre, string? TipoActivoCodigo = null, string? FaenaCodigo = null);
-public sealed record AssetCatalogResponse(IReadOnlyCollection<AssetCatalogItem> TiposActivo, IReadOnlyCollection<AssetCatalogItem> FamiliasEquipo, IReadOnlyCollection<AssetCatalogItem> EstadosOperacionales, IReadOnlyCollection<AssetCatalogItem> UbicacionesTecnicas);
+public sealed record AssetCatalogResponse(IReadOnlyCollection<AssetCatalogItem> TiposActivo, IReadOnlyCollection<AssetCatalogItem> FamiliasEquipo, IReadOnlyCollection<AssetCatalogItem> EstadosOperacionales, IReadOnlyCollection<AssetCatalogItem> UbicacionesTecnicas, IReadOnlyCollection<AssetCatalogItem> Criticidades);
 public sealed record AssetAttributeValueInput(
     string DefinicionCodigo,
     string? ValorTexto = null,
@@ -19,7 +19,6 @@ public sealed record AssetAttributeValueInput(
     string? Observaciones = null);
 
 public sealed record CreateAssetRequest(
-    string Codigo,
     string Nombre,
     string TipoActivoCodigo,
     string? FamiliaEquipoCodigo,

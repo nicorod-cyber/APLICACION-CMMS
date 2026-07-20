@@ -71,7 +71,7 @@ public abstract class PostgreSqlImportHandlerBase(CmmsDbContext db) : IPostgreSq
         return string.IsNullOrWhiteSpace(value)
             ? fallback
             : value.Equals("si", StringComparison.OrdinalIgnoreCase) ||
-              value.Equals("sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­", StringComparison.OrdinalIgnoreCase) ||
+              value.Equals("sí", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("activo", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("activa", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1";
@@ -387,7 +387,7 @@ public sealed class WarehousePostgreSqlImportHandler(CmmsDbContext db) : Postgre
         return rows.Select(row =>
         {
             var errors = duplicate[row.RowNumber].Errors.ToList(); var code = Code(row.Values, "Codigo"); var faena = Code(row.Values, "FaenaCodigo"); var type = Code(row.Values, "TipoBodega");
-            if (code.Length == 0) errors.Add(Error(row, "Codigo", "El cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo es obligatorio.")); if (Value(row.Values, "Nombre").Length == 0) errors.Add(Error(row, "Nombre", "El nombre es obligatorio."));
+            if (code.Length == 0) errors.Add(Error(row, "Codigo", "El codigo es obligatorio.")); if (Value(row.Values, "Nombre").Length == 0) errors.Add(Error(row, "Nombre", "El nombre es obligatorio."));
             if (!faenas.Contains(faena)) errors.Add(Error(row, "FaenaCodigo", $"La faena '{faena}' no existe."));
             if (type.Length > 0 && !types.Contains(type)) errors.Add(Error(row, "TipoBodega", $"El tipo de bodega '{type}' no existe."));
             return new PostgreSqlImportRowResult(row.RowNumber, errors.Count > 0 ? "Error" : existing.Contains(code) ? "Actualizado" : "Nuevo", errors);
@@ -422,7 +422,7 @@ public sealed class SparePartPostgreSqlImportHandler(CmmsDbContext db) : Postgre
         return rows.Select(row =>
         {
             var errors = duplicate[row.RowNumber].Errors.ToList(); var code = Code(row.Values, "Codigo"); var unit = Code(row.Values, "UnidadMedida");
-            if (code.Length == 0) errors.Add(Error(row, "Codigo", "El cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo es obligatorio.")); if (Value(row.Values, "Descripcion").Length == 0) errors.Add(Error(row, "Descripcion", "La descripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n es obligatoria."));
+            if (code.Length == 0) errors.Add(Error(row, "Codigo", "El codigo es obligatorio.")); if (Value(row.Values, "Descripcion").Length == 0) errors.Add(Error(row, "Descripcion", "La descripcion es obligatoria."));
             if (unit.Length > 0 && !units.Contains(unit)) errors.Add(Error(row, "UnidadMedida", $"La unidad '{unit}' no existe."));
             foreach (var number in new[] { "StockMinimo", "StockMaximo", "PuntoReposicion" }) if (Decimal(row.Values, number) < 0) errors.Add(Error(row, number, "El valor no puede ser negativo."));
             return new PostgreSqlImportRowResult(row.RowNumber, errors.Count > 0 ? "Error" : existing.Contains(code) ? "Actualizado" : "Nuevo", errors);
@@ -455,6 +455,7 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
         var faenas = await Db.Faenas.AsNoTracking().Include(item => item.TechnicalLocation).ToListAsync(ct);
         var types = await Db.AssetTypes.AsNoTracking().ToListAsync(ct);
         var states = await Db.AssetOperationalStates.AsNoTracking().ToListAsync(ct);
+        var criticalities = await Db.WorkCatalogs.AsNoTracking().Where(item => item.Category == "WorkNotificationCriticality" && item.IsActive).ToListAsync(ct);
         var existing = await Db.Assets.AsNoTracking().ToListAsync(ct);
         var faenasByCode = faenas.ToDictionary(item => item.Code, StringComparer.OrdinalIgnoreCase);
         var typeCodes = types.Select(item => item.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -469,6 +470,8 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             if (Value(row.Values, "Nombre").Length == 0) errors.Add(Error(row, "Nombre", "El nombre es obligatorio."));
             if (!typeCodes.Contains(Code(row.Values, "TipoActivoCodigo"))) errors.Add(Error(row, "TipoActivoCodigo", "El tipo de activo no existe."));
             if (!stateCodes.Contains(Code(row.Values, "EstadoOperacionalCodigo"))) errors.Add(Error(row, "EstadoOperacionalCodigo", "El estado operacional no existe."));
+            var criticality = Empty(Value(row.Values, "Criticidad"));
+            if (criticality is not null && !criticalities.Any(item => string.Equals(item.Code, criticality, StringComparison.OrdinalIgnoreCase) || string.Equals(item.Name, criticality, StringComparison.OrdinalIgnoreCase))) errors.Add(Error(row, "Criticidad", $"La criticidad '{criticality}' no existe en el catalogo WorkNotificationCriticality."));
             var faenaCode = Code(row.Values, "FaenaCodigo");
             if (faenaCode.Length > 0)
             {
@@ -487,6 +490,7 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
         var faenas = (await Db.Faenas.Include(item => item.TechnicalLocation).Where(item => faenaCodes.Contains(item.Code)).ToListAsync(ct)).ToDictionary(item => item.Code, StringComparer.OrdinalIgnoreCase);
         var types = (await Db.AssetTypes.ToListAsync(ct)).ToDictionary(item => item.Code, StringComparer.OrdinalIgnoreCase);
         var states = (await Db.AssetOperationalStates.ToListAsync(ct)).ToDictionary(item => item.Code, StringComparer.OrdinalIgnoreCase);
+        var criticalities = await Db.WorkCatalogs.Where(item => item.Category == "WorkNotificationCriticality" && item.IsActive).ToListAsync(ct);
         var existing = (await Db.Assets.Where(item => assetCodes.Contains(item.Code)).ToListAsync(ct)).ToDictionary(item => item.Code, StringComparer.OrdinalIgnoreCase);
         foreach (var row in rows)
         {
@@ -512,7 +516,10 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             entity.Brand = Empty(Value(row.Values, "Marca"));
             entity.Model = Empty(Value(row.Values, "Modelo"));
             entity.SerialNumber = Empty(Value(row.Values, "NumeroSerie"));
-            entity.Criticality = Empty(Value(row.Values, "Criticidad"));
+            var criticality = Empty(Value(row.Values, "Criticidad"));
+            var canonicalCriticality = criticality is null ? null : criticalities.SingleOrDefault(item => string.Equals(item.Code, criticality, StringComparison.OrdinalIgnoreCase) || string.Equals(item.Name, criticality, StringComparison.OrdinalIgnoreCase))?.Name;
+            if (criticality is not null && canonicalCriticality is null) throw new DomainException($"Fila {row.RowNumber}: la criticidad '{criticality}' no existe en el catalogo WorkNotificationCriticality.");
+            entity.Criticality = canonicalCriticality;
             entity.UsageMeasurementType = Empty(Value(row.Values, "TipoMedicionUso"));
             entity.Observations = Empty(Value(row.Values, "Observaciones"));
             entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
