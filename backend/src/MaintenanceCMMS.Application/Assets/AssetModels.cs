@@ -57,7 +57,7 @@ public sealed record UpdateAssetRequest(
     IReadOnlyCollection<AssetAttributeValueInput>? Atributos = null,
     string? Motivo = null);
 
-public sealed record CreateAssetStateEventRequest(string EstadoOperacionalCodigo, string Motivo, DateTimeOffset? FechaEventoUtc = null, string? TipoAntecedente = null, string? AntecedenteId = null);
+public sealed record CreateAssetStateEventRequest(string EstadoOperacionalCodigo, string Motivo, DateTimeOffset? FechaEventoUtc = null, string? TipoAntecedente = null, string? AntecedenteId = null, string? ReferenciaAntecedente = null);
 
 public sealed record TransferAssetRequest(
     string FaenaDestinoCodigo,
@@ -105,7 +105,9 @@ public sealed record AssetDetail(
     IReadOnlyCollection<AssetTransferResponse>? HistorialTraslados = null,
     IReadOnlyCollection<AssetIdentifierAliasResponse>? IdentificadoresHistoricos = null);
 
-public sealed record AssetStateEventResponse(string EventoId, string ActivoCodigo, string? EstadoAnteriorCodigo, string EstadoOperacionalCodigo, DateTimeOffset FechaEvento, string Motivo, string UsuarioId, string? TipoAntecedente = null, string? AntecedenteId = null);
+public sealed record AssetStateEventResponse(string EventoId, string ActivoCodigo, string? EstadoAnteriorCodigo, string EstadoOperacionalCodigo, DateTimeOffset FechaEvento, string Motivo, string UsuarioId, string? TipoAntecedente = null, string? AntecedenteId = null, string? ReferenciaAntecedente = null);
+public sealed record AssetStateEventAntecedentSearchItem(string Id, string Codigo, string Descripcion, DateTimeOffset? Fecha, string? Estado, string ActivoCodigo, string? FaenaCodigo, string? Detalle = null);
+public sealed record AssetStateEventAntecedentSearchResponse(IReadOnlyCollection<AssetStateEventAntecedentSearchItem> Items, int Total, int Pagina, int TamanoPagina);
 public sealed record AssetTransferResponse(string TrasladoId, string ActivoCodigo, string? FaenaOrigenCodigo, string? FaenaDestinoCodigo, DateTimeOffset FechaEfectivaUtc, string Motivo, string UsuarioId, DateTimeOffset FechaRegistroUtc, string? Observaciones, string? UnidadOperativaCodigo);
 public sealed record AssetIdentifierAliasResponse(string TipoIdentificador, string Ambito, string Valor, DateTimeOffset VigenciaDesdeUtc, DateTimeOffset? VigenciaHastaUtc, bool Vigente);
 public sealed record AssetHistoryEntry(string Id, DateTimeOffset OccurredAtUtc, string Action, string Source, string UserId, string? PreviousValue, string? NewValue, string? Detail);

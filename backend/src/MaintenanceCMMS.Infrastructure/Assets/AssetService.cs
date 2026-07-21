@@ -105,16 +105,17 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         var state = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalCodigo) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente.");
         AssetOperationalPolicy.EnsureTransitionAllowed(asset.OperationalState.Code, state.Code);
         var previous = asset.OperationalState; var occurred = r.FechaEventoUtc ?? DateTimeOffset.UtcNow;
+        var antecedent = await ValidateStateEventAntecedentAsync(asset, r, u, ct);
         asset.OperationalStateId = state.Id; asset.OperationalState = state; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
         if (Same(state.Code, AssetOperationalPolicy.DecommissionedStateCode)) asset.DecommissioningDate ??= DateOnly.FromDateTime(occurred.UtcDateTime);
-        var evt = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = occurred, UserId = u.UserId, Reason = r.Motivo.Trim(), ReferenceType = Empty(r.TipoAntecedente), ReferenceId = Empty(r.AntecedenteId) };
+        var evt = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = occurred, UserId = u.UserId, Reason = r.Motivo.Trim(), ReferenceType = antecedent.Type, ReferenceId = antecedent.Id, ReferenceText = antecedent.Reference };
         _db.AssetStateEvents.Add(evt);
         await _db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('cmms.asset_state_event_id', {evt.Id.ToString("D")}, true)", ct);
-        await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, asset.Id, $"{r.TipoAntecedente}:{r.AntecedenteId} {r.Motivo}".Trim(), ct);
+        await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, asset.Id, $"{antecedent.Type}:{antecedent.Id ?? antecedent.Reference} {r.Motivo}".Trim(), ct);
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
-        await AuditAsync(u, "asset.operational_state.changed", asset, new { Estado = previous.Code }, new { Estado = state.Code, r.Motivo, r.TipoAntecedente, r.AntecedenteId }, ct);
-        return new(evt.Id.ToString("D"), asset.Code, previous.Code, state.Code, evt.OccurredAtUtc, evt.Reason, u.UserId, evt.ReferenceType, evt.ReferenceId);
+        await AuditAsync(u, "asset.operational_state.changed", asset, new { Estado = previous.Code }, new { Estado = state.Code, r.Motivo, antecedent.Type, antecedent.Id, antecedent.Reference }, ct);
+        return new(evt.Id.ToString("D"), asset.Code, previous.Code, state.Code, evt.OccurredAtUtc, evt.Reason, u.UserId, evt.ReferenceType, evt.ReferenceId, evt.ReferenceText);
     }
 
     public async Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
@@ -147,6 +148,124 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         return results;
     }
 
+    public async Task<AssetStateEventAntecedentSearchResponse> SearchStateEventAntecedentsAsync(string codigo, string origen, string? texto, int pagina, int tamanoPagina, UserAccessContext u, CancellationToken ct)
+    {
+        Maintain(u);
+        var asset = await FindAsync(codigo, false, ct) ?? throw new DomainException("Activo inexistente.");
+        View(u, asset);
+        var type = AntecedentType(origen, false)!;
+        if (type is "NONE" or "OTHER") throw new DomainException("El origen seleccionado no requiere búsqueda de antecedentes.");
+        var term = Empty(texto); var page = Math.Max(1, pagina); var size = Math.Clamp(tamanoPagina, 1, 50);
+        var items = type switch
+        {
+            "WORK_ORDER" => await SearchWorkOrdersAsync(asset, term, ct),
+            "NOTICE" => await SearchNoticesAsync(asset, term, ct),
+            "DOCUMENT" => await SearchDocumentsAsync(asset, term, ct),
+            "TRANSFER" => await SearchTransfersAsync(asset, term, ct),
+            _ => throw new DomainException("El origen de cambio seleccionado no está disponible.")
+        };
+        return new AssetStateEventAntecedentSearchResponse(items.Skip((page - 1) * size).Take(size).ToArray(), items.Count, page, size);
+    }
+
+    private async Task<(string? Type, string? Id, string? Reference)> ValidateStateEventAntecedentAsync(AssetEntity asset, CreateAssetStateEventRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        var type = AntecedentType(request.TipoAntecedente, true); var id = Empty(request.AntecedenteId); var reference = Empty(request.ReferenciaAntecedente);
+        if (type is null)
+        {
+            if (id is not null || reference is not null) throw new DomainException("Debe seleccionar un origen de cambio para indicar un antecedente.");
+            return (null, null, null);
+        }
+        if (type == "NONE")
+        {
+            if (id is not null || reference is not null) throw new DomainException("Sin antecedente no admite un registro relacionado.");
+            return (null, null, null);
+        }
+        if (type == "OTHER")
+        {
+            if (id is not null) throw new DomainException("El origen Otro no admite un identificador técnico.");
+            if (reference is null) throw new DomainException("Debe indicar la referencia o antecedente.");
+            return (type, null, reference);
+        }
+        if (reference is not null) throw new DomainException("La referencia descriptiva solo se permite para el origen Otro.");
+        if (id is null) throw new DomainException("Debe seleccionar un antecedente relacionado.");
+        if (!Guid.TryParse(id, out var antecedentId)) throw new DomainException("El antecedente seleccionado es inválido.");
+        switch (type)
+        {
+            case "WORK_ORDER":
+            {
+                var item = await _db.WorkOrders.Include(x => x.Faena).Include(x => x.Status).SingleOrDefaultAsync(x => x.Id == antecedentId, ct) ?? throw new DomainException("El antecedente seleccionado no existe.");
+                if (item.AnnulledAtUtc is not null || Same(item.Status.Code, "Anulada")) throw new DomainException("La orden de trabajo seleccionada está anulada.");
+                if (item.AssetId != asset.Id && !await _db.WorkOrderAssets.AnyAsync(x => x.WorkOrderId == item.Id && x.AssetId == asset.Id, ct)) throw new DomainException("La orden de trabajo seleccionada no corresponde al activo.");
+                EnsureAntecedentFaena(asset, item.Faena, user); break;
+            }
+            case "NOTICE":
+            {
+                var item = await _db.WorkNotifications.Include(x => x.Faena).Include(x => x.Status).SingleOrDefaultAsync(x => x.Id == antecedentId, ct) ?? throw new DomainException("El antecedente seleccionado no existe.");
+                if (item.AnnulledAtUtc is not null || Same(item.Status.Code, "Anulado")) throw new DomainException("El aviso seleccionado está anulado.");
+                if (item.AssetId != asset.Id) throw new DomainException("El aviso seleccionado no corresponde al activo.");
+                EnsureAntecedentFaena(asset, item.Faena, user); break;
+            }
+            case "DOCUMENT":
+            {
+                var item = await _db.Documents.Include(x => x.Assets).SingleOrDefaultAsync(x => x.Id == antecedentId, ct) ?? throw new DomainException("El antecedente seleccionado no existe.");
+                if (item.IsAnnulled || item.IsHistorical || !item.IsCurrent || Same(item.Status, "Anulado") || Same(item.Status, "Reemplazado")) throw new DomainException("El documento seleccionado no está vigente para usarse como antecedente.");
+                if (!item.Assets.Any(x => x.AssetId == asset.Id && x.IsActive)) throw new DomainException("El documento seleccionado no corresponde al activo.");
+                break;
+            }
+            case "TRANSFER":
+            {
+                var item = await _db.AssetTransfers.SingleOrDefaultAsync(x => x.Id == antecedentId, ct) ?? throw new DomainException("El antecedente seleccionado no existe.");
+                if (item.AssetId != asset.Id) throw new DomainException("El traslado seleccionado no corresponde al activo.");
+                break;
+            }
+            default: throw new DomainException("El origen de cambio seleccionado no es válido.");
+        }
+        return (type, antecedentId.ToString("D"), null);
+    }
+
+    private void EnsureAntecedentFaena(AssetEntity asset, FaenaEntity faena, UserAccessContext user)
+    {
+        if (!_authorization.CanViewFaena(user, faena.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena del antecedente seleccionado.");
+        if (asset.FaenaId != faena.Id) throw new DomainException("El antecedente seleccionado no corresponde a la faena vigente del activo.");
+    }
+
+    private async Task<List<AssetStateEventAntecedentSearchItem>> SearchWorkOrdersAsync(AssetEntity asset, string? term, CancellationToken ct)
+    {
+        var query = _db.WorkOrders.AsNoTracking().Include(x => x.Status).Include(x => x.Faena).Where(x => (x.AssetId == asset.Id || x.RelatedAssets.Any(a => a.AssetId == asset.Id)) && x.FaenaId == asset.FaenaId && x.AnnulledAtUtc == null && x.Status.Code != "Anulada");
+        if (term is not null) query = query.Where(x => x.WorkOrderNumber.Contains(term) || x.Description.Contains(term));
+        return (await query.OrderByDescending(x => x.ScheduledAtUtc ?? x.CreatedAtUtc).ThenBy(x => x.WorkOrderNumber).ToListAsync(ct)).Select(x => new AssetStateEventAntecedentSearchItem(x.Id.ToString("D"), x.WorkOrderNumber, x.Description, x.ScheduledAtUtc ?? x.CreatedAtUtc, x.Status.Code, asset.Code, x.Faena.Code)).ToList();
+    }
+
+    private async Task<List<AssetStateEventAntecedentSearchItem>> SearchNoticesAsync(AssetEntity asset, string? term, CancellationToken ct)
+    {
+        var query = _db.WorkNotifications.AsNoTracking().Include(x => x.Status).Include(x => x.Faena).Where(x => x.AssetId == asset.Id && x.FaenaId == asset.FaenaId && x.AnnulledAtUtc == null && x.Status.Code != "Anulado");
+        if (term is not null) query = query.Where(x => x.NotificationNumber.Contains(term) || x.Description.Contains(term));
+        return (await query.OrderByDescending(x => x.DetectedAtUtc).ThenBy(x => x.NotificationNumber).ToListAsync(ct)).Select(x => new AssetStateEventAntecedentSearchItem(x.Id.ToString("D"), x.NotificationNumber, x.Description, x.DetectedAtUtc, x.Status.Code, asset.Code, x.Faena.Code)).ToList();
+    }
+
+    private async Task<List<AssetStateEventAntecedentSearchItem>> SearchDocumentsAsync(AssetEntity asset, string? term, CancellationToken ct)
+    {
+        var query = _db.Documents.AsNoTracking().Include(x => x.DocumentType).Include(x => x.Versions).Where(x => x.Assets.Any(a => a.AssetId == asset.Id && a.IsActive) && !x.IsAnnulled && !x.IsHistorical && x.IsCurrent && x.Status != "Anulado" && x.Status != "Reemplazado");
+        if (term is not null) query = query.Where(x => x.Code.Contains(term) || x.Title.Contains(term) || x.DocumentType.Code.Contains(term) || x.DocumentType.Name.Contains(term) || x.Status.Contains(term));
+        return (await query.OrderByDescending(x => x.CreatedAtUtc).ThenBy(x => x.Code).ToListAsync(ct)).Select(x => new AssetStateEventAntecedentSearchItem(x.Id.ToString("D"), x.Code, x.Title, x.CreatedAtUtc, x.Status, asset.Code, asset.Faena?.Code, $"{x.DocumentType.Code} · v{x.Versions.Where(v => v.IsCurrent).OrderByDescending(v => v.VersionNumber).Select(v => v.VersionNumber).FirstOrDefault()}{(x.ExpiresOn is null ? string.Empty : $" · vence {x.ExpiresOn:dd/MM/yyyy}")}" )).ToList();
+    }
+
+    private async Task<List<AssetStateEventAntecedentSearchItem>> SearchTransfersAsync(AssetEntity asset, string? term, CancellationToken ct)
+    {
+        var query = _db.AssetTransfers.AsNoTracking().Include(x => x.OriginFaena).Include(x => x.DestinationFaena).Where(x => x.AssetId == asset.Id);
+        if (term is not null) query = query.Where(x => (x.OriginFaena != null && x.OriginFaena.Code.Contains(term)) || (x.DestinationFaena != null && x.DestinationFaena.Code.Contains(term)) || x.Reason.Contains(term));
+        return (await query.OrderByDescending(x => x.EffectiveAtUtc).ToListAsync(ct)).Select(x => new AssetStateEventAntecedentSearchItem(x.Id.ToString("D"), "Traslado", x.Reason, x.EffectiveAtUtc, null, asset.Code, asset.Faena?.Code, $"{x.OriginFaena?.Code ?? "Sin faena"} → {x.DestinationFaena?.Code ?? "Sin faena"}")).ToList();
+    }
+
+    private static string? AntecedentType(string? value, bool allowEmpty)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return allowEmpty ? null : throw new DomainException("Seleccione un origen de cambio válido.");
+        return Code(value) switch
+        {
+            "NONE" or "SIN_ANTECEDENTE" => "NONE", "WORK_ORDER" or "OT" or "ORDEN_TRABAJO" => "WORK_ORDER", "NOTICE" or "AVISO" => "NOTICE", "DOCUMENT" or "DOCUMENTO" => "DOCUMENT", "TRANSFER" or "TRASLADO" => "TRANSFER", "OTHER" or "OTRO" => "OTHER",
+            "INSPECTION" or "INSPECCION" => throw new DomainException("No existe un módulo de inspecciones disponible para usar como antecedente."), _ => throw new DomainException("El origen de cambio seleccionado no es válido.")
+        };
+    }
     private async Task<AssetTransferResponse> TransferCoreAsync(AssetEntity asset, FaenaEntity destination, OperationalUnitEntity? unit, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
     {
         var current = await _db.AssetLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct);

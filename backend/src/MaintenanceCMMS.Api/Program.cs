@@ -775,6 +775,30 @@ assetsApi.MapPut("/{id}", async (
     })
     .WithName("UpdateAsset");
 
+assetsApi.MapGet("/{id}/state-event-antecedents", async (
+        string id,
+        string origen,
+        string? texto,
+        int? pagina,
+        int? tamanoPagina,
+        ClaimsPrincipal user,
+        IAssetService assetService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await assetService.SearchStateEventAntecedentsAsync(id, origen, texto, pagina ?? 1, tamanoPagina ?? 20, UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("SearchAssetStateEventAntecedents");
 assetsApi.MapPost("/{id}/state-events", async (
         string id,
         CreateAssetStateEventRequest request,

@@ -208,6 +208,7 @@ public sealed class AssetStateEventConfiguration : IEntityTypeConfiguration<Asse
         builder.Property(entity => entity.Reason).HasColumnName("motivo").HasMaxLength(500).IsRequired();
         builder.Property(entity => entity.ReferenceType).HasColumnName("tipo_antecedente").HasMaxLength(80);
         builder.Property(entity => entity.ReferenceId).HasColumnName("antecedente_id").HasMaxLength(240);
+        builder.Property(entity => entity.ReferenceText).HasColumnName("referencia_antecedente").HasMaxLength(500);
         builder.HasOne(entity => entity.Asset).WithMany().HasForeignKey(entity => entity.AssetId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.PreviousState).WithMany().HasForeignKey(entity => entity.PreviousStateId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.NewState).WithMany().HasForeignKey(entity => entity.NewStateId).OnDelete(DeleteBehavior.Restrict);

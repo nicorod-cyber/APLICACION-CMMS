@@ -64,3 +64,18 @@ test("technician loads the work-order view without a frontend error", async ({ p
   await login(page, process.env.E2E_TECHNICIAN_USERNAME ?? "");
   await expectOperationalView(page);
 });
+
+test("asset state event hides technical antecedent fields and requires a selected reference", async ({ page }) => {
+  await login(page, process.env.E2E_PLANNER_USERNAME ?? "");
+  await page.goto("/activos");
+  await expect(page.getByRole("heading", { name: "Activos" })).toBeVisible();
+  await page.locator("tbody tr").first().click();
+  await expect(page.getByText("Evento de estado")).toBeVisible();
+  await expect(page.getByLabel("Origen del cambio")).toBeVisible();
+  await expect(page.getByLabel("Tipo antecedente")).toHaveCount(0);
+  await expect(page.getByLabel("Antecedente ID")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Registrar evento" })).toBeDisabled();
+  await page.getByLabel("Origen del cambio").selectOption("WORK_ORDER");
+  await expect(page.getByLabel("Antecedente relacionado")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Registrar evento" })).toBeDisabled();
+});

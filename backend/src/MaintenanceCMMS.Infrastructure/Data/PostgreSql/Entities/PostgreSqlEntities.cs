@@ -166,6 +166,7 @@ public sealed class AssetStateEventEntity : PostgreSqlEntity
     public string Reason { get; set; } = string.Empty;
     public string? ReferenceType { get; set; }
     public string? ReferenceId { get; set; }
+    public string? ReferenceText { get; set; }
 }
 
 public sealed class AssetTransferEntity : PostgreSqlEntity

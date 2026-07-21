@@ -66,7 +66,7 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.MountAsync("CFA-STATE", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje controlado"), Admin, CancellationToken.None);
 
         var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
-        await assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla critica", TipoAntecedente: "OT", AntecedenteId: "OT-TEST"), Admin, CancellationToken.None);
+        await assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla critica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-TEST"), Admin, CancellationToken.None);
         var unit = await fixture.Service.GetAsync("CFA-STATE", Admin, CancellationToken.None);
 
         Assert.NotNull(unit);
@@ -120,12 +120,12 @@ public sealed class OperationalUnitServiceTests
         var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
 
         await Assert.ThrowsAsync<DomainException>(() => assetService.TransferAsync("AUGER-1000", new TransferAssetRequest("F002", DateTimeOffset.UtcNow.AddMinutes(1), "Traslado aislado"), Admin, CancellationToken.None));
-        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla de fabrica", TipoAntecedente: "OT", AntecedenteId: "OT-FAB"), Admin, CancellationToken.None);
+        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla de fabrica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None);
         var restricted = await fixture.Service.GetAsync("CFA-TRANSFER", Admin, CancellationToken.None);
         Assert.Equal("FUERA_SERVICIO_TALLER", restricted!.EstadoOperacionalCodigo);
         Assert.Equal("FABRICA", restricted.EstadoDerivado!.RolRestrictivoCodigo);
 
-        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("OPERATIVO_FAENA", "Reparacion terminada", TipoAntecedente: "OT", AntecedenteId: "OT-FAB"), Admin, CancellationToken.None);
+        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("OPERATIVO_FAENA", "Reparacion terminada", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None);
         var recovered = await fixture.Service.GetAsync("CFA-TRANSFER", Admin, CancellationToken.None);
         Assert.Equal("OPERATIVO_FAENA", recovered!.EstadoOperacionalCodigo);
     }

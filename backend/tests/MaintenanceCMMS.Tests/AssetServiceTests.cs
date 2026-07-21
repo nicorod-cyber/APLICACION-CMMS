@@ -56,7 +56,7 @@ public sealed class AssetServiceTests
         Assert.Single(readings);
         Assert.Equal(110m, readings.Single().Valor);
 
-        await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("DADO_DE_BAJA", "Baja definitiva", TipoAntecedente: "ACTA", AntecedenteId: "ACTA-001"), Admin, CancellationToken.None);
+        await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("DADO_DE_BAJA", "Baja definitiva", TipoAntecedente: "OTHER", ReferenciaAntecedente: "Acta de baja ACTA-001"), Admin, CancellationToken.None);
         await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddReadingAsync(asset.Resumen.Codigo, new CreateAssetReadingRequest(120m), Admin, CancellationToken.None));
     }
 
@@ -107,6 +107,73 @@ public sealed class AssetServiceTests
         Assert.Equal(effectiveAt, periods[0].ValidToUtc);
         Assert.Null(periods[1].ValidToUtc);
         Assert.Single(detail.HistorialTraslados!);
+    }
+    [Fact]
+    public async Task StateEvent_ValidatesSelectedWorkOrderAndSearchesByVisibleNumber()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-OT-1"), Admin, CancellationToken.None);
+        var workOrder = await CreateWorkOrderAsync(fixture.DbContext, asset.Resumen.Codigo, "OT-000245", "Falla sistema hidraulico");
+
+        var response = await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla detectada", TipoAntecedente: "WORK_ORDER", AntecedenteId: workOrder.Id.ToString("D")), Admin, CancellationToken.None);
+        var search = await fixture.Service.SearchStateEventAntecedentsAsync(asset.Resumen.Codigo, "WORK_ORDER", "000245", 1, 1, Admin, CancellationToken.None);
+
+        Assert.Equal("WORK_ORDER", response!.TipoAntecedente);
+        Assert.Equal(workOrder.Id.ToString("D"), response.AntecedenteId);
+        Assert.Equal(1, search.Total);
+        Assert.Single(search.Items);
+        Assert.Equal("OT-000245", search.Items.Single().Codigo);
+    }
+
+    [Fact]
+    public async Task StateEventSearch_RejectsUserWithoutFaenaAccess()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-SCOPE"), Admin, CancellationToken.None);
+        var restricted = new UserAccessContext("planner-f002", [AuthRoles.Planner], [], ["F002"]);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.SearchStateEventAntecedentsAsync(asset.Resumen.Codigo, "WORK_ORDER", "OT", 1, 10, restricted, CancellationToken.None));
+    }
+    [Fact]
+    public async Task StateEvent_RejectsMismatchedAndMissingAntecedents_AndAcceptsOtherReference()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-OT-2"), Admin, CancellationToken.None);
+        var other = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-OT-3"), Admin, CancellationToken.None);
+        var foreignOrder = await CreateWorkOrderAsync(fixture.DbContext, other.Resumen.Codigo, "OT-000246", "Falla de otro activo");
+
+        var mismatch = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Prueba", TipoAntecedente: "WORK_ORDER", AntecedenteId: foreignOrder.Id.ToString("D")), Admin, CancellationToken.None));
+        Assert.Contains("no corresponde al activo", mismatch.Message, StringComparison.OrdinalIgnoreCase);
+        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Prueba", TipoAntecedente: "DOCUMENT", AntecedenteId: foreignOrder.Id.ToString("D")), Admin, CancellationToken.None));
+        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Prueba", TipoAntecedente: "WORK_ORDER"), Admin, CancellationToken.None));
+
+        var otherReference = await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Instruccion recibida", TipoAntecedente: "OTHER", ReferenciaAntecedente: "Instruccion verbal del supervisor"), Admin, CancellationToken.None);
+        Assert.Equal("OTHER", otherReference!.TipoAntecedente);
+        Assert.Null(otherReference.AntecedenteId);
+        Assert.Equal("Instruccion verbal del supervisor", otherReference.ReferenciaAntecedente);
+    }
+
+    private static async Task<WorkOrderEntity> CreateWorkOrderAsync(CmmsDbContext db, string assetCode, string number, string description)
+    {
+        var asset = await db.Assets.SingleAsync(x => x.Code == assetCode);
+        var faena = await db.Faenas.SingleAsync(x => x.Id == asset.FaenaId);
+        var status = await db.WorkCatalogs.SingleOrDefaultAsync(x => x.Category == "WorkOrderLifecycleStatus" && x.Code == "OTCreada");
+        if (status is null)
+        {
+            status = new WorkCatalogEntity { Category = "WorkOrderLifecycleStatus", Code = "OTCreada", Name = "OT creada", IsActive = true };
+            db.WorkCatalogs.Add(status);
+        }
+        var maintenanceType = await db.WorkCatalogs.SingleOrDefaultAsync(x => x.Category == "MaintenanceType" && x.Code == "Correctivo");
+        if (maintenanceType is null)
+        {
+            maintenanceType = new WorkCatalogEntity { Category = "MaintenanceType", Code = "Correctivo", Name = "Correctivo", IsActive = true };
+            db.WorkCatalogs.Add(maintenanceType);
+        }
+        await db.SaveChangesAsync();
+        var order = new WorkOrderEntity { WorkOrderNumber = number, AssetId = asset.Id, FaenaId = faena.Id, StatusId = status.Id, MaintenanceTypeId = maintenanceType.Id, Description = description, CreatedByUserId = "admin", CreatedByUserAtUtc = DateTimeOffset.UtcNow };
+        db.WorkOrders.Add(order);
+        await db.SaveChangesAsync();
+        return order;
     }
     private static CreateAssetRequest CompleteCreateRequest(string code) => new(
         "Camion tolva", "CAMION", "CAMIONES", "F001", "OPERATIVO_FAENA",
