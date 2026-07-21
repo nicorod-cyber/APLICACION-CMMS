@@ -3,6 +3,7 @@ import { BellRing, CheckCircle2, Eye, FileText, Mail, RefreshCw, Save, Send, XCi
 import type { LucideIcon } from "lucide-react";
 import { AUTH_PERMISSIONS, apiFetch, useAuthStore } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
+import type { MaintenanceTarget } from "../maintenance-targets/MaintenanceTargetSelect";
 
 type AlertSeverityLevel = "Info" | "Warning" | "Critical";
 type AlertStatus = "Open" | "Acknowledged" | "Resolved";
@@ -29,6 +30,7 @@ type AlertRecord = {
   resolvedAtUtc?: string | null;
   resolvedBy?: string | null;
   resolutionReason?: string | null;
+  objetivo?: MaintenanceTarget | null;
 };
 
 type AlertRule = {
@@ -504,7 +506,7 @@ function AlertDetail({
         <Detail label="Regla" value={alert.ruleCode} />
         <Detail label="Causa" value={alert.causeKey} />
         <Detail label="Faena" value={alert.faenaCodigo ?? "-"} />
-        <Detail label="Entidad" value={`${alert.entityType ?? "-"} / ${alert.entityId ?? "-"}`} />
+        <Detail label="Objetivo de mantenimiento" value={alert.objetivo ? `${alert.objetivo.nombre} / ${targetTypeLabel(alert.objetivo.tipo)}` : "No aplica"} />
         <Detail label="Creada" value={formatDate(alert.createdAtUtc)} />
         <Detail label="Actualizada" value={formatDate(alert.updatedAtUtc)} />
       </dl>
@@ -855,6 +857,10 @@ function Detail({ label, value }: { label: string; value: string }) {
       <dd className="mt-1 break-words text-slate-800 dark:text-slate-100">{value}</dd>
     </div>
   );
+}
+
+function targetTypeLabel(type: MaintenanceTarget["tipo"]) {
+  return type === "OperationalUnit" ? "Unidad operativa" : "Activo";
 }
 
 function SeverityBadge({ severity }: { severity: AlertSeverityLevel }) {

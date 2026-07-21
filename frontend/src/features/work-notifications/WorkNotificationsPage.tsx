@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Bell, CheckCircle2, ClipboardList, RefreshCw, Send, Wrench, XCircle } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
+import { MaintenanceTargetSelect, type MaintenanceTargetReference } from "../maintenance-targets/MaintenanceTargetSelect";
 
 type WorkNotificationType =
   | "Falla"
@@ -23,6 +24,7 @@ type WorkNotification = {
   faenaCodigo: string;
   activoCodigo?: string | null;
   unidadOperativaCodigo?: string | null;
+  objetivo?: { tipo: "Asset" | "OperationalUnit"; codigo: string; nombre: string } | null;
   sistema?: string | null;
   subsistema?: string | null;
   componente?: string | null;
@@ -69,6 +71,7 @@ type NotificationForm = {
   faenaCodigo: string;
   activoCodigo: string;
   unidadOperativaCodigo: string;
+  objetivo: MaintenanceTargetReference | null;
   sistema: string;
   subsistema: string;
   componente: string;
@@ -85,6 +88,7 @@ const emptyForm: NotificationForm = {
   faenaCodigo: "",
   activoCodigo: "",
   unidadOperativaCodigo: "",
+  objetivo: null,
   sistema: "",
   subsistema: "",
   componente: "",
@@ -316,28 +320,12 @@ export function WorkNotificationsPage() {
               </select>
             </label>
             <FaenaSelect emptyLabel="Selecciona faena" value={form.faenaCodigo} onChange={(value) => setForm({ ...form, faenaCodigo: value })} />
-            <label>
-              Activo
-              <select value={form.activoCodigo} onChange={(event) => applyAsset(event.target.value)}>
-                <option value="">Sin activo especifico</option>
-                {assets.map((item) => (
-                  <option key={item.codigo} value={item.codigo}>
-                    {item.nombre} ({item.codigo})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Unidad operativa
-              <select value={form.unidadOperativaCodigo} onChange={(event) => applyOperationalUnit(event.target.value)}>
-                <option value="">Sin unidad operativa especifica</option>
-                {operationalUnits.map((item) => (
-                  <option key={item.codigo} value={item.codigo}>
-                    {item.nombre} ({item.codigo})
-                  </option>
-                ))}
-              </select>
-            </label>
+            <MaintenanceTargetSelect
+              value={form.objetivo}
+              faenaCodigo={form.faenaCodigo}
+              onChange={(objetivo, target) => setForm({ ...form, objetivo, faenaCodigo: target?.faenaCodigo ?? form.faenaCodigo, criticidad: normalizePriority(target?.criticidad) ?? form.criticidad })}
+              label="Objetivo de mantenimiento"
+            />
             <label>
               Fecha deteccion
               <input type="date" value={form.fechaDeteccion} onChange={(event) => setForm({ ...form, fechaDeteccion: event.target.value })} required />
@@ -462,7 +450,7 @@ export function WorkNotificationsPage() {
                         <small>{item.descripcion}</small>
                       </td>
                       <td>
-                        <strong>{rowAsset?.nombre ?? rowUnit?.nombre ?? item.activoCodigo ?? item.unidadOperativaCodigo ?? "Sin objetivo"}</strong>
+                        <strong>{item.objetivo?.nombre ?? rowAsset?.nombre ?? rowUnit?.nombre ?? "Sin objetivo"}</strong>
                         <small>{[item.faenaCodigo, item.sistema, item.subsistema, item.componente].filter(Boolean).join(" / ") || "-"}</small>
                       </td>
                       <td>

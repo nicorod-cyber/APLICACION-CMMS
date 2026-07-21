@@ -1,3 +1,5 @@
+using MaintenanceCMMS.Application.MaintenanceTargets;
+
 namespace MaintenanceCMMS.Application.WorkOrders;
 
 public enum WorkOrderLifecycleStatus
@@ -75,7 +77,9 @@ public sealed record WorkOrderQuery(
     string? TechnicianId = null,
     string? ActivoCodigo = null,
     bool IncludeClosed = false,
-    string? UnidadOperativaCodigo = null);
+    string? UnidadOperativaCodigo = null,
+    MaintenanceTargetType? TipoObjetivo = null,
+    string? ObjetivoCodigo = null);
 
 public sealed record CreateWorkOrderRequest(
     string? ActivoCodigo,
@@ -93,7 +97,8 @@ public sealed record CreateWorkOrderRequest(
     DateTimeOffset? FechaFinProgramada = null,
     bool RequiereFirma = false,
     string? UnidadOperativaCodigo = null,
-    IReadOnlyCollection<WorkOrderAssetInput>? ActivosRelacionados = null);
+    IReadOnlyCollection<WorkOrderAssetInput>? ActivosRelacionados = null,
+    MaintenanceTargetReference? Objetivo = null);
 
 public sealed record CreatePreventiveWorkOrderRequest(
     string ActivoCodigo,
@@ -225,7 +230,8 @@ public sealed record WorkOrderSummaryResponse(
     int BloqueosCierre,
     string? UnidadOperativaCodigo,
     string? UnidadOperativaNombre,
-    IReadOnlyCollection<WorkOrderAssetResponse> ActivosRelacionados);
+    IReadOnlyCollection<WorkOrderAssetResponse> ActivosRelacionados,
+    MaintenanceTargetSummary? Objetivo = null);
 
 public sealed record WorkOrderDetailResponse(
     WorkOrderSummaryResponse Summary,

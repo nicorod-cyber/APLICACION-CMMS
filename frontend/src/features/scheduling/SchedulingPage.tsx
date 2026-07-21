@@ -2,6 +2,7 @@ import { FormEvent, DragEvent, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarDays, GitBranch, KanbanSquare, RefreshCw, Save, Wrench } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
+import type { MaintenanceTarget } from "../maintenance-targets/MaintenanceTargetSelect";
 
 type ScheduleViewMode = "Diario" | "Semanal" | "Mensual";
 type ScheduleItemStatus = "Programado" | "EnProceso" | "Atrasado" | "EsperandoCupo" | "Completado";
@@ -34,6 +35,7 @@ type ScheduleItem = {
   prioridad: string;
   criticidad: string;
   descripcion: string;
+  objetivo?: MaintenanceTarget | null;
 };
 
 type WorkshopLoad = {
@@ -92,6 +94,7 @@ type WorkOrderSummary = {
   prioridad: string;
   fechaInicioProgramada?: string | null;
   fechaFinProgramada?: string | null;
+  objetivo?: MaintenanceTarget | null;
 };
 
 const statusLabels: Record<ScheduleItemStatus, string> = {
@@ -328,7 +331,7 @@ export function SchedulingPage() {
         <form className="panel stack" onSubmit={scheduleOrder}>
           <div className="section-heading"><h2>Programar OT</h2></div>
           <div className="form-grid">
-            <label>OT<select value={scheduleForm.numeroOT} onChange={(event) => setScheduleForm({ ...scheduleForm, numeroOT: event.target.value })} required><option value="">Selecciona OT</option>{orders.map((item) => <option key={item.numeroOT} value={item.numeroOT}>{item.numeroOT} - {item.activoNombre ?? item.activoCodigo}</option>)}</select></label>
+            <label>OT<select value={scheduleForm.numeroOT} onChange={(event) => setScheduleForm({ ...scheduleForm, numeroOT: event.target.value })} required><option value="">Selecciona OT</option>{orders.map((item) => <option key={item.numeroOT} value={item.numeroOT}>{item.numeroOT} - {workOrderTargetLabel(item)}</option>)}</select></label>
             <label>Taller<select value={scheduleForm.tallerCodigo} onChange={(event) => setScheduleForm({ ...scheduleForm, tallerCodigo: event.target.value })} required><option value="">Selecciona taller</option>{(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre}</option>)}</select></label>
             <label>Inicio<input type="datetime-local" value={scheduleForm.fechaInicio} onChange={(event) => setScheduleForm({ ...scheduleForm, fechaInicio: event.target.value })} required /></label>
             <label>Fin<input type="datetime-local" value={scheduleForm.fechaFin} onChange={(event) => setScheduleForm({ ...scheduleForm, fechaFin: event.target.value })} required /></label>
@@ -405,11 +408,19 @@ function ScheduleCard({ item, onDragStart }: { item: ScheduleItem; onDragStart: 
   return (
     <article draggable className="rounded-md border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-900" onDragStart={onDragStart}>
       <strong className="block text-slate-900 dark:text-slate-100">{item.numeroOT}</strong>
-      <span className="block text-xs text-slate-500 dark:text-slate-400">{item.activoNombre ?? item.activoCodigo}</span>
+      <span className="block text-xs text-slate-500 dark:text-slate-400">{scheduleTargetLabel(item)}</span>
       <span className="mt-2 block">{item.tallerNombre}</span>
       <span className="block text-xs">{formatDateTime(item.fechaInicio)} - {formatDateTime(item.fechaFin)}</span>
     </article>
   );
+}
+
+function workOrderTargetLabel(item: WorkOrderSummary) {
+  return item.objetivo?.nombre ?? item.activoNombre ?? "Objetivo no disponible";
+}
+
+function scheduleTargetLabel(item: ScheduleItem) {
+  return item.objetivo?.nombre ?? item.activoNombre ?? "Objetivo no disponible";
 }
 
 function Gantt({ items, dependencies }: { items: ScheduleItem[]; dependencies: GanttDependency[] }) {

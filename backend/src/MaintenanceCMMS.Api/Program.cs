@@ -17,6 +17,7 @@ using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Application.MaterialRequests;
+using MaintenanceCMMS.Application.MaintenanceTargets;
 using MaintenanceCMMS.Application.PreventiveMaintenance;
 using MaintenanceCMMS.Application.OperationalUnits;
 using MaintenanceCMMS.Application.Procurement;
@@ -615,6 +616,48 @@ usersApi.MapPost("/{id}/unlock", async (
     })
     .WithName("UnlockUser");
 
+api.MapGet("/maintenance-targets", async (
+        string? faenaCodigo,
+        string? search,
+        string? tipo,
+        string? scope,
+        bool? soloDisponibilidad,
+        bool? incluirDadosDeBaja,
+        ClaimsPrincipal user,
+        IMaintenanceTargetService service,
+        CancellationToken cancellationToken) =>
+    {
+        var targetType = default(MaintenanceTargetType);
+        var targetScope = MaintenanceTargetScope.Operational;
+        if (!string.IsNullOrWhiteSpace(tipo) && !Enum.TryParse<MaintenanceTargetType>(tipo, true, out targetType))
+        {
+            return Results.BadRequest(new { message = "El parámetro tipo no es válido." });
+        }
+        if (!string.IsNullOrWhiteSpace(scope) && !Enum.TryParse<MaintenanceTargetScope>(scope, true, out targetScope))
+        {
+            return Results.BadRequest(new { message = "El parámetro scope no es válido." });
+        }
+        try
+        {
+            return Results.Ok(await service.ListAsync(
+                new MaintenanceTargetQuery(faenaCodigo, search,
+                    string.IsNullOrWhiteSpace(tipo) ? null : targetType,
+                    string.IsNullOrWhiteSpace(scope) ? MaintenanceTargetScope.Operational : targetScope,
+                    soloDisponibilidad ?? false,
+                    incluirDadosDeBaja ?? false),
+                UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+    })
+    .RequireAuthorization()
+    .WithName("ListMaintenanceTargets");
 var assetsApi = api.MapGroup("/assets")
     .RequireAuthorization();
 
@@ -1008,12 +1051,37 @@ availabilityApi.MapPost("/contracts/{contractCode}/assets", async (
     })
     .WithName("AssignAvailabilityContractAsset");
 
+availabilityApi.MapPost("/contracts/{contractCode}/targets", async (
+        string contractCode,
+        AssignContractTargetRequest request,
+        ClaimsPrincipal user,
+        IAvailabilityService availabilityService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await availabilityService.AssignTargetAsync(
+                request with { ContractCode = contractCode },
+                UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("AssignAvailabilityContractTarget");
 availabilityApi.MapGet("/events", async (
         DateTimeOffset? from,
         DateTimeOffset? to,
         string? faenaCodigo,
         string? contractCode,
         string? activoCodigo,
+        MaintenanceTargetType? tipoObjetivo,
+        string? objetivoCodigo,
         AvailabilityCause? cause,
         ClaimsPrincipal user,
         IAvailabilityService availabilityService,
@@ -1022,7 +1090,7 @@ availabilityApi.MapGet("/events", async (
         try
         {
             return Results.Ok(await availabilityService.ListEventsAsync(
-                new AvailabilityEventQuery(from, to, faenaCodigo, contractCode, activoCodigo, cause),
+                new AvailabilityEventQuery(from, to, faenaCodigo, contractCode, activoCodigo, cause, tipoObjetivo, objetivoCodigo),
                 UserAccessContext.FromClaims(user),
                 cancellationToken));
         }
@@ -1749,6 +1817,8 @@ workNotificationsApi.MapGet("/", async (
         string? faenaCodigo,
         string? activoCodigo,
         string? unidadOperativaCodigo,
+        MaintenanceTargetType? tipoObjetivo,
+        string? objetivoCodigo,
         WorkNotificationPriority? priority,
         bool? includeClosed,
         bool? supervisorInbox,
@@ -1759,7 +1829,7 @@ workNotificationsApi.MapGet("/", async (
         try
         {
             return Results.Ok(await service.ListAsync(
-                new WorkNotificationQuery(status, type, faenaCodigo, activoCodigo, priority, includeClosed ?? false, supervisorInbox ?? false, unidadOperativaCodigo),
+                new WorkNotificationQuery(status, type, faenaCodigo, activoCodigo, priority, includeClosed ?? false, supervisorInbox ?? false, unidadOperativaCodigo, tipoObjetivo, objetivoCodigo),
                 UserAccessContext.FromClaims(user),
                 cancellationToken));
         }
@@ -1934,6 +2004,8 @@ workOrdersApi.MapGet("/", async (
         string? technicianId,
         string? activoCodigo,
         string? unidadOperativaCodigo,
+        MaintenanceTargetType? tipoObjetivo,
+        string? objetivoCodigo,
         bool? includeClosed,
         ClaimsPrincipal user,
         IWorkOrderService service,
@@ -1942,7 +2014,7 @@ workOrdersApi.MapGet("/", async (
         try
         {
             return Results.Ok(await service.ListAsync(
-                new WorkOrderQuery(status, faenaCodigo, technicianId, activoCodigo, includeClosed ?? false, unidadOperativaCodigo),
+                new WorkOrderQuery(status, faenaCodigo, technicianId, activoCodigo, includeClosed ?? false, unidadOperativaCodigo, tipoObjetivo, objetivoCodigo),
                 UserAccessContext.FromClaims(user),
                 cancellationToken));
         }

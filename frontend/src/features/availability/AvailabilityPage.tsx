@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Activity, AlertTriangle, Clock, Download, Gauge, Link2, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
+import { MaintenanceTargetSelect, type MaintenanceTargetReference } from "../maintenance-targets/MaintenanceTargetSelect";
 
 type AvailabilityPeriod = "Dia" | "Semana" | "Mes" | "Acumulado";
 type ContractAssetRole = "Comprometido" | "Backup" | "Arriendo" | "Asignado";
@@ -41,6 +42,7 @@ type AvailabilityContractAsset = {
   fechaInicio?: string | null;
   fechaFin?: string | null;
   activo: boolean;
+  objetivo?: MaintenanceTargetReference | null;
 };
 
 type AvailabilityContract = {
@@ -112,6 +114,7 @@ type UnavailableAsset = {
   penalizaDisponibilidad: boolean;
   cubiertoPorBackup: boolean;
   numeroOT?: string | null;
+  objetivo?: MaintenanceTargetReference | null;
 };
 
 type AvailabilityTrendPoint = {
@@ -142,6 +145,7 @@ type AvailabilityEvent = {
   comentario?: string | null;
   usuarioId: string;
   createdAtUtc: string;
+  objetivo?: MaintenanceTargetReference | null;
 };
 
 type AvailabilityDashboard = {
@@ -198,6 +202,7 @@ const emptyContractForm = {
 const emptyAssignmentForm = {
   contractCode: "",
   activoCodigo: "",
+  objetivo: null as MaintenanceTargetReference | null,
   rol: "Comprometido" as ContractAssetRole,
   fechaInicio: "",
   fechaFin: "",
@@ -208,6 +213,7 @@ const emptyAssignmentForm = {
 const emptyEventForm = {
   contractCode: "",
   activoCodigo: "",
+  objetivo: null as MaintenanceTargetReference | null,
   causa: "MantenimientoCorrectivo" as AvailabilityCause,
   inicioUtc: toInputDateTime(new Date()),
   finUtc: "",
@@ -325,19 +331,22 @@ export function AvailabilityPage() {
         throw new Error("Selecciona un contrato.");
       }
 
-      await apiFetch<AvailabilityContractAsset>(`/api/availability/contracts/${encodeURIComponent(contractCode)}/assets`, {
+      await apiFetch<AvailabilityContractAsset>(`/api/availability/contracts/${encodeURIComponent(contractCode)}/targets`, {
         method: "POST",
         body: JSON.stringify({
-          ...assignmentForm,
           contractCode,
+          objetivo: assignmentForm.objetivo,
+          rol: assignmentForm.rol,
+          activo: assignmentForm.activo,
+          reason: assignmentForm.reason,
           fechaInicio: toIsoOrNull(assignmentForm.fechaInicio),
           fechaFin: toIsoOrNull(assignmentForm.fechaFin)
         })
       });
       setAssignmentForm({ ...emptyAssignmentForm, contractCode });
-      setMessage("Activo asignado al contrato.");
+      setMessage("Objetivo asignado al contrato.");
       await loadAll();
-    }, "No fue posible asignar el activo.");
+    }, "No fue posible asignar el objetivo.");
   }
 
   async function registerEvent(event: FormEvent) {
@@ -352,7 +361,7 @@ export function AvailabilityPage() {
         method: "POST",
         body: JSON.stringify({
           contractCode,
-          activoCodigo: eventForm.activoCodigo,
+          objetivo: eventForm.objetivo,
           causa: eventForm.causa,
           inicioUtc: toIso(eventForm.inicioUtc),
           finUtc: toIsoOrNull(eventForm.finUtc),
@@ -418,7 +427,7 @@ export function AvailabilityPage() {
     });
 
     dashboard.unavailableAssets.forEach((item) => {
-      rows.push(["No disponible", item.contractCode, item.faenaCodigo, "", item.activoCodigo, formatNumber(item.horasNoDisponibles), `${causeLabels[item.causa]}${item.cubiertoPorBackup ? " cubierto por backup" : ""}`]);
+      rows.push(["No disponible", item.contractCode, item.faenaCodigo, "", availabilityTargetLabel(item), formatNumber(item.horasNoDisponibles), `${causeLabels[item.causa]}${item.cubiertoPorBackup ? " cubierto por backup" : ""}`]);
     });
 
     dashboard.trends.forEach((item) => {
@@ -590,17 +599,13 @@ export function AvailabilityPage() {
                   ))}
                 </select>
               </label>
-              <label>
-                Activo
-                <select value={assignmentForm.activoCodigo} onChange={(event) => setAssignmentForm({ ...assignmentForm, activoCodigo: event.target.value })} required>
-                  <option value="">Selecciona activo</option>
-                  {filteredAssets.map((asset) => (
-                    <option key={asset.codigo} value={asset.codigo}>
-                      {asset.nombre} ({asset.codigo})
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <MaintenanceTargetSelect
+                value={assignmentForm.objetivo}
+                faenaCodigo={selectedContract?.faenaCodigo}
+                soloDisponibilidad
+                required
+                onChange={(objetivo) => setAssignmentForm({ ...assignmentForm, objetivo })}
+              />
               <label>
                 Rol
                 <select value={assignmentForm.rol} onChange={(event) => setAssignmentForm({ ...assignmentForm, rol: event.target.value as ContractAssetRole })}>
@@ -630,17 +635,13 @@ export function AvailabilityPage() {
                   ))}
                 </select>
               </label>
-              <label>
-                Activo
-                <select value={eventForm.activoCodigo} onChange={(event) => setEventForm({ ...eventForm, activoCodigo: event.target.value })} required>
-                  <option value="">Selecciona activo</option>
-                  {filteredAssets.map((asset) => (
-                    <option key={asset.codigo} value={asset.codigo}>
-                      {asset.nombre} ({asset.codigo})
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <MaintenanceTargetSelect
+                value={eventForm.objetivo}
+                faenaCodigo={selectedContract?.faenaCodigo}
+                soloDisponibilidad
+                required
+                onChange={(objetivo) => setEventForm({ ...eventForm, objetivo })}
+              />
               <label>
                 Causa
                 <select value={eventForm.causa} onChange={(event) => setEventForm({ ...eventForm, causa: event.target.value as AvailabilityCause })}>
@@ -729,7 +730,7 @@ export function AvailabilityPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Activo</th>
+                  <th>Equipo</th>
                   <th>Rol</th>
                   <th>Faena</th>
                   <th>Estado</th>
@@ -738,7 +739,7 @@ export function AvailabilityPage() {
               <tbody>
                 {selectedContract?.assets.map((asset) => (
                   <tr key={asset.assignmentId}>
-                    <td><strong>{asset.activoNombre ?? asset.activoCodigo}</strong><small>{asset.activoCodigo}</small></td>
+                    <td><strong>{availabilityTargetLabel(asset)}</strong><small>{availabilityTargetType(asset)}</small></td>
                     <td><span className="status-pill">{roleLabels[asset.rol]}</span></td>
                     <td>{asset.faenaCodigo}</td>
                     <td>{asset.activo ? "Activo" : "Inactivo"}</td>
@@ -828,7 +829,7 @@ export function AvailabilityPage() {
           <table>
             <thead>
               <tr>
-                <th>Activo</th>
+                <th>Equipo</th>
                 <th>Contrato</th>
                 <th>Causa</th>
                 <th>Periodo</th>
@@ -839,7 +840,7 @@ export function AvailabilityPage() {
             <tbody>
               {dashboard?.unavailableAssets.map((item, index) => (
                 <tr key={`${item.contractCode}-${item.activoCodigo}-${item.inicioUtc}-${index}`}>
-                  <td><strong>{item.activoNombre ?? item.activoCodigo}</strong><small>{item.faenaCodigo}</small></td>
+                  <td><strong>{availabilityTargetLabel(item)}</strong><small>{availabilityTargetType(item)} / {item.faenaCodigo}</small></td>
                   <td>{item.contractCode}</td>
                   <td>{causeLabels[item.causa]}<small>{item.numeroOT ?? ""}</small></td>
                   <td>{formatDateTime(item.inicioUtc)}<small>{item.finUtc ? formatDateTime(item.finUtc) : "En curso"}</small></td>
@@ -897,7 +898,7 @@ export function AvailabilityPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Activo</th>
+                  <th>Equipo</th>
                   <th>Causa</th>
                   <th>Inicio</th>
                   <th>Regla</th>
@@ -906,7 +907,7 @@ export function AvailabilityPage() {
               <tbody>
                 {dashboard?.events.slice(0, 12).map((item) => (
                   <tr key={item.eventId}>
-                    <td><strong>{item.activoNombre ?? item.activoCodigo}</strong><small>{item.contractCode}</small></td>
+                    <td><strong>{availabilityTargetLabel(item)}</strong><small>{availabilityTargetType(item)} / {item.contractCode}</small></td>
                     <td>{causeLabels[item.causa]}<small>{item.comentario ?? ""}</small></td>
                     <td>{formatDateTime(item.inicioUtc)}</td>
                     <td><span className={item.penalizaDisponibilidad ? "status-pill danger" : "status-pill success"}>{item.penalizaDisponibilidad ? "Penaliza" : "No penaliza"}</span></td>
@@ -962,6 +963,14 @@ function buildDashboardQuery(filters: {
 
 function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0);
+}
+
+function availabilityTargetLabel(item: { activoNombre?: string | null; objetivo?: MaintenanceTargetReference | null }) {
+  return item.activoNombre ?? "Objetivo no disponible";
+}
+
+function availabilityTargetType(item: { objetivo?: MaintenanceTargetReference | null }) {
+  return item.objetivo?.tipo === "OperationalUnit" ? "Unidad operativa" : "Activo";
 }
 
 function toInputDateTime(date: Date) {

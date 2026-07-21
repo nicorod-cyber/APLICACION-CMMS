@@ -2,9 +2,11 @@ using System.Text.Json;
 using MaintenanceCMMS.Application.Alerts;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.MaintenanceTargets;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
 using MaintenanceCMMS.Infrastructure.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -20,12 +22,14 @@ public sealed class AlertService : IAlertService
     private readonly IPdfService _pdfService;
     private readonly PdfTemplateService _templateService;
     private readonly BootstrapDefaultsOptions _defaults;
+    private readonly IMaintenanceTargetService _maintenanceTargets;
 
-    public AlertService(CmmsDbContext dbContext, IAuditService auditService, IAuthorizationPolicyService authorizationPolicyService, IEmailService emailService, IPdfService pdfService, IPdfTemplateService templateService, IOptions<BootstrapDefaultsOptions>? defaults = null)
+    public AlertService(CmmsDbContext dbContext, IAuditService auditService, IAuthorizationPolicyService authorizationPolicyService, IEmailService emailService, IPdfService pdfService, IPdfTemplateService templateService, IOptions<BootstrapDefaultsOptions>? defaults = null, IMaintenanceTargetService? maintenanceTargets = null)
     {
         _dbContext = dbContext; _auditService = auditService; _authorizationPolicyService = authorizationPolicyService; _emailService = emailService; _pdfService = pdfService;
         _templateService = templateService as PdfTemplateService ?? throw new InvalidOperationException("La implementacion de plantillas debe usar PostgreSQL.");
         _defaults = defaults?.Value ?? new BootstrapDefaultsOptions();
+        _maintenanceTargets = maintenanceTargets ?? new MaintenanceTargetService(dbContext);
     }
 
     public async Task<IReadOnlyCollection<AlertResponse>> ListAsync(AlertQuery query, UserAccessContext user, CancellationToken cancellationToken)
@@ -37,16 +41,20 @@ public sealed class AlertService : IAlertService
             .Where(item => string.IsNullOrWhiteSpace(query.Source) || item.Source == query.Source.Trim())
             .Where(item => string.IsNullOrWhiteSpace(query.FaenaCodigo) || item.Faena != null && item.Faena.Code == query.FaenaCodigo.Trim())
             .OrderByDescending(item => item.Severity).ThenByDescending(item => item.UpdatedAtUtc ?? item.CreatedAtUtc).ToArrayAsync(cancellationToken);
-        return items.Select(ToAlertResponse).Where(item => CanViewAlert(item, user)).ToArray();
+        var visible = items.Where(item => CanViewAlert(ToAlertResponse(item), user)).ToArray();
+        return await Task.WhenAll(visible.Select(async item => ToAlertResponse(item, await ResolveTargetSummaryAsync(item, user, cancellationToken))));
     }
 
     public async Task<AlertResponse> GenerateAsync(GenerateAlertRequest request, UserAccessContext user, CancellationToken cancellationToken)
     {
         EnsureCanManage(user); ValidateGenerate(request); await EnsureDefaultsAsync(cancellationToken);
+        if (request.Objetivo is not null && (!string.IsNullOrWhiteSpace(request.EntityType) || !string.IsNullOrWhiteSpace(request.EntityId))) throw new DomainException("No puede informar Objetivo junto con EntityType o EntityId.");
+        var target = request.Objetivo is null ? null : await _maintenanceTargets.ResolveAsync(request.Objetivo, user, cancellationToken);
         var rule = await _dbContext.AlertRules.Include(item => item.Template).Include(item => item.Faena).Include(item => item.Recipients)
             .SingleOrDefaultAsync(item => item.Code == request.RuleCode && item.IsEnabled, cancellationToken)
             ?? throw new DomainException($"La regla de alerta '{request.RuleCode}' no existe o no esta habilitada.");
-        var faena = await ResolveFaenaAsync(request.FaenaCodigo, cancellationToken);
+        if (target is not null && !string.IsNullOrWhiteSpace(request.FaenaCodigo) && !string.Equals(target.FaenaCodigo, request.FaenaCodigo, StringComparison.OrdinalIgnoreCase)) throw new DomainException("El objetivo no pertenece a la faena indicada.");
+        var faena = await ResolveFaenaAsync(target?.FaenaCodigo ?? request.FaenaCodigo, cancellationToken);
         if (rule.FaenaId.HasValue && rule.FaenaId != faena?.Id) throw new DomainException("La regla no aplica a la faena solicitada.");
         var key = $"{rule.Code}:{request.CauseKey.Trim()}";
         var alert = await _dbContext.Alerts.Include(item => item.AlertRule).Include(item => item.Faena)
@@ -54,18 +62,18 @@ public sealed class AlertService : IAlertService
         var isNew = alert is null;
         if (alert is null)
         {
-            alert = new AlertEntity { AlertRuleId = rule.Id, AlertRule = rule, Title = request.Title.Trim(), Message = request.Message.Trim(), Severity = rule.Severity, Status = AlertStatus.Open.ToString(), Source = request.Source.Trim(), CauseKey = request.CauseKey.Trim(), DeduplicationKey = key, FaenaId = faena?.Id, Faena = faena, EntityType = EmptyToNull(request.EntityType), EntityId = EmptyToNull(request.EntityId), IsCriticalRepeat = rule.RepeatUntilResolved && rule.Severity == AlertSeverityLevel.Critical.ToString(), RepeatCount = 1 };
+            alert = new AlertEntity { AlertRuleId = rule.Id, AlertRule = rule, Title = request.Title.Trim(), Message = request.Message.Trim(), Severity = rule.Severity, Status = AlertStatus.Open.ToString(), Source = request.Source.Trim(), CauseKey = request.CauseKey.Trim(), DeduplicationKey = key, FaenaId = faena?.Id, Faena = faena, EntityType = target is null ? EmptyToNull(request.EntityType) : target.Tipo == MaintenanceTargetType.Asset ? "ASSET" : "OPERATIONAL_UNIT", EntityId = target is null ? EmptyToNull(request.EntityId) : (target.AssetId ?? target.OperationalUnitId)!.Value.ToString("D"), IsCriticalRepeat = rule.RepeatUntilResolved && rule.Severity == AlertSeverityLevel.Critical.ToString(), RepeatCount = 1 };
             _dbContext.Alerts.Add(alert);
         }
         else
         {
-            alert.Title = request.Title.Trim(); alert.Message = request.Message.Trim(); alert.Source = request.Source.Trim(); alert.EntityType = EmptyToNull(request.EntityType); alert.EntityId = EmptyToNull(request.EntityId); alert.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            alert.Title = request.Title.Trim(); alert.Message = request.Message.Trim(); alert.Source = request.Source.Trim(); alert.EntityType = target is null ? EmptyToNull(request.EntityType) : target.Tipo == MaintenanceTargetType.Asset ? "ASSET" : "OPERATIONAL_UNIT"; alert.EntityId = target is null ? EmptyToNull(request.EntityId) : (target.AssetId ?? target.OperationalUnitId)!.Value.ToString("D"); alert.UpdatedAtUtc = DateTimeOffset.UtcNow;
             if (alert.IsCriticalRepeat) alert.RepeatCount++;
         }
         await _dbContext.SaveChangesAsync(cancellationToken);
         if (rule.GenerateEmail || rule.GeneratePdf) await CreateNotificationAsync(alert, rule, request.Data, null, cancellationToken);
         await RecordAuditAsync(user, isNew ? "alert.generated" : "alert.repeated", alert.Id.ToString("D"), null, JsonSerializer.Serialize(ToAlertResponse(alert)), cancellationToken);
-        return ToAlertResponse(alert);
+        return ToAlertResponse(alert, target?.ToSummary());
     }
 
     public async Task<AlertResponse?> AcknowledgeAsync(string id, UserAccessContext user, CancellationToken cancellationToken)
@@ -138,11 +146,35 @@ public sealed class AlertService : IAlertService
     private static IEnumerable<(string Code, string Name, string EventType, AlertSeverityLevel Severity, bool Repeat, bool Pdf, string Recipients)> DefaultRules() =>
     [ ("document-expiring", "Documento por vencer", "DocumentoPorVencer", AlertSeverityLevel.Warning, false, true, "planificacion@example.local"), ("document-expired", "Documento vencido", "DocumentoVencido", AlertSeverityLevel.Critical, true, true, "planificacion@example.local"), ("spare-low-stock", "Repuesto bajo stock", "RepuestoBajoStock", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("critical-spare-no-stock", "Repuesto critico sin stock", "RepuestoCriticoSinStock", AlertSeverityLevel.Critical, true, true, "bodega@example.local"), ("work-order-overdue", "OT vencida", "OTVencida", AlertSeverityLevel.Critical, true, true, "planificacion@example.local"), ("preventive-created", "Preventivo creado automaticamente", "PreventivoCreado", AlertSeverityLevel.Info, false, false, "planificacion@example.local"), ("preventive-overdue", "Preventivo vencido", "PreventivoVencido", AlertSeverityLevel.Critical, true, true, "planificacion@example.local;supervisores@example.local;jefatura.mantenimiento@example.local"), ("request-pending-approval", "Solicitud pendiente aprobacion", "SolicitudPendienteAprobacion", AlertSeverityLevel.Warning, false, false, "abastecimiento@example.local"), ("spare-pending-delivery", "Repuesto pendiente entrega", "RepuestoPendienteEntrega", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("reserved-stock-without-pickup", "Stock reservado sin retiro", "StockReservadoSinRetiro", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("transfer-pending", "Transferencia pendiente", "TransferenciaPendiente", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("reception-overdue", "Recepcion vencida", "RecepcionVencida", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("incomplete-work-order-close", "Cierre OT incompleto", "CierreOTIncompleto", AlertSeverityLevel.Critical, true, true, "planificacion@example.local"), ("availability-affected", "Disponibilidad afectada", "DisponibilidadAfectada", AlertSeverityLevel.Critical, true, true, "planificacion@example.local") ];
 
+    private async Task<MaintenanceTargetSummary?> ResolveTargetSummaryAsync(AlertEntity alert, UserAccessContext user, CancellationToken cancellationToken)
+    {
+        var type = alert.EntityType?.Trim().ToUpperInvariant();
+        if (type is not ("ASSET" or "OPERATIONAL_UNIT") || !Guid.TryParse(alert.EntityId, out var targetId)) return null;
+        try
+        {
+            var reference = new MaintenanceTargetReference(
+                type == "ASSET" ? MaintenanceTargetType.Asset : MaintenanceTargetType.OperationalUnit,
+                type == "ASSET"
+                    ? await _dbContext.Assets.Where(item => item.Id == targetId).Select(item => item.Code).SingleOrDefaultAsync(cancellationToken) ?? string.Empty
+                    : await _dbContext.OperationalUnits.Where(item => item.Id == targetId).Select(item => item.Code).SingleOrDefaultAsync(cancellationToken) ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(reference.Codigo)) return UnavailableTarget(reference.Tipo);
+            return (await _maintenanceTargets.ResolveAsync(reference, user, cancellationToken)).ToSummary();
+        }
+        catch (DomainException)
+        {
+            return UnavailableTarget(type == "ASSET" ? MaintenanceTargetType.Asset : MaintenanceTargetType.OperationalUnit);
+        }
+    }
+
+    private static MaintenanceTargetSummary UnavailableTarget(MaintenanceTargetType type) => new(
+        type, string.Empty, "Objetivo no disponible", string.Empty, string.Empty, null, null,
+        string.Empty, string.Empty, null, type == MaintenanceTargetType.OperationalUnit, null, false,
+        null, null, null, false);
     private async Task<AlertEntity?> FindAlertAsync(string id, CancellationToken cancellationToken) => Guid.TryParse(id, out var parsed) ? await _dbContext.Alerts.Include(item => item.AlertRule).Include(item => item.Faena).SingleOrDefaultAsync(item => item.Id == parsed, cancellationToken) : null;
     private async Task<FaenaEntity?> ResolveFaenaAsync(string? code, CancellationToken cancellationToken) => string.IsNullOrWhiteSpace(code) ? null : await _dbContext.Faenas.SingleOrDefaultAsync(item => item.Code == code.Trim(), cancellationToken) ?? throw new DomainException("La faena indicada no existe.");
     private static void ValidateGenerate(GenerateAlertRequest request) { DomainGuard.AgainstEmpty(request.RuleCode, nameof(request.RuleCode)); DomainGuard.AgainstEmpty(request.Title, nameof(request.Title)); DomainGuard.AgainstEmpty(request.Message, nameof(request.Message)); DomainGuard.AgainstEmpty(request.Source, nameof(request.Source)); DomainGuard.AgainstEmpty(request.CauseKey, nameof(request.CauseKey)); }
     private static IReadOnlyDictionary<string, string?> BuildData(AlertEntity alert, string ruleCode, IReadOnlyDictionary<string, string?>? extra) { var data = new Dictionary<string, string?>(extra ?? new Dictionary<string, string?>(), StringComparer.OrdinalIgnoreCase) { ["AlertId"] = alert.Id.ToString("D"), ["RuleCode"] = ruleCode, ["Title"] = alert.Title, ["Message"] = alert.Message, ["Severity"] = alert.Severity, ["Status"] = alert.Status, ["Source"] = alert.Source, ["CauseKey"] = alert.CauseKey, ["FaenaCodigo"] = alert.Faena?.Code, ["EntityType"] = alert.EntityType, ["EntityId"] = alert.EntityId, ["RepeatCount"] = alert.RepeatCount.ToString(), ["CreatedAtUtc"] = alert.CreatedAtUtc.ToString("O") }; return data; }
-    private static AlertResponse ToAlertResponse(AlertEntity item) => new(item.Id.ToString("D"), item.AlertRule.Code, item.Title, item.Message, Parse<AlertSeverityLevel>(item.Severity), Parse<AlertStatus>(item.Status), item.Source, item.CauseKey, item.Faena?.Code, item.EntityType, item.EntityId, item.IsCriticalRepeat, item.RepeatCount, item.CreatedAtUtc, item.UpdatedAtUtc ?? item.CreatedAtUtc, item.AcknowledgedAtUtc, item.AcknowledgedByUserId, item.ResolvedAtUtc, item.ResolvedByUserId, item.ResolutionReason);
+    private static AlertResponse ToAlertResponse(AlertEntity item, MaintenanceTargetSummary? target = null) => new(item.Id.ToString("D"), item.AlertRule.Code, item.Title, item.Message, Parse<AlertSeverityLevel>(item.Severity), Parse<AlertStatus>(item.Status), item.Source, item.CauseKey, item.Faena?.Code, item.EntityType, item.EntityId, item.IsCriticalRepeat, item.RepeatCount, item.CreatedAtUtc, item.UpdatedAtUtc ?? item.CreatedAtUtc, item.AcknowledgedAtUtc, item.AcknowledgedByUserId, item.ResolvedAtUtc, item.ResolvedByUserId, item.ResolutionReason, target);
     private static AlertRuleResponse ToRuleResponse(AlertRuleEntity item) => new(item.Code, item.Name, item.EventType, item.IsEnabled, Parse<AlertSeverityLevel>(item.Severity), item.RepeatUntilResolved, item.GenerateEmail, item.GeneratePdf, item.Template.Code, string.Join(';', item.Recipients.Where(x => x.IsActive).Select(x => x.Destination).Where(x => !string.IsNullOrWhiteSpace(x))), item.Faena?.Code);
     private static NotificationResponse ToNotificationResponse(NotificationEntity item) => new(item.Id.ToString("D"), item.AlertId.ToString("D"), item.Subject, item.Body, string.Join(';', item.Recipients.Select(x => x.Destination).Where(x => !string.IsNullOrWhiteSpace(x))), Parse<NotificationStatus>(item.Status), item.CreatedAtUtc, item.SentAtUtc, item.Provider, item.PdfFile?.FileKey, item.PdfFile?.PhysicalLocation ?? item.PdfFile?.LogicalUri, item.LastError);
     private static T Parse<T>(string value) where T : struct, Enum => Enum.TryParse<T>(value, true, out var parsed) ? parsed : default;

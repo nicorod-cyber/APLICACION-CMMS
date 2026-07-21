@@ -1,3 +1,5 @@
+using MaintenanceCMMS.Application.MaintenanceTargets;
+
 namespace MaintenanceCMMS.Application.Alerts;
 
 public enum AlertSeverityLevel
@@ -48,7 +50,8 @@ public sealed record AlertResponse(
     string? AcknowledgedBy,
     DateTimeOffset? ResolvedAtUtc,
     string? ResolvedBy,
-    string? ResolutionReason);
+    string? ResolutionReason,
+    MaintenanceTargetSummary? Objetivo = null);
 
 public sealed record AlertRuleResponse(
     string Code,
@@ -85,7 +88,8 @@ public sealed record GenerateAlertRequest(
     string? FaenaCodigo = null,
     string? EntityType = null,
     string? EntityId = null,
-    IReadOnlyDictionary<string, string?>? Data = null);
+    IReadOnlyDictionary<string, string?>? Data = null,
+    MaintenanceTargetReference? Objetivo = null);
 
 public sealed record SendTestNotificationRequest(
     string? RecipientEmail = null,

@@ -1,3 +1,5 @@
+using MaintenanceCMMS.Application.MaintenanceTargets;
+
 namespace MaintenanceCMMS.Application.WorkNotifications;
 
 public enum WorkNotificationType
@@ -54,7 +56,9 @@ public sealed record WorkNotificationQuery(
     WorkNotificationPriority? Priority = null,
     bool IncludeClosed = false,
     bool SupervisorInbox = false,
-    string? UnidadOperativaCodigo = null);
+    string? UnidadOperativaCodigo = null,
+    MaintenanceTargetType? TipoObjetivo = null,
+    string? ObjetivoCodigo = null);
 
 public sealed record CreateWorkNotificationRequest(
     WorkNotificationType Tipo,
@@ -69,7 +73,8 @@ public sealed record CreateWorkNotificationRequest(
     string? Componente = null,
     string? EvidenciaInicial = null,
     DateTimeOffset? FechaDeteccion = null,
-    string? UnidadOperativaCodigo = null);
+    string? UnidadOperativaCodigo = null,
+    MaintenanceTargetReference? Objetivo = null);
 
 public sealed record WorkNotificationActionRequest(string Reason);
 
@@ -109,7 +114,8 @@ public sealed record WorkNotificationResponse(
     string? NumeroOT,
     string? ConvertidoPor,
     DateTimeOffset? ConvertidoEnUtc,
-    string? Observaciones);
+    string? Observaciones,
+    MaintenanceTargetSummary? Objetivo = null);
 
 public sealed record WorkNotificationConversionResponse(
     WorkNotificationResponse Aviso,

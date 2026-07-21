@@ -54,6 +54,13 @@ export const navigationItems: NavigationItem[] = [
     ]
   },
   {
+    label: "Equipos operacionales",
+    path: "/equipos-operacionales",
+    icon: Activity,
+    accent: "bg-cyan-500",
+    roles: [AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.management, AUTH_ROLES.faenaViewer]
+  },
+  {
     label: "Unidades operativas",
     path: "/unidades-operativas",
     icon: Boxes,

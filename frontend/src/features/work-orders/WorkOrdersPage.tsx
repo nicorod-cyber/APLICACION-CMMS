@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { AUTH_ROLES, apiFetch, useAuthStore } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
+import { MaintenanceTargetSelect, type MaintenanceTargetReference } from "../maintenance-targets/MaintenanceTargetSelect";
 
 type WorkOrderStatus =
   | "OTCreada"
@@ -44,6 +45,7 @@ type WorkOrderSummary = {
   activoNombre?: string | null;
   unidadOperativaCodigo?: string | null;
   unidadOperativaNombre?: string | null;
+  objetivo?: { tipo: "Asset" | "OperationalUnit"; codigo: string; nombre: string } | null;
   activosRelacionados: { activoCodigo: string; activoNombre: string; rol: string; esPrincipal: boolean }[];
   faenaCodigo: string;
   tipoMantenimiento: string;
@@ -206,6 +208,7 @@ const closedStatuses: WorkOrderStatus[] = ["CerradaTecnicamente", "ValidadaPlani
 const emptyOrderForm = {
   activoCodigo: "",
   unidadOperativaCodigo: "",
+  objetivo: null as MaintenanceTargetReference | null,
   activosRelacionados: [] as string[],
   faenaCodigo: "",
   descripcion: "",
@@ -327,9 +330,8 @@ export function WorkOrdersPage() {
     event.preventDefault();
     await saveAction(async () => {
       const body = {
-        activoCodigo: emptyToNull(orderForm.activoCodigo),
-        unidadOperativaCodigo: emptyToNull(orderForm.unidadOperativaCodigo),
-        activosRelacionados: orderForm.activosRelacionados.filter((code) => code !== orderForm.activoCodigo).map((activoCodigo) => ({ activoCodigo, rol: "AFECTADO" })),
+        ...(orderForm.preventive ? { activoCodigo: orderForm.objetivo?.codigo } : { objetivo: orderForm.objetivo }),
+        activosRelacionados: orderForm.activosRelacionados.filter((code) => code !== orderForm.objetivo?.codigo).map((activoCodigo) => ({ activoCodigo, rol: "AFECTADO" })),
         faenaCodigo: emptyToNull(orderForm.faenaCodigo),
         descripcion: orderForm.descripcion,
         tipoMantenimiento: orderForm.tipoMantenimiento,
@@ -565,7 +567,7 @@ export function WorkOrdersPage() {
   }
 
   function targetLabel(item: WorkOrderSummary) {
-    return (item.activoNombre ?? item.activoCodigo) || item.unidadOperativaNombre || item.unidadOperativaCodigo || "Sin destino";
+    return item.objetivo?.nombre ?? item.activoNombre ?? item.unidadOperativaNombre ?? "Sin destino";
   }
   return (
     <section className="stack">
@@ -596,22 +598,15 @@ export function WorkOrdersPage() {
             <h2>Nueva OT</h2>
           </div>
           <div className="form-grid">
-            <label>
-              Activo principal (opcional si se selecciona unidad)
-              <select value={orderForm.activoCodigo} onChange={(event) => applyAsset(event.target.value)}>
-                <option value="">Sin activo principal</option>
-                {assets.map((item) => (
-                  <option key={item.codigo} value={item.codigo}>{item.nombre} ({item.codigo})</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Unidad operativa (opcional si se selecciona activo)
-              <select value={orderForm.unidadOperativaCodigo} onChange={(event) => applyUnit(event.target.value)}>
-                <option value="">Sin unidad operativa</option>
-                {operationalUnits.map((item) => <option key={item.codigo} value={item.codigo}>{item.nombre} ({item.codigo})</option>)}
-              </select>
-            </label>
+            <MaintenanceTargetSelect
+              value={orderForm.objetivo}
+              faenaCodigo={orderForm.faenaCodigo}
+              assetOnly={orderForm.preventive}
+              allowMountedComponents
+              required
+              label={orderForm.preventive ? "Activo preventivo" : "Objetivo de mantenimiento"}
+              onChange={(objetivo, target) => setOrderForm({ ...orderForm, objetivo, faenaCodigo: target?.faenaCodigo ?? orderForm.faenaCodigo })}
+            />
             <FaenaSelect emptyLabel="Selecciona faena" value={orderForm.faenaCodigo} onChange={(value) => setOrderForm({ ...orderForm, faenaCodigo: value })} />
             <fieldset className="span-2">
               <legend>Activos relacionados (snapshot de la OT)</legend>

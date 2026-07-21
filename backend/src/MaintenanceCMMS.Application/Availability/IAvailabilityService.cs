@@ -24,6 +24,11 @@ public interface IAvailabilityService
         UserAccessContext user,
         CancellationToken cancellationToken);
 
+    Task<AvailabilityContractAssetResponse> AssignTargetAsync(
+        AssignContractTargetRequest request,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
     Task<IReadOnlyCollection<AvailabilityEventResponse>> ListEventsAsync(
         AvailabilityEventQuery query,
         UserAccessContext user,

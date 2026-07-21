@@ -3,12 +3,14 @@ using System.Globalization;
 using System.Text.Json;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.MaintenanceTargets;
 using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -18,11 +20,13 @@ public sealed class WorkNotificationService : IWorkNotificationService
 {
     private readonly CmmsDbContext _dbContext;
     private readonly IAuditService _auditService;
+    private readonly IMaintenanceTargetService _maintenanceTargetService;
 
-    public WorkNotificationService(CmmsDbContext dbContext, IAuditService auditService)
+    public WorkNotificationService(CmmsDbContext dbContext, IAuditService auditService, IMaintenanceTargetService? maintenanceTargetService = null)
     {
         _dbContext = dbContext;
         _auditService = auditService;
+        _maintenanceTargetService = maintenanceTargetService ?? new MaintenanceTargetService(dbContext);
     }
 
     public async Task<IReadOnlyCollection<WorkNotificationResponse>> ListAsync(WorkNotificationQuery query, UserAccessContext user, CancellationToken cancellationToken)
@@ -37,6 +41,8 @@ public sealed class WorkNotificationService : IWorkNotificationService
             .Where(item => string.IsNullOrWhiteSpace(query.FaenaCodigo) || Same(item.FaenaCodigo, query.FaenaCodigo))
             .Where(item => string.IsNullOrWhiteSpace(query.ActivoCodigo) || Same(item.ActivoCodigo, query.ActivoCodigo))
             .Where(item => string.IsNullOrWhiteSpace(query.UnidadOperativaCodigo) || Same(item.UnidadOperativaCodigo, query.UnidadOperativaCodigo))
+            .Where(item => !query.TipoObjetivo.HasValue || item.Objetivo?.Tipo == query.TipoObjetivo)
+            .Where(item => string.IsNullOrWhiteSpace(query.ObjetivoCodigo) || Same(item.Objetivo?.Codigo, query.ObjetivoCodigo))
             .Where(item => !query.SupervisorInbox || item.Estado is WorkNotificationStatus.Creado or WorkNotificationStatus.EnEvaluacion or WorkNotificationStatus.Aprobado)
             .Where(item => CanAccessFaena(user, item.FaenaCodigo))
             .OrderByDescending(item => item.Prioridad)
@@ -56,12 +62,19 @@ public sealed class WorkNotificationService : IWorkNotificationService
     public async Task<WorkNotificationResponse> CreateAsync(CreateWorkNotificationRequest request, UserAccessContext user, CancellationToken cancellationToken)
     {
         EnsureCanCreate(user);
-        ValidateCreate(request);
-        var asset = await FindAssetAsync(request.ActivoCodigo, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(request.ActivoCodigo) && asset is null) throw new DomainException($"El activo '{request.ActivoCodigo}' no existe.");
-        var operationalUnit = await FindOperationalUnitAsync(request.UnidadOperativaCodigo, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(request.UnidadOperativaCodigo) && operationalUnit is null) throw new DomainException($"La unidad operativa '{request.UnidadOperativaCodigo}' no existe.");
-        var faena = await ResolveFaenaAsync(request.FaenaCodigo, asset, operationalUnit, cancellationToken);
+        var reference = MaintenanceTargetRequestNormalizer.Normalize(request.Objetivo, request.ActivoCodigo, request.UnidadOperativaCodigo, required: false);
+        ValidateCreate(request, reference);
+        var target = reference is null
+            ? null
+            : await _maintenanceTargetService.ResolveAsync(reference, user, cancellationToken);
+        if (target is not null && !string.IsNullOrWhiteSpace(request.FaenaCodigo) && !Same(target.FaenaCodigo, request.FaenaCodigo))
+        {
+            throw new DomainException("El objetivo de mantenimiento no pertenece a la faena indicada.");
+        }
+
+        var faena = target?.FaenaId is Guid targetFaenaId
+            ? await _dbContext.Faenas.SingleAsync(item => item.Id == targetFaenaId, cancellationToken)
+            : await ResolveFaenaAsync(request.FaenaCodigo, null, null, cancellationToken);
         EnsureFaenaAccess(user, faena.Code);
         var now = DateTimeOffset.UtcNow;
         var entity = new WorkNotificationEntity
@@ -72,10 +85,8 @@ public sealed class WorkNotificationService : IWorkNotificationService
             TypeId = (await CatalogAsync("WorkNotificationType", request.Tipo.ToString(), cancellationToken)).Id,
             FaenaId = faena.Id,
             Faena = faena,
-            AssetId = asset?.Id,
-            Asset = asset,
-            OperationalUnitId = operationalUnit?.Id,
-            OperationalUnit = operationalUnit,
+            AssetId = target?.AssetId,
+            OperationalUnitId = target?.OperationalUnitId,
             System = NormalizeText(request.Sistema),
             Subsystem = NormalizeText(request.Subsistema),
             Component = NormalizeText(request.Componente),
@@ -126,8 +137,9 @@ public sealed class WorkNotificationService : IWorkNotificationService
         {
             Id = Guid.NewGuid(),
             WorkOrderNumber = await NextNumberAsync("work_order_number_seq", "OT", cancellationToken),
-            AssetId = notification.AssetId,
-            Asset = notification.Asset,
+            // Historical records may have both FKs. The unit remains the operational target.
+            AssetId = notification.OperationalUnitId.HasValue ? null : notification.AssetId,
+            Asset = notification.OperationalUnitId.HasValue ? null : notification.Asset,
             OperationalUnitId = notification.OperationalUnitId,
             OperationalUnit = notification.OperationalUnit,
             FaenaId = notification.FaenaId,
@@ -150,7 +162,26 @@ public sealed class WorkNotificationService : IWorkNotificationService
             UpdatedByUserAtUtc = now
         };
         _dbContext.WorkOrders.Add(workOrder);
-        if (notification.Asset is not null)
+        if (workOrder.OperationalUnitId is Guid unitId)
+        {
+            var components = await _dbContext.OperationalUnitComponents
+                .Include(item => item.Asset)
+                .Include(item => item.ComponentRole)
+                .Where(item => item.OperationalUnitId == unitId && item.RemovedAtUtc == null)
+                .ToArrayAsync(cancellationToken);
+            foreach (var component in components)
+            {
+                var role = component.ComponentRole.Code.Length <= 20 ? component.ComponentRole.Code : "COMPONENTE_UNIDAD";
+                _dbContext.WorkOrderAssets.Add(new WorkOrderAssetEntity
+                {
+                    Id = Guid.NewGuid(), WorkOrder = workOrder, WorkOrderId = workOrder.Id,
+                    Asset = component.Asset, AssetId = component.AssetId, Role = role,
+                    AssetCodeSnapshot = component.Asset.Code, AssetNameSnapshot = component.Asset.Name,
+                    AddedAtUtc = now, AddedByUserId = user.UserId
+                });
+            }
+        }
+        else if (notification.Asset is not null)
         {
             _dbContext.WorkOrderAssets.Add(new WorkOrderAssetEntity
             {
@@ -207,7 +238,12 @@ public sealed class WorkNotificationService : IWorkNotificationService
     }
 
     private IQueryable<WorkNotificationEntity> BaseQuery() => _dbContext.WorkNotifications.AsSplitQuery()
-        .Include(e => e.Status).Include(e => e.Type).Include(e => e.Faena).Include(e => e.Asset).Include(e => e.OperationalUnit)
+        .Include(e => e.Status).Include(e => e.Type).Include(e => e.Faena)
+        .Include(e => e.Asset).ThenInclude(asset => asset!.AssetTypeDefinition)
+        .Include(e => e.Asset).ThenInclude(asset => asset!.Family)
+        .Include(e => e.Asset).ThenInclude(asset => asset!.OperationalState)
+        .Include(e => e.OperationalUnit).ThenInclude(unit => unit!.OperationalUnitType)
+        .Include(e => e.OperationalUnit).ThenInclude(unit => unit!.OperationalState)
         .Include(e => e.Priority).Include(e => e.Criticality).Include(e => e.FailureClassification).Include(e => e.WorkOrder);
 
     private Task<WorkNotificationEntity?> FindAsync(string id, bool tracking, CancellationToken ct)
@@ -290,8 +326,30 @@ public sealed class WorkNotificationService : IWorkNotificationService
         e.WorkOrder?.WorkOrderNumber,
         e.ConvertedByUserId,
         e.ConvertedAtUtc,
-        e.Observations);
+        e.Observations,
+        ToTargetSummary(e));
 
+    private static MaintenanceTargetSummary? ToTargetSummary(WorkNotificationEntity entity)
+    {
+        if (entity.OperationalUnit is not null)
+        {
+            var unit = entity.OperationalUnit;
+            return new MaintenanceTargetSummary(MaintenanceTargetType.OperationalUnit, unit.Code, unit.Name,
+                unit.OperationalUnitType.Code, unit.OperationalUnitType.Name, entity.Faena.Code, entity.Faena.Name,
+                unit.OperationalState.Code, unit.OperationalState.Name, unit.Criticality, true, null, false,
+                null, null, null, unit.OperationalUnitType.ParticipatesInAvailability);
+        }
+        if (entity.Asset is not null)
+        {
+            var asset = entity.Asset;
+            return new MaintenanceTargetSummary(MaintenanceTargetType.Asset, asset.Code, asset.Name,
+                asset.Family?.Code ?? asset.AssetTypeDefinition.Code, asset.Family?.Name ?? asset.AssetTypeDefinition.Name,
+                entity.Faena.Code, entity.Faena.Name, asset.OperationalState.Code, asset.OperationalState.Name,
+                asset.Criticality, false, null, false, null, null, null,
+                asset.AssetTypeDefinition.ParticipatesInAvailability);
+        }
+        return null;
+    }
     private static string ResolveMaintenanceType(WorkNotificationType type) => type switch
     {
         WorkNotificationType.Preventivo => MaintenanceType.Preventive.ToString(),
@@ -300,10 +358,10 @@ public sealed class WorkNotificationService : IWorkNotificationService
         _ => MaintenanceType.Corrective.ToString()
     };
 
-    private static void ValidateCreate(CreateWorkNotificationRequest request)
+    private static void ValidateCreate(CreateWorkNotificationRequest request, MaintenanceTargetReference? target)
     {
         ValidateRequired(request.Descripcion, nameof(request.Descripcion));
-        if (string.IsNullOrWhiteSpace(request.FaenaCodigo) && string.IsNullOrWhiteSpace(request.ActivoCodigo) && string.IsNullOrWhiteSpace(request.UnidadOperativaCodigo)) throw new DomainException("Debe indicar faena, activo o unidad operativa para crear el aviso.");
+        if (string.IsNullOrWhiteSpace(request.FaenaCodigo) && target is null) throw new DomainException("Debe indicar faena u objetivo de mantenimiento para crear el aviso.");
         if (request.FechaDeteccion.HasValue && request.FechaDeteccion.Value > DateTimeOffset.UtcNow.AddMinutes(5)) throw new DomainException("La fecha de deteccion no puede ser futura.");
     }
 

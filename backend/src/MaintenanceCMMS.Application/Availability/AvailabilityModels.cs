@@ -1,3 +1,5 @@
+using MaintenanceCMMS.Application.MaintenanceTargets;
+
 namespace MaintenanceCMMS.Application.Availability;
 
 public enum AvailabilityPeriod
@@ -49,7 +51,9 @@ public sealed record AvailabilityEventQuery(
     string? FaenaCodigo = null,
     string? ContractCode = null,
     string? ActivoCodigo = null,
-    AvailabilityCause? Cause = null);
+    AvailabilityCause? Cause = null,
+    MaintenanceTargetType? TipoObjetivo = null,
+    string? ObjetivoCodigo = null);
 
 public sealed record UpsertAvailabilityContractRequest(
     string ContractCode,
@@ -73,6 +77,15 @@ public sealed record AssignContractAssetRequest(
     bool Activo = true,
     string? Reason = null);
 
+public sealed record AssignContractTargetRequest(
+    string ContractCode,
+    MaintenanceTargetReference Objetivo,
+    ContractAssetRole Rol,
+    DateTimeOffset? FechaInicio = null,
+    DateTimeOffset? FechaFin = null,
+    bool Activo = true,
+    string? Reason = null);
+
 public sealed record RegisterAvailabilityEventRequest(
     string ContractCode,
     string ActivoCodigo,
@@ -82,7 +95,8 @@ public sealed record RegisterAvailabilityEventRequest(
     bool PuedeUtilizarse,
     bool AtribuibleMantenimiento = true,
     string? NumeroOT = null,
-    string? Comentario = null);
+    string? Comentario = null,
+    MaintenanceTargetReference? Objetivo = null);
 
 public sealed record AvailabilityContractResponse(
     string ContractCode,
@@ -106,7 +120,8 @@ public sealed record AvailabilityContractAssetResponse(
     ContractAssetRole Rol,
     DateTimeOffset? FechaInicio,
     DateTimeOffset? FechaFin,
-    bool Activo);
+    bool Activo,
+    MaintenanceTargetReference? Objetivo = null);
 
 public sealed record AvailabilityEventResponse(
     string EventId,
@@ -123,7 +138,8 @@ public sealed record AvailabilityEventResponse(
     string? NumeroOT,
     string? Comentario,
     string UsuarioId,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    MaintenanceTargetReference? Objetivo = null);
 
 public sealed record AvailabilityDashboardResponse(
     AvailabilityKpiResponse Kpi,
@@ -184,7 +200,8 @@ public sealed record UnavailableAssetResponse(
     decimal HorasNoDisponibles,
     bool PenalizaDisponibilidad,
     bool CubiertoPorBackup,
-    string? NumeroOT);
+    string? NumeroOT,
+    MaintenanceTargetReference? Objetivo = null);
 
 public sealed record AvailabilityTrendPoint(
     string PeriodKey,

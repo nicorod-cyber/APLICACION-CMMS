@@ -5,6 +5,7 @@ import { LoginPage } from "../features/auth/LoginPage";
 import { ProtectedRoute } from "../features/auth/ProtectedRoute";
 import { AssetsPage } from "../features/assets/AssetsPage";
 import { OperationalUnitsPage } from "../features/operational-units/OperationalUnitsPage";
+import { MaintenanceTargetsPage } from "../features/maintenance-targets/MaintenanceTargetsPage";
 import { UsersAdminPage } from "../features/admin/UsersAdminPage";
 import { AlertsPage } from "../features/alerts/AlertsPage";
 import { AuditPage } from "../features/audit/AuditPage";
@@ -70,6 +71,10 @@ export const router = createBrowserRouter([
             ) : item.path === "/activos" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <AssetsPage />
+              </ProtectedRoute>
+            ) : item.path === "/equipos-operacionales" ? (
+              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
+                <MaintenanceTargetsPage />
               </ProtectedRoute>
             ) : item.path === "/unidades-operativas" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
