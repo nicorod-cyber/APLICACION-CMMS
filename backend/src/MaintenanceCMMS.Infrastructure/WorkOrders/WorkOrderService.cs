@@ -8,6 +8,8 @@ using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Assets;
+using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -103,6 +105,11 @@ public sealed partial class WorkOrderService : IWorkOrderService
             var relatedAsset = await ResolveAssetAsync(input.ActivoCodigo, faena.Code, user, ct);
             if (related.Any(item => item.Asset.Id == relatedAsset.Id)) throw new DomainException("Un activo solo puede asociarse una vez a la OT.");
             related.Add((relatedAsset, TargetRole(input.Rol)));
+        }
+        foreach (var item in related)
+        {
+            if (!_dbContext.Entry(item.Asset).Reference(x => x.OperationalState).IsLoaded) await _dbContext.Entry(item.Asset).Reference(x => x.OperationalState).LoadAsync(ct);
+            AssetOperationalPolicy.EnsureCanStartOperation(item.Asset, "nuevas ordenes de trabajo");
         }
         await using var tx = await _dbContext.Database.BeginTransactionAsync(ct);
         var now = DateTimeOffset.UtcNow;
@@ -249,7 +256,8 @@ public async Task<WorkOrderDetailResponse> CreatePreventiveAsync(CreatePreventiv
         .Include(o => o.RelatedAssets).ThenInclude(x => x.Asset).Include(o => o.Faena).Include(o => o.Status).Include(o => o.MaintenanceType).Include(o => o.Priority).Include(o => o.Criticality).Include(o => o.FailureClassification).Include(o => o.Notification)
         .Include(o => o.Tasks).ThenInclude(t => t.Status).Include(o => o.Technicians).Include(o => o.Labor).ThenInclude(l => l.Task).Include(o => o.Evidences).ThenInclude(e => e.EvidenceType).Include(o => o.Evidences).ThenInclude(e => e.Task)
         .Include(o => o.SpareParts).ThenInclude(s => s.Status).Include(o => o.SpareParts).ThenInclude(s => s.Task).Include(o => o.Checklist).ThenInclude(c => c.ResponseType).Include(o => o.Checklist).ThenInclude(c => c.Task).Include(o => o.Checklist).ThenInclude(c => c.Template)
-        .Include(o => o.Signatures).Include(o => o.History).ThenInclude(h => h.PreviousStatus).Include(o => o.History).ThenInclude(h => h.NewStatus);
+        .Include(o => o.Signatures).Include(o => o.History).ThenInclude(h => h.PreviousStatus).Include(o => o.History).ThenInclude(h => h.NewStatus)
+        .Include(o => o.DocumentaryMatrixVersion).Include(o => o.DocumentaryRequirements).ThenInclude(x => x.MatrixItem).ThenInclude(x => x.DocumentType);
     private Task<WorkOrderEntity?> FindAsync(string n, bool tracking, CancellationToken ct) { var q = BaseQuery(); if (!tracking) q = q.AsNoTracking(); return q.FirstOrDefaultAsync(o => o.WorkOrderNumber == C(n), ct); }
     private async Task<WorkOrderEntity> MutOrder(string n, UserAccessContext u, CancellationToken ct) { var o = await FindAsync(n, true, ct) ?? throw new DomainException("La OT no existe."); EnsureFaena(u, o.Faena.Code); return o; }
     private static WorkOrderTaskEntity Task(WorkOrderEntity o, string c) => o.Tasks.FirstOrDefault(t => t.IsActive && Same(t.TaskCode, c)) ?? throw new DomainException($"La tarea '{c}' no existe en la OT.");
@@ -285,7 +293,14 @@ public async Task<WorkOrderDetailResponse> CreatePreventiveAsync(CreatePreventiv
         var hist = o.History.OrderBy(h => h.OccurredAtUtc).Select(h => new WorkOrderStatusHistoryResponse(h.Id.ToString("D"), o.WorkOrderNumber, ParseEnum(h.PreviousStatus.Code, WorkOrderLifecycleStatus.OTCreada), ParseEnum(h.NewStatus.Code, WorkOrderLifecycleStatus.OTCreada), h.OccurredAtUtc, h.UserId, h.Reason)).ToArray();
         var related = o.RelatedAssets.OrderBy(x => x.AddedAtUtc).Select(x => new WorkOrderAssetResponse(x.AssetCodeSnapshot, x.AssetNameSnapshot, x.Role, x.Role == "PRINCIPAL")).ToArray(); if (related.Length == 0 && o.Asset is not null) related = [new WorkOrderAssetResponse(o.Asset.Code, o.Asset.Name, "PRINCIPAL", true)];
         var sum = new WorkOrderSummaryResponse(o.WorkOrderNumber, ParseEnum(o.Status.Code, WorkOrderLifecycleStatus.OTCreada), o.Asset?.Code ?? string.Empty, o.Asset?.Name, o.Faena.Code, o.MaintenanceType.Code, o.Description, o.Notification?.NotificationNumber, o.System, o.Subsystem, o.Component, o.Priority?.Code ?? "Media", o.Criticality?.Code ?? "Media", o.ScheduledAtUtc, o.ScheduledStartUtc, o.ScheduledEndUtc, o.IsAutomaticPreventive, o.RequiresSignature, tasks.Length, tech.Length, labor.Sum(l => l.Horas), 0, o.OperationalUnit?.Code, o.OperationalUnit?.Name, related, ToTargetSummary(o));
-        var detail = new WorkOrderDetailResponse(sum, tasks, tech, labor, ev, sp, ch, sig, hist, []); var b = Blockers(detail); return detail with { Summary = sum with { BloqueosCierre = b.Count }, ClosureBlockers = b };
+        DocumentaryWorkOrderProgress? progress = null;
+        if (o.DocumentaryMatrixVersion is not null)
+        {
+            var reqs = o.DocumentaryRequirements.OrderBy(x => x.MatrixItem.DocumentType.Code).Select(x => new DocumentaryWorkOrderRequirementProgress(x.Id.ToString("D"), x.MatrixItem.DocumentType.Code, x.Status, x.IsApplicable, x.OriginDocumentId?.ToString("D"), x.OriginDocumentVersionId?.ToString("D"), x.Observation, x.CompletedAtUtc)).ToArray();
+            var completed = reqs.Count(x => x.Estado is "VALIDADO" or "VIGENTE" or "POR_VENCER" or "NO_APLICA");
+            progress = new DocumentaryWorkOrderProgress(o.DocumentaryMatrixVersion.Code, o.DocumentaryMatrixVersion.VersionNumber, reqs.Length, completed, reqs.Length - completed, reqs.Count(x => x.Estado == "RECHAZADO"), reqs.Count(x => x.Estado == "VENCIDO"), reqs.Length == 0 ? 100 : (int)Math.Round(completed * 100m / reqs.Length), reqs);
+        }
+        var detail = new WorkOrderDetailResponse(sum, tasks, tech, labor, ev, sp, ch, sig, hist, [], progress); var b = Blockers(detail); return detail with { Summary = sum with { BloqueosCierre = b.Count }, ClosureBlockers = b };
     }
     private static MaintenanceTargetSummary? ToTargetSummary(WorkOrderEntity order)
     {
@@ -332,6 +347,7 @@ public async Task<WorkOrderDetailResponse> CreatePreventiveAsync(CreatePreventiv
         foreach (var c in d.Checklist.Where(c => c.Completado && c.RequiereFirma && string.IsNullOrWhiteSpace(c.FirmaId))) b.Add(new("CHECKLIST_SIGNATURE_REQUIRED", $"Checklist requiere firma: {c.Item}"));
         foreach (var s in d.SpareParts.Where(s => s.Estado == WorkOrderSparePartStatus.Entregado && s.CantidadUtilizada + s.CantidadDevuelta < s.Cantidad)) b.Add(new("SPARE_PART_PENDING", $"Repuesto pendiente de uso/devolución: {s.RepuestoCodigo}"));
         foreach (var technician in d.Technicians.Select(t => t.UsuarioId).Distinct()) if (!d.Signatures.Any(s => Same(s.UsuarioId, technician.ToString("D")) && Same(s.Scope, "OT"))) b.Add(new("PARTICIPANT_SIGNATURE_REQUIRED", $"Falta la firma del participante {technician}."));
+        foreach (var requirement in d.ProgresoDocumental?.Requisitos.Where(x => x.Aplicable && x.Estado is not "VALIDADO" and not "VIGENTE" and not "POR_VENCER" and not "NO_APLICA") ?? []) b.Add(new("DOCUMENT_REQUIREMENT_PENDING", $"Requisito documental {requirement.TipoDocumentoCodigo}: {requirement.Estado}."));
         return b;
     }
     private static void EnsureCanView(UserAccessContext u) { if (AnyRole(u, AuthRoles.Admin, AuthRoles.Planner, AuthRoles.MaintenanceSupervisor, AuthRoles.Technician, AuthRoles.Management, AuthRoles.FaenaViewer)) return; throw new UnauthorizedAccessException("No tiene permisos para ver ordenes de trabajo."); }

@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MaintenanceCMMS.Application.Assets;
@@ -6,6 +7,8 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Documents;
+using MaintenanceCMMS.Infrastructure.OperationalUnits;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Assets;
@@ -70,23 +73,91 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     {
         Maintain(u); Require(r.Nombre, nameof(r.Nombre)); var code = await NextCodeAsync(ct);
         var refs = await ReferencesAsync(r.TipoActivoCodigo, r.FamiliaEquipoCodigo, r.FaenaCodigo, r.EstadoOperacionalCodigo, u, ct); ValidateDates(r.AnioFabricacion, r.FechaPuestaServicio, r.FechaBaja);
+        await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         var entity = new AssetEntity { Code = code, Name = r.Nombre.Trim(), AssetTypeId = refs.Type.Id, FamilyId = refs.Family?.Id, FaenaId = refs.Faena?.Id, OperationalStateId = refs.State.Id, Brand = Empty(r.Marca), Model = Empty(r.Modelo), SerialNumber = Empty(r.NumeroSerie), Ownership = Empty(r.Propiedad), Criticality = await CriticalityAsync(r.Criticidad, ct), ManufacturingYear = r.AnioFabricacion, AcquisitionDate = r.FechaAdquisicion, CommissioningDate = r.FechaPuestaServicio, DecommissioningDate = r.FechaBaja, UsageMeasurementType = Measurement(r.TipoMedicionUso), Observations = Empty(r.Observaciones) };
-        _db.Assets.Add(entity); await AttributesAsync(entity, r.Atributos ?? [], refs.Type.Id, refs.Family?.Id, true, ct); await _db.SaveChangesAsync(ct); await AuditAsync(u, "asset.created", entity, null, entity, ct); return (await GetByIdAsync(code, u, ct))!;
+        _db.Assets.Add(entity);
+        await AttributesAsync(entity, r.Atributos ?? [], refs.Type.Id, refs.Family?.Id, true, ct);
+        _db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = entity.Id, FaenaId = refs.Faena?.Id, ValidFromUtc = entity.CreatedAtUtc });
+        await _db.SaveChangesAsync(ct);
+        await SyncIdentifierAliasesAsync(entity, ct);
+        await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+        await AuditAsync(u, "asset.created", entity, null, entity, ct); return (await GetByIdAsync(code, u, ct))!;
     }
-public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r, UserAccessContext u, CancellationToken ct)
+    public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r, UserAccessContext u, CancellationToken ct)
     {
         Maintain(u); Require(r.Nombre, nameof(r.Nombre)); var asset = await FindAsync(codigo, true, ct); if (asset is null) return null; View(u, asset);
         var refs = await ReferencesAsync(r.TipoActivoCodigo, r.FamiliaEquipoCodigo, r.FaenaCodigo, r.EstadoOperacionalCodigo, u, ct); var measurement = Measurement(r.TipoMedicionUso);
+        if (asset.FaenaId != refs.Faena?.Id) throw new DomainException("La faena no se edita directamente. Use el flujo de traslado con fecha efectiva, motivo y responsable.");
+        if (asset.OperationalStateId != refs.State.Id) throw new DomainException("El estado operacional no se edita directamente. Registre un evento de transicion.");
         if (!Same(asset.UsageMeasurementType, measurement) && await _db.AssetReadings.AnyAsync(x => x.AssetId == asset.Id, ct)) throw new DomainException("No se puede cambiar el tipo de medicion cuando existen lecturas.");
-        ValidateDates(r.AnioFabricacion, r.FechaPuestaServicio, r.FechaBaja); var old = new { asset.AssetTypeId, asset.FamilyId, asset.FaenaId, asset.OperationalStateId };
-        asset.Name = r.Nombre.Trim(); asset.AssetTypeId = refs.Type.Id; asset.FamilyId = refs.Family?.Id; asset.FaenaId = refs.Faena?.Id; asset.OperationalStateId = refs.State.Id; asset.Brand = Empty(r.Marca); asset.Model = Empty(r.Modelo); asset.SerialNumber = Empty(r.NumeroSerie); asset.Ownership = Empty(r.Propiedad); asset.Criticality = await CriticalityAsync(r.Criticidad, ct); asset.ManufacturingYear = r.AnioFabricacion; asset.AcquisitionDate = r.FechaAdquisicion; asset.CommissioningDate = r.FechaPuestaServicio; asset.DecommissioningDate = r.FechaBaja; asset.UsageMeasurementType = measurement; asset.Observations = Empty(r.Observaciones); asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
-        if (r.Atributos is not null) await AttributesAsync(asset, r.Atributos, refs.Type.Id, refs.Family?.Id, true, ct); await _db.SaveChangesAsync(ct); await AuditAsync(u, "asset.updated", asset, old, asset, ct); return await GetByIdAsync(asset.Code, u, ct);
+        ValidateDates(r.AnioFabricacion, r.FechaPuestaServicio, r.FechaBaja); var old = AuditValue(asset);
+        asset.Name = r.Nombre.Trim(); asset.AssetTypeId = refs.Type.Id; asset.FamilyId = refs.Family?.Id; asset.Brand = Empty(r.Marca); asset.Model = Empty(r.Modelo); asset.SerialNumber = Empty(r.NumeroSerie); asset.Ownership = Empty(r.Propiedad); asset.Criticality = await CriticalityAsync(r.Criticidad, ct); asset.ManufacturingYear = r.AnioFabricacion; asset.AcquisitionDate = r.FechaAdquisicion; asset.CommissioningDate = r.FechaPuestaServicio; asset.UsageMeasurementType = measurement; asset.Observations = Empty(r.Observaciones); asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        if (r.Atributos is not null) await AttributesAsync(asset, r.Atributos, refs.Type.Id, refs.Family?.Id, true, ct);
+        await _db.SaveChangesAsync(ct); await SyncIdentifierAliasesAsync(asset, ct); await _db.SaveChangesAsync(ct);
+        await AuditAsync(u, "asset.updated", asset, old, asset, ct); return await GetByIdAsync(asset.Code, u, ct);
     }
 
     public async Task<AssetStateEventResponse?> AddStateEventAsync(string codigo, CreateAssetStateEventRequest r, UserAccessContext u, CancellationToken ct)
     {
-        Maintain(u); Require(r.EstadoOperacionalCodigo, nameof(r.EstadoOperacionalCodigo)); Require(r.Motivo, nameof(r.Motivo)); var asset = await FindAsync(codigo, true, ct); if (asset is null) return null; View(u, asset);
-        var state = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalCodigo) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente."); var previous = asset.OperationalStateId; asset.OperationalStateId = state.Id; var evt = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous, NewStateId = state.Id, OccurredAtUtc = r.FechaEventoUtc ?? DateTimeOffset.UtcNow, UserId = u.UserId, Reason = r.Motivo.Trim() }; _db.AssetStateEvents.Add(evt); await _db.SaveChangesAsync(ct); return new(evt.Id.ToString("D"), asset.Code, null, state.Code, evt.OccurredAtUtc, evt.Reason, u.UserId);
+        Maintain(u); Require(r.EstadoOperacionalCodigo, nameof(r.EstadoOperacionalCodigo)); Require(r.Motivo, nameof(r.Motivo));
+        await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var asset = await FindAsync(codigo, true, ct); if (asset is null) return null; View(u, asset);
+        var state = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalCodigo) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente.");
+        AssetOperationalPolicy.EnsureTransitionAllowed(asset.OperationalState.Code, state.Code);
+        var previous = asset.OperationalState; var occurred = r.FechaEventoUtc ?? DateTimeOffset.UtcNow;
+        asset.OperationalStateId = state.Id; asset.OperationalState = state; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        if (Same(state.Code, AssetOperationalPolicy.DecommissionedStateCode)) asset.DecommissioningDate ??= DateOnly.FromDateTime(occurred.UtcDateTime);
+        var evt = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = occurred, UserId = u.UserId, Reason = r.Motivo.Trim(), ReferenceType = Empty(r.TipoAntecedente), ReferenceId = Empty(r.AntecedenteId) };
+        _db.AssetStateEvents.Add(evt);
+        await _db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('cmms.asset_state_event_id', {evt.Id.ToString("D")}, true)", ct);
+        await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, asset.Id, $"{r.TipoAntecedente}:{r.AntecedenteId} {r.Motivo}".Trim(), ct);
+        await _db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await AuditAsync(u, "asset.operational_state.changed", asset, new { Estado = previous.Code }, new { Estado = state.Code, r.Motivo, r.TipoAntecedente, r.AntecedenteId }, ct);
+        return new(evt.Id.ToString("D"), asset.Code, previous.Code, state.Code, evt.OccurredAtUtc, evt.Reason, u.UserId, evt.ReferenceType, evt.ReferenceId);
+    }
+
+    public async Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        if (!_authorization.CanChangeAssetFaena(u)) throw new UnauthorizedAccessException("No tiene permiso para trasladar activos entre faenas.");
+        Require(r.FaenaDestinoCodigo, nameof(r.FaenaDestinoCodigo)); Require(r.Motivo, nameof(r.Motivo));
+        await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        if (_db.Database.IsNpgsql()) await _db.Database.ExecuteSqlRawAsync("LOCK TABLE vigencias_ubicacion_activo IN SHARE ROW EXCLUSIVE MODE", ct);
+        var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset);
+        AssetOperationalPolicy.EnsureCanStartOperation(asset, "traslados");
+        var destination = await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(r.FaenaDestinoCodigo) && x.IsActive, ct) ?? throw new DomainException("Faena destino inexistente.");
+        if (!_authorization.CanViewFaena(u, destination.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena destino.");
+        if (destination.TechnicalLocation is null) throw new DomainException("La faena destino no tiene ubicacion tecnica configurada.");
+        if (asset.FaenaId == destination.Id) throw new DomainException("El activo ya pertenece a la faena destino.");
+        var activeComponent = await _db.OperationalUnitComponents.Include(x => x.OperationalUnit).SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.RemovedAtUtc == null, ct);
+        var assets = new List<AssetEntity> { asset }; OperationalUnitEntity? unit = null;
+        if (activeComponent is not null)
+        {
+            if (!r.TrasladarUnidadCompleta) throw new DomainException("El activo esta montado. Traslade la unidad completa o desmonte previamente el componente.");
+            unit = activeComponent.OperationalUnit;
+            assets = await _db.OperationalUnitComponents.Include(x => x.Asset).ThenInclude(x => x.Faena).Where(x => x.OperationalUnitId == unit.Id && x.RemovedAtUtc == null).Select(x => x.Asset).ToListAsync(ct);
+            if (assets.Any(x => x.FaenaId != asset.FaenaId)) throw new DomainException("La unidad contiene componentes con inconsistencia territorial; corrija la composicion antes del traslado.");
+            unit.FaenaId = destination.Id;
+        }
+        var results = new List<AssetTransferResponse>();
+        foreach (var item in assets.DistinctBy(x => x.Id)) results.Add(await TransferCoreAsync(item, destination, unit, r, u, ct));
+        await _db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('cmms.asset_transfer_ids', {string.Join(",", results.Select(x => x.TrasladoId))}, true)", ct);
+        await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+        foreach (var item in assets) await AuditAsync(u, "asset.transferred", item, new { Faena = results.Single(x => x.ActivoCodigo == item.Code).FaenaOrigenCodigo }, new { Faena = destination.Code, r.FechaEfectivaUtc, r.Motivo, Unidad = unit?.Code }, ct);
+        return results;
+    }
+
+    private async Task<AssetTransferResponse> TransferCoreAsync(AssetEntity asset, FaenaEntity destination, OperationalUnitEntity? unit, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        var current = await _db.AssetLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct);
+        if (current is not null && r.FechaEfectivaUtc <= current.ValidFromUtc) throw new DomainException($"La fecha efectiva del traslado de {asset.Code} debe ser posterior al inicio de su ubicacion vigente.");
+        if (await _db.AssetTransfers.AnyAsync(x => x.AssetId == asset.Id && x.EffectiveAtUtc >= r.FechaEfectivaUtc, ct)) throw new DomainException($"El traslado de {asset.Code} se superpone con historia posterior.");
+        var transfer = new AssetTransferEntity { AssetId = asset.Id, OriginFaenaId = asset.FaenaId, DestinationFaenaId = destination.Id, OperationalUnitId = unit?.Id, EffectiveAtUtc = r.FechaEfectivaUtc, Reason = r.Motivo.Trim(), UserId = u.UserId, RegisteredAtUtc = DateTimeOffset.UtcNow, Observations = Empty(r.Observaciones) };
+        _db.AssetTransfers.Add(transfer);
+        if (current is not null) current.ValidToUtc = r.FechaEfectivaUtc;
+        _db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = asset.Id, FaenaId = destination.Id, ValidFromUtc = r.FechaEfectivaUtc, TransferId = transfer.Id });
+        var origin = asset.Faena?.Code; asset.FaenaId = destination.Id; asset.Faena = destination; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        return new(transfer.Id.ToString("D"), asset.Code, origin, destination.Code, transfer.EffectiveAtUtc, transfer.Reason, transfer.UserId, transfer.RegisteredAtUtc, transfer.Observations, unit?.Code);
     }
 
     public async Task<IReadOnlyCollection<AssetReadingResponse>> GetReadingsAsync(string codigo, UserAccessContext u, CancellationToken ct)
@@ -96,7 +167,7 @@ public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r,
 
     public async Task<AssetReadingResponse> AddReadingAsync(string codigo, CreateAssetReadingRequest r, UserAccessContext u, CancellationToken ct)
     {
-        RegisterReadings(u); var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); if (asset.UsageMeasurementType is null) throw new DomainException("El activo no tiene medicion de uso."); if (r.Valor < 0) throw new DomainException("La lectura no puede ser negativa.");
+        RegisterReadings(u); var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); AssetOperationalPolicy.EnsureCanStartOperation(asset, "nuevas lecturas"); if (asset.UsageMeasurementType is null) throw new DomainException("El activo no tiene medicion de uso."); if (r.Valor < 0) throw new DomainException("La lectura no puede ser negativa.");
         var valid = await ValidReadingsAsync(asset.Id, ct); var last = valid.OrderByDescending(x => x.ReadAtUtc).ThenByDescending(x => x.CreatedAtUtc).FirstOrDefault(); if (last is not null && r.Valor < last.Value) throw new DomainException("Una lectura normal no puede disminuir.");
         var reading = new AssetReadingEntity { AssetId = asset.Id, ReadAtUtc = r.FechaLecturaUtc ?? DateTimeOffset.UtcNow, Value = r.Valor, Source = Source(r.Origen), RegisteredByUserId = u.UserId, EvidenceReference = Empty(r.EvidenciaReferencia), Observations = Empty(r.Observaciones) }; _db.AssetReadings.Add(reading); await _db.SaveChangesAsync(ct); return MapReadings([.. valid, reading], asset.UsageMeasurementType).Single(x => x.Id == reading.Id.ToString("D"));
     }
@@ -104,7 +175,7 @@ public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r,
     public async Task<AssetReadingResponse> CorrectReadingAsync(string codigo, string readingId, CorrectAssetReadingRequest r, UserAccessContext u, CancellationToken ct)
     {
         CorrectReadings(u); Require(r.MotivoCorreccion, nameof(r.MotivoCorreccion)); if (!Guid.TryParse(readingId, out var id)) throw new DomainException("Lectura invalida.");
-        var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); if (asset.UsageMeasurementType is null || r.Valor < 0) throw new DomainException("Correccion invalida."); var original = await _db.AssetReadings.SingleOrDefaultAsync(x => x.Id == id && x.AssetId == asset.Id, ct) ?? throw new DomainException("Lectura inexistente."); if (await _db.AssetReadings.AnyAsync(x => x.CorrectedReadingId == original.Id, ct)) throw new DomainException("La lectura ya fue corregida.");
+        var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); AssetOperationalPolicy.EnsureCanStartOperation(asset, "correcciones de lecturas"); if (asset.UsageMeasurementType is null || r.Valor < 0) throw new DomainException("Correccion invalida."); var original = await _db.AssetReadings.SingleOrDefaultAsync(x => x.Id == id && x.AssetId == asset.Id, ct) ?? throw new DomainException("Lectura inexistente."); if (await _db.AssetReadings.AnyAsync(x => x.CorrectedReadingId == original.Id, ct)) throw new DomainException("La lectura ya fue corregida.");
         var correction = new AssetReadingEntity { AssetId = asset.Id, ReadAtUtc = r.FechaLecturaUtc ?? DateTimeOffset.UtcNow, Value = r.Valor, Source = Source(r.Origen), RegisteredByUserId = u.UserId, EvidenceReference = Empty(r.EvidenciaReferencia), Observations = Empty(r.Observaciones), IsCorrection = true, CorrectedReadingId = original.Id, CorrectionReason = r.MotivoCorreccion.Trim(), AuthorizedByUserId = u.UserId }; _db.AssetReadings.Add(correction); await _db.SaveChangesAsync(ct); return MapReadings(await ValidReadingsAsync(asset.Id, ct), asset.UsageMeasurementType).Single(x => x.Id == correction.Id.ToString("D"));
     }
 
@@ -174,18 +245,52 @@ public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r,
     private async Task<AssetDetail> DetailAsync(AssetEntity asset, CancellationToken ct)
     {
         var summary = await SummaryAsync(asset, ct); var definitions = await DefinitionsAsync(asset.AssetTypeId, asset.FamilyId, ct); var values = await _db.AssetAttributeValues.AsNoTracking().Include(x => x.AttributeDefinition).Where(x => x.AssetId == asset.Id).ToListAsync(ct); var readings = MapReadings(await ValidReadingsAsync(asset.Id, ct), asset.UsageMeasurementType); var components = await _db.OperationalUnitComponents.AsNoTracking().Include(x => x.OperationalUnit).Include(x => x.ComponentRole).Where(x => x.AssetId == asset.Id).OrderByDescending(x => x.InstalledAtUtc).ToListAsync(ct); var orders = await _db.WorkOrders.AsNoTracking().Include(x => x.Status).Include(x => x.MaintenanceType).Where(x => x.AssetId == asset.Id || x.RelatedAssets.Any(related => related.AssetId == asset.Id)).OrderByDescending(x => x.ScheduledAtUtc ?? x.CreatedAtUtc).Select(x => new AssetWorkOrderSummary(x.WorkOrderNumber, x.Status.Code, x.MaintenanceType.Code, x.Description, x.ScheduledAtUtc.HasValue ? DateOnly.FromDateTime(x.ScheduledAtUtc.Value.UtcDateTime) : null)).ToArrayAsync(ct); var documents = (await MatrixAsync(asset, ct)).Select(x => new AssetDocumentResponse("Activo", asset.Code, x.TipoDocumento, x.Estado, x.FechaVencimiento, x.DocumentoVigente, x.Critico, x.Estado == "VENCIDO", x.BloqueaDisponibilidad)).ToArray();
-        return new AssetDetail(summary, asset.Brand, asset.Model, asset.SerialNumber, asset.Ownership, asset.ManufacturingYear, asset.AcquisitionDate, asset.CommissioningDate, asset.DecommissioningDate, asset.Observations, values.Select(x => new AssetAttributeValueResponse(x.AttributeDefinition.Code, x.AttributeDefinition.Name, x.AttributeDefinition.DataType, x.AttributeDefinition.Unit, x.TextValue, x.NumericValue, x.BooleanValue, x.DateValue, x.Observations)).ToArray(), definitions.Select(ToDefinition).ToArray(), readings, orders, components.FirstOrDefault(x => x.RemovedAtUtc is null)?.OperationalUnit.Code, components.Select(x => new AssetCompositionHistoryEntry(x.OperationalUnit.Code, x.ComponentRole.Code, x.InstalledAtUtc, x.RemovedAtUtc, x.Observations)).ToArray(), documents);
+        var transfers = await _db.AssetTransfers.AsNoTracking().Include(x => x.OriginFaena).Include(x => x.DestinationFaena).Include(x => x.OperationalUnit).Where(x => x.AssetId == asset.Id).OrderByDescending(x => x.EffectiveAtUtc).Select(x => new AssetTransferResponse(x.Id.ToString("D"), asset.Code, x.OriginFaena == null ? null : x.OriginFaena.Code, x.DestinationFaena == null ? null : x.DestinationFaena.Code, x.EffectiveAtUtc, x.Reason, x.UserId, x.RegisteredAtUtc, x.Observations, x.OperationalUnit == null ? null : x.OperationalUnit.Code)).ToArrayAsync(ct);
+        var aliases = await _db.AssetIdentifierAliases.AsNoTracking().Where(x => x.AssetId == asset.Id).OrderByDescending(x => x.ValidFromUtc).Select(x => new AssetIdentifierAliasResponse(x.IdentifierType, x.ScopeKey, x.Value, x.ValidFromUtc, x.ValidToUtc, x.ValidToUtc == null)).ToArrayAsync(ct);
+        return new AssetDetail(summary, asset.Brand, asset.Model, asset.SerialNumber, asset.Ownership, asset.ManufacturingYear, asset.AcquisitionDate, asset.CommissioningDate, asset.DecommissioningDate, asset.Observations, values.Select(x => new AssetAttributeValueResponse(x.AttributeDefinition.Code, x.AttributeDefinition.Name, x.AttributeDefinition.DataType, x.AttributeDefinition.Unit, x.TextValue, x.NumericValue, x.BooleanValue, x.DateValue, x.Observations)).ToArray(), definitions.Select(ToDefinition).ToArray(), readings, orders, components.FirstOrDefault(x => x.RemovedAtUtc is null)?.OperationalUnit.Code, components.Select(x => new AssetCompositionHistoryEntry(x.OperationalUnit.Code, x.ComponentRole.Code, x.InstalledAtUtc, x.RemovedAtUtc, x.Observations)).ToArray(), documents, transfers, aliases);
     }
 
     private async Task<IReadOnlyCollection<AssetDocumentMatrixRow>> MatrixAsync(AssetEntity asset, CancellationToken ct)
     {
-        var requirements = await _db.AssetDocumentRequirements.AsNoTracking().Include(x => x.DocumentType).Where(x => x.IsActive && x.AssetTypeId == asset.AssetTypeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == asset.FamilyId)).ToListAsync(ct); var documents = await _db.DocumentAssets.AsNoTracking().Include(x => x.Document).ThenInclude(x => x.DocumentType).Include(x => x.Document).ThenInclude(x => x.Versions).Where(x => x.AssetId == asset.Id && x.IsActive).Select(x => x.Document).ToListAsync(ct); var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        return requirements.GroupBy(x => x.DocumentTypeId).Select(g => g.OrderByDescending(x => x.EquipmentFamilyId.HasValue).First()).OrderBy(x => x.DocumentType.Code).Select(r => MatrixRow(r, documents.Where(d => d.DocumentTypeId == r.DocumentTypeId).OrderByDescending(d => d.CreatedAtUtc).FirstOrDefault(), today)).ToArray();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var matrix = await _db.DocumentRequirementMatrices.AsNoTracking().Include(x => x.Items).ThenInclude(x => x.DocumentType)
+            .Where(x => x.Status == "VIGENTE" && x.AssetTypeId == asset.AssetTypeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == asset.FamilyId) && x.ValidFrom <= today && (x.ValidTo == null || x.ValidTo >= today))
+            .OrderByDescending(x => x.EquipmentFamilyId.HasValue).ThenByDescending(x => x.ValidFrom).ThenByDescending(x => x.VersionNumber).FirstOrDefaultAsync(ct);
+        var documents = await _db.DocumentAssets.AsNoTracking().Include(x => x.Document).ThenInclude(x => x.DocumentType).Include(x => x.Document).ThenInclude(x => x.Versions).Where(x => x.AssetId == asset.Id && x.IsActive).Select(x => x.Document).ToListAsync(ct);
+        if (matrix is not null) return matrix.Items.OrderBy(x => x.DocumentType.Code).Select(r => MatrixRow(r.DocumentType, r.IsMandatory, r.IsCritical, r.BlocksAvailability, r.AlertDays, BestDocument(documents, r.DocumentTypeId), today)).ToArray();
+        var legacy = await _db.AssetDocumentRequirements.AsNoTracking().Include(x => x.DocumentType).Where(x => x.IsActive && x.AssetTypeId == asset.AssetTypeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == asset.FamilyId)).ToListAsync(ct);
+        return legacy.GroupBy(x => x.DocumentTypeId).Select(g => g.OrderByDescending(x => x.EquipmentFamilyId.HasValue).First()).OrderBy(x => x.DocumentType.Code).Select(r => MatrixRow(r.DocumentType, r.IsMandatory, r.IsCritical, r.BlocksAvailability, r.AlertDays ?? r.DocumentType.AlertDays, BestDocument(documents, r.DocumentTypeId), today)).ToArray();
     }
 
-    private static AssetDocumentMatrixRow MatrixRow(AssetDocumentRequirementEntity r, DocumentEntity? d, DateOnly today)
+    private static DocumentEntity? BestDocument(IEnumerable<DocumentEntity> documents, Guid typeId) => documents.Where(x => x.DocumentTypeId == typeId).OrderByDescending(x => DocumentComplianceCalculator.Evaluate(x.Status, x.ExpiresOn, x.DocumentType.AlertDays, x.Versions.Any(v => v.IsCurrent), x.BlocksAvailability).IsCompliant).ThenByDescending(x => x.CreatedAtUtc).FirstOrDefault();
+
+    private static AssetDocumentMatrixRow MatrixRow(DocumentTypeEntity type, bool mandatory, bool critical, bool blocks, int alertDays, DocumentEntity? document, DateOnly today)
     {
-        if (d is null) return new AssetDocumentMatrixRow(r.DocumentType.Code, r.IsMandatory, r.IsCritical, r.BlocksAvailability, "PENDIENTE_CARGA", null, null, null, null, "No existe documento vigente."); var expiration = d.ExpiresOn; var days = expiration?.DayNumber - today.DayNumber; var status = d.IsAnnulled ? "ANULADO" : d.Status.ToUpperInvariant().Contains("RECHAZ") ? "RECHAZADO" : d.Status.ToUpperInvariant().Contains("VALID") ? "VALIDADO" : d.Status.ToUpperInvariant().Contains("REEMPLAZ") ? "REEMPLAZADO" : "PENDIENTE_VALIDACION"; if (status == "VALIDADO" && expiration is { } date) status = date < today ? "VENCIDO" : days <= (r.AlertDays ?? 0) ? "POR_VENCER" : "VALIDADO"; return new AssetDocumentMatrixRow(r.DocumentType.Code, r.IsMandatory, r.IsCritical, r.BlocksAvailability, status, d.Code, d.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault()?.VersionNumber, expiration, days, status is "VALIDADO" or "POR_VENCER" ? null : $"Documento {status}.");
+        if (document is null) return new(type.Code, mandatory, critical, blocks, "PENDIENTE_CARGA", null, null, null, null, "No existe documento vigente.");
+        var result = DocumentComplianceCalculator.Evaluate(document.Status, document.ExpiresOn, alertDays, document.Versions.Any(x => x.IsCurrent), blocks, today);
+        var current = document.Versions.OrderByDescending(x => x.IsCurrent).ThenByDescending(x => x.VersionNumber).FirstOrDefault();
+        return new(type.Code, mandatory, critical, blocks, DocumentComplianceCalculator.ToCode(result.Status), document.Code, current?.VersionNumber, document.ExpiresOn, result.DaysToExpire, result.Observation);
+    }
+
+    private async Task SyncIdentifierAliasesAsync(AssetEntity asset, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var desired = new Dictionary<string, (string Scope, string Value)>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(asset.SerialNumber)) desired["NUMERO_SERIE"] = ($"SERIAL:{asset.FamilyId?.ToString("N") ?? asset.AssetTypeId.ToString("N")}", asset.SerialNumber.Trim());
+        var dynamicIds = await _db.AssetAttributeValues.Include(x => x.AttributeDefinition).Where(x => x.AssetId == asset.Id && x.AttributeDefinition.IsIdentifier && x.TextValue != null).ToListAsync(ct);
+        foreach (var value in dynamicIds) desired[value.AttributeDefinition.Code] = ($"ATTR:{value.AttributeDefinitionId:N}", value.TextValue!.Trim());
+        var current = await _db.AssetIdentifierAliases.Where(x => x.AssetId == asset.Id && x.ValidToUtc == null).ToListAsync(ct);
+        foreach (var alias in current)
+        {
+            if (desired.TryGetValue(alias.IdentifierType, out var target) && Same(alias.ScopeKey, target.Scope) && Same(alias.Value, target.Value)) { desired.Remove(alias.IdentifierType); continue; }
+            alias.ValidToUtc = now;
+        }
+        foreach (var (type, target) in desired)
+        {
+            var normalized = target.Value.ToUpperInvariant();
+            if (await _db.AssetIdentifierAliases.AnyAsync(x => x.AssetId != asset.Id && x.ScopeKey == target.Scope && x.NormalizedValue == normalized && x.ValidToUtc == null, ct)) throw new DomainException($"El identificador {type} '{target.Value}' ya esta vigente en su ambito.");
+            _db.AssetIdentifierAliases.Add(new AssetIdentifierAliasEntity { AssetId = asset.Id, IdentifierType = type, ScopeKey = target.Scope, Value = target.Value, NormalizedValue = normalized, ValidFromUtc = now });
+        }
     }
 
     private async Task<List<AssetReadingEntity>> ValidReadingsAsync(Guid assetId, CancellationToken ct) { var all = await _db.AssetReadings.Where(x => x.AssetId == assetId).ToListAsync(ct); var replaced = all.Where(x => x.CorrectedReadingId.HasValue).Select(x => x.CorrectedReadingId!.Value).ToHashSet(); return all.Where(x => !replaced.Contains(x.Id)).ToList(); }
@@ -208,7 +313,7 @@ public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r,
     private static bool Option(string? json, string value) { try { using var d = JsonDocument.Parse(json ?? "[]"); return d.RootElement.ValueKind == JsonValueKind.Array && d.RootElement.EnumerateArray().Any(x => string.Equals(x.ValueKind == JsonValueKind.String ? x.GetString() : x.ToString(), value, StringComparison.OrdinalIgnoreCase)); } catch { return false; } }
     private static string? Measurement(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var type = Code(value); if (!Measurements.Contains(type)) throw new DomainException("TipoMedicionUso solo permite HOROMETRO, KILOMETRAJE o null."); return type; }
     private static string Source(string value) { var source = Code(value); if (!Sources.Contains(source)) throw new DomainException("Origen de lectura invalido."); return source; }
-    private static void ValidateDates(short? year, DateOnly? start, DateOnly? end) { if (year is { } y && (y < 1900 || y > DateTime.UtcNow.Year + 2)) throw new DomainException("Año de fabricacion invalido."); if (start is { } a && end is { } b && b < a) throw new DomainException("La fecha de baja no puede ser anterior a la puesta en servicio."); }
+    private static void ValidateDates(short? year, DateOnly? start, DateOnly? end) { if (year is { } y && (y < 1900 || y > DateTime.UtcNow.Year + 2)) throw new DomainException("AÃ±o de fabricacion invalido."); if (start is { } a && end is { } b && b < a) throw new DomainException("La fecha de baja no puede ser anterior a la puesta en servicio."); }
     private void RegisterReadings(UserAccessContext u)
     {
         if (u.Permissions.Contains(AuthPermissions.RegisterAssetReadings, StringComparer.OrdinalIgnoreCase) || _authorization.CanAdminister(u)) return;

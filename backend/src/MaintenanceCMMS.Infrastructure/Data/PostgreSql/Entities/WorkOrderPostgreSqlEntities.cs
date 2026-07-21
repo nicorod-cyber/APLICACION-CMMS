@@ -84,6 +84,8 @@ public sealed class WorkOrderEntity : PostgreSqlEntity
     public ChecklistTemplateEntity? PreventiveTemplate { get; set; }
     public int? PreventiveTemplateVersionSnapshot { get; set; }
     public bool IsAutomaticPreventive { get; set; }
+    public Guid? DocumentaryMatrixVersionId { get; set; }
+    public DocumentRequirementMatrixEntity? DocumentaryMatrixVersion { get; set; }
     public bool RequiresSignature { get; set; }
     public DateTimeOffset? ScheduledAtUtc { get; set; }
     public DateTimeOffset? ScheduledStartUtc { get; set; }
@@ -118,6 +120,28 @@ public sealed class WorkOrderEntity : PostgreSqlEntity
     public List<WorkOrderSignatureEntity> Signatures { get; set; } = [];
     public List<WorkOrderStatusHistoryEntity> History { get; set; } = [];
     public List<WorkOrderAssetEntity> RelatedAssets { get; set; } = [];
+    public List<DocumentaryWorkOrderRequirementEntity> DocumentaryRequirements { get; set; } = [];
+}
+
+public sealed class DocumentaryWorkOrderRequirementEntity : PostgreSqlEntity
+{
+    public Guid WorkOrderId { get; set; }
+    public WorkOrderEntity WorkOrder { get; set; } = null!;
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public Guid MatrixVersionId { get; set; }
+    public DocumentRequirementMatrixEntity MatrixVersion { get; set; } = null!;
+    public Guid MatrixItemId { get; set; }
+    public DocumentRequirementMatrixItemEntity MatrixItem { get; set; } = null!;
+    public Guid? OriginDocumentId { get; set; }
+    public DocumentEntity? OriginDocument { get; set; }
+    public Guid? OriginDocumentVersionId { get; set; }
+    public DocumentVersionEntity? OriginDocumentVersion { get; set; }
+    public string CycleKey { get; set; } = string.Empty;
+    public string Status { get; set; } = "PENDIENTE";
+    public bool IsApplicable { get; set; } = true;
+    public string? Observation { get; set; }
+    public DateTimeOffset? CompletedAtUtc { get; set; }
 }
 
 public sealed class WorkOrderAssetEntity : PostgreSqlEntity

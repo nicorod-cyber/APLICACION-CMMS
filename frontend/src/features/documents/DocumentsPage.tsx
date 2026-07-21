@@ -14,7 +14,7 @@ import {
   XCircle
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { AUTH_PERMISSIONS, apiFetch, useAuthStore } from "../auth/authStore";
+import { AUTH_PERMISSIONS, AUTH_ROLES, apiFetch, useAuthStore } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
 
 type DocumentEntityType = "Activo" | "OT" | "Faena";
@@ -73,6 +73,46 @@ type DocumentRecord = {
   bloqueaDisponibilidadActual: boolean;
 };
 
+type DocumentVersion = {
+  versionId: string;
+  documentoId: string;
+  numeroVersion: number;
+  codigoVersion: string;
+  archivoId: string;
+  archivoKey: string;
+  sharePointUrl?: string | null;
+  fechaCargaUtc: string;
+  cargadoPor: string;
+  observaciones?: string | null;
+  vigente: boolean;
+  fechaEmision?: string | null;
+  fechaVencimiento?: string | null;
+  estadoValidacion?: string | null;
+  validadoPor?: string | null;
+  validadoEnUtc?: string | null;
+  rechazadoPor?: string | null;
+  rechazadoEnUtc?: string | null;
+  motivoRechazo?: string | null;
+  reemplazaVersionId?: string | null;
+  responsableCorreccion?: string | null;
+  estadoCorreccion?: string | null;
+  observacionCorreccion?: string | null;
+  cicloCorreccionId?: string | null;
+};
+
+type RequirementMatrixVersion = {
+  id: string;
+  codigo: string;
+  numeroVersion: number;
+  tipoActivoCodigo: string;
+  familiaEquipoCodigo?: string | null;
+  vigenciaDesde: string;
+  vigenciaHasta?: string | null;
+  estado: string;
+  creadoPor: string;
+  motivoCambio?: string | null;
+  requisitos: { id: string; tipoDocumentoCodigo: string; obligatorio: boolean; critico: boolean; bloqueaDisponibilidad: boolean; requiereFechaVencimiento: boolean; diasAnticipacion: number }[];
+};
 type DocumentMatrixRow = {
   entidadTipo: DocumentEntityType;
   entidadCodigo: string;
@@ -240,6 +280,8 @@ export function DocumentsPage() {
   const [expired, setExpired] = useState<DocumentRecord[]>([]);
   const [expiring, setExpiring] = useState<DocumentRecord[]>([]);
   const [matrix, setMatrix] = useState<DocumentMatrixRow[]>([]);
+  const [requirementMatrices, setRequirementMatrices] = useState<RequirementMatrixVersion[]>([]);
+  const [versions, setVersions] = useState<DocumentVersion[]>([]);
   const [summary, setSummary] = useState<DocumentSummary | null>(null);
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [selected, setSelected] = useState<DocumentRecord | null>(null);
@@ -255,13 +297,26 @@ export function DocumentsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const canManage = hasPermission(user?.permissions, AUTH_PERMISSIONS.manageDocuments);
-  const canValidate = hasPermission(user?.permissions, AUTH_PERMISSIONS.validateDocuments);
+  const canValidate = Boolean(user?.roles.includes(AUTH_ROLES.planner)) && hasPermission(user?.permissions, AUTH_PERMISSIONS.validateDocuments);
   const canConfigure = hasPermission(user?.permissions, AUTH_PERMISSIONS.configureDocumentTypes);
 
   useEffect(() => {
     void loadAll();
     void loadStorageStatus();
   }, []);
+
+  useEffect(() => {
+    if (!selected) {
+      setVersions([]);
+      return;
+    }
+
+    let active = true;
+    void apiFetch<DocumentVersion[]>(`/api/documents/${encodeURIComponent(selected.documentoId)}/versions`)
+      .then((items) => { if (active) setVersions(items); })
+      .catch((loadError) => { if (active) setError(loadError instanceof Error ? loadError.message : "No fue posible cargar versiones."); });
+    return () => { active = false; };
+  }, [selected?.documentoId]);
 
   const typeCodes = useMemo(() => types.map((type) => type.codigo).sort((left, right) => left.localeCompare(right)), [types]);
 
@@ -280,13 +335,14 @@ export function DocumentsPage() {
     try {
       const query = toQuery(nextFilters);
       const faenaQuery = nextFilters.faenaCodigo ? `?faenaCodigo=${encodeURIComponent(nextFilters.faenaCodigo)}` : "";
-      const [typeResult, documentResult, expiredResult, expiringResult, matrixResult, summaryResult] = await Promise.all([
+      const [typeResult, documentResult, expiredResult, expiringResult, matrixResult, summaryResult, requirementMatrixResult] = await Promise.all([
         apiFetch<DocumentType[]>("/api/documents/types"),
         apiFetch<DocumentRecord[]>(`/api/documents?${query}`),
         apiFetch<DocumentRecord[]>(`/api/documents/expired${faenaQuery}`),
         apiFetch<DocumentRecord[]>(`/api/documents/expiring${faenaQuery}`),
         apiFetch<DocumentMatrixRow[]>(`/api/documents/matrix${faenaQuery}`),
-        apiFetch<DocumentSummary>(`/api/documents/summary${faenaQuery}`)
+        apiFetch<DocumentSummary>(`/api/documents/summary${faenaQuery}`),
+        apiFetch<RequirementMatrixVersion[]>("/api/documents/requirement-matrices?incluirHistoricas=true")
       ]);
 
       setTypes(typeResult);
@@ -295,6 +351,7 @@ export function DocumentsPage() {
       setExpiring(expiringResult);
       setMatrix(matrixResult);
       setSummary(summaryResult);
+      setRequirementMatrices(requirementMatrixResult);
 
       const nextSelected = selected
         ? documentResult.find((document) => document.documentoId === selected.documentoId) ?? null
@@ -659,6 +716,7 @@ export function DocumentsPage() {
             form={documentForm}
             types={types}
             selected={selected}
+            versions={versions}
             storageInfo={storageInfo}
             replaceMode={replaceMode}
             canManage={canManage}
@@ -678,7 +736,7 @@ export function DocumentsPage() {
         </section>
       ) : null}
 
-      {activeTab === "matriz" ? <MatrixTable rows={matrix} /> : null}
+      {activeTab === "matriz" ? <MatrixTable rows={matrix} versions={requirementMatrices} /> : null}
       {activeTab === "vencidos" ? <DocumentsTable documents={expired} isLoading={isLoading} selectedId={selected?.documentoId} onSelect={selectDocument} /> : null}
       {activeTab === "porVencer" ? <DocumentsTable documents={expiring} isLoading={isLoading} selectedId={selected?.documentoId} onSelect={selectDocument} /> : null}
       {activeTab === "configuracion" ? (
@@ -788,6 +846,7 @@ function DocumentEditor({
   form,
   types,
   selected,
+  versions,
   storageInfo,
   replaceMode,
   canManage,
@@ -807,6 +866,7 @@ function DocumentEditor({
   form: DocumentForm;
   types: DocumentType[];
   selected: DocumentRecord | null;
+  versions: DocumentVersion[];
   storageInfo: StorageProviderInfo | null;
   replaceMode: boolean;
   canManage: boolean;
@@ -946,6 +1006,26 @@ function DocumentEditor({
         </button>
       </form>
 
+      {selected ? (
+        <div className="rounded-md border border-slate-200 p-3 dark:border-slate-800">
+          <h3 className="font-semibold">Historial inmutable de versiones</h3>
+          <div className="mt-2 max-h-72 space-y-2 overflow-auto">
+            {versions.map((version) => (
+              <article className="rounded border border-slate-200 p-2 text-sm dark:border-slate-700" key={version.versionId}>
+                <div className="flex items-center justify-between gap-2"><b>Version {version.numeroVersion} / {version.codigoVersion}</b><span className="status-pill">{version.estadoValidacion ?? (version.vigente ? "Vigente" : "Historica")}</span></div>
+                <p>Carga: {new Date(version.fechaCargaUtc).toLocaleString()} por {version.cargadoPor}</p>
+                <p>Emision: {formatDate(version.fechaEmision)} / vencimiento: {formatDate(version.fechaVencimiento)}</p>
+                {version.validadoPor ? <p>Validada por {version.validadoPor} el {version.validadoEnUtc ? new Date(version.validadoEnUtc).toLocaleString() : "-"}</p> : null}
+                {version.rechazadoPor ? <p className="text-red-700">Rechazada por {version.rechazadoPor}: {version.motivoRechazo ?? "sin motivo"}</p> : null}
+                {version.responsableCorreccion ? <p>Correccion: {version.estadoCorreccion ?? "pendiente"} / responsable {version.responsableCorreccion}</p> : null}
+                <p className="truncate text-slate-500">Archivo: {version.archivoKey}</p>
+              </article>
+            ))}
+            {versions.length === 0 ? <p className="text-sm text-slate-500">Sin versiones registradas.</p> : null}
+          </div>
+        </div>
+      ) : null}
+
       <div className="rounded-md border border-slate-200 p-3 dark:border-slate-800">
         <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
           <Field label="Motivo accion" value={actionReason} onChange={onActionReason} />
@@ -982,9 +1062,23 @@ function DocumentEditor({
   );
 }
 
-function MatrixTable({ rows }: { rows: DocumentMatrixRow[] }) {
+function MatrixTable({ rows, versions }: { rows: DocumentMatrixRow[]; versions: RequirementMatrixVersion[] }) {
   return (
-    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <section className="space-y-4">
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="font-semibold">Versiones de matriz normativa</h2>
+        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {versions.map((version) => (
+            <article className="rounded border border-slate-200 p-3 text-sm dark:border-slate-700" key={version.id}>
+              <div className="flex justify-between"><b>{version.codigo} v{version.numeroVersion}</b><span>{version.estado}</span></div>
+              <p>{version.tipoActivoCodigo}{version.familiaEquipoCodigo ? ` / ${version.familiaEquipoCodigo}` : ""}</p>
+              <p>{formatDate(version.vigenciaDesde)} a {formatDate(version.vigenciaHasta)}</p>
+              <p>{version.requisitos.length} requisitos / {version.motivoCambio ?? "sin motivo informado"}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
         <h2 className="text-base font-semibold text-slate-950 dark:text-white">Matriz documental</h2>
         <span className="text-sm text-slate-500 dark:text-slate-400">{rows.length}</span>
@@ -1016,6 +1110,7 @@ function MatrixTable({ rows }: { rows: DocumentMatrixRow[] }) {
             ))}
           </tbody>
         </table>
+      </div>
       </div>
     </section>
   );

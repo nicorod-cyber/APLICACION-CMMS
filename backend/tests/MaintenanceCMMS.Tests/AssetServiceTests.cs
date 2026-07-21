@@ -17,7 +17,7 @@ public sealed class AssetServiceTests
 {
     private static readonly UserAccessContext Admin = new(
         "admin", [AuthRoles.Admin],
-        [AuthPermissions.Administration, AuthPermissions.ChangeAssetFaena, AuthPermissions.ViewCosts], ["F001"]);
+        [AuthPermissions.Administration, AuthPermissions.ChangeAssetFaena, AuthPermissions.ViewCosts], ["F001", "F002"]);
 
     [Fact]
     public async Task CreateAsync_PersistsAssetAndCalculatesDynamicCompleteness()
@@ -55,6 +55,9 @@ public sealed class AssetServiceTests
         var readings = await fixture.Service.GetReadingsAsync(asset.Resumen.Codigo, Admin, CancellationToken.None);
         Assert.Single(readings);
         Assert.Equal(110m, readings.Single().Valor);
+
+        await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("DADO_DE_BAJA", "Baja definitiva", TipoAntecedente: "ACTA", AntecedenteId: "ACTA-001"), Admin, CancellationToken.None);
+        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddReadingAsync(asset.Resumen.Codigo, new CreateAssetReadingRequest(120m), Admin, CancellationToken.None));
     }
 
     [Fact]
@@ -62,14 +65,52 @@ public sealed class AssetServiceTests
     {
         await using var fixture = await CreateFixtureAsync();
         var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-401"), Admin, CancellationToken.None);
-        var technician = new UserAccessContext("tech-1", [AuthRoles.Technician], [AuthPermissions.RegisterAssetReadings], ["F001"]);
+        var technician = new UserAccessContext("tech-1", [AuthRoles.Technician], [AuthPermissions.RegisterAssetReadings], ["F001", "F002"]);
         var reading = await fixture.Service.AddReadingAsync(asset.Resumen.Codigo, new CreateAssetReadingRequest(10m), technician, CancellationToken.None);
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.CorrectReadingAsync(asset.Resumen.Codigo, reading.Id, new CorrectAssetReadingRequest(11m, "Sin autorizacion"), technician, CancellationToken.None));
     }
+    [Fact]
+    public async Task FaenaAndStateCannotBeEditedDirectly_TransferKeepsTemporalHistory()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var created = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-TRANSFER"), Admin, CancellationToken.None);
+        var directEdit = new UpdateAssetRequest(
+            created.Resumen.Nombre,
+            created.Resumen.TipoActivoCodigo,
+            created.Resumen.FamiliaEquipoCodigo,
+            "F002",
+            "FUERA_SERVICIO_TALLER",
+            NumeroSerie: "SER-EQ-TRANSFER",
+            TipoMedicionUso: "HOROMETRO");
+
+        var exception = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.UpdateAsync(created.Resumen.Codigo, directEdit, Admin, CancellationToken.None));
+        Assert.Contains("traslado", exception.Message, StringComparison.OrdinalIgnoreCase);
+
+        var stateException = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.UpdateAsync(created.Resumen.Codigo, directEdit with { FaenaCodigo = "F001" }, Admin, CancellationToken.None));
+        Assert.Contains("estado", stateException.Message, StringComparison.OrdinalIgnoreCase);
+
+        var effectiveAt = DateTimeOffset.UtcNow.AddMinutes(1);
+        var transfers = await fixture.Service.TransferAsync(
+            created.Resumen.Codigo,
+            new TransferAssetRequest("F002", effectiveAt, "Cambio de contrato operacional"),
+            Admin,
+            CancellationToken.None);
+        var detail = await fixture.Service.GetByIdAsync(created.Resumen.Codigo, Admin, CancellationToken.None);
+        var assetId = (await fixture.DbContext.Assets.SingleAsync(asset => asset.Code == created.Resumen.Codigo)).Id;
+        var periods = await fixture.DbContext.AssetLocationPeriods.Where(item => item.AssetId == assetId).OrderBy(item => item.ValidFromUtc).ToArrayAsync();
+
+        Assert.Single(transfers);
+        Assert.Equal("F001", transfers.Single().FaenaOrigenCodigo);
+        Assert.Equal("F002", detail!.Resumen.FaenaCodigo);
+        Assert.Equal(2, periods.Length);
+        Assert.Equal(effectiveAt, periods[0].ValidToUtc);
+        Assert.Null(periods[1].ValidToUtc);
+        Assert.Single(detail.HistorialTraslados!);
+    }
     private static CreateAssetRequest CompleteCreateRequest(string code) => new(
         "Camion tolva", "CAMION", "CAMIONES", "F001", "OPERATIVO_FAENA",
-        Marca: "CAT", Modelo: "777", NumeroSerie: "SER-777", Propiedad: "Propio", Criticidad: "ALTA",
+        Marca: "CAT", Modelo: "777", NumeroSerie: "SER-" + code, Propiedad: "Propio", Criticidad: "ALTA",
         TipoMedicionUso: "HOROMETRO", Atributos: [new AssetAttributeValueInput("IDENTIFICADOR", ValorTexto: "ID-" + code)]);
 
     private static async Task<AssetFixture> CreateFixtureAsync()
@@ -87,8 +128,10 @@ public sealed class AssetServiceTests
     private static async Task SeedCatalogsAsync(CmmsDbContext dbContext)
     {
         var faena = new FaenaEntity { Code = "F001", Name = "Faena Norte", IsActive = true };
+        var faenaDestino = new FaenaEntity { Code = "F002", Name = "Faena Sur", IsActive = true };
         dbContext.AddRange(
             faena,
+            faenaDestino,
             new TechnicalLocationEntity
             {
                 Code = "UT-F001",
@@ -96,13 +139,21 @@ public sealed class AssetServiceTests
                 FaenaId = faena.Id,
                 Faena = faena,
                 IsObsolete = false
+            },
+            new TechnicalLocationEntity
+            {
+                Code = "UT-F002",
+                Name = "Ubicacion tecnica Faena Sur",
+                FaenaId = faenaDestino.Id,
+                Faena = faenaDestino,
+                IsObsolete = false
             });
         var type = new AssetTypeEntity { Code = "CAMION", Name = "Camion", IsActive = true };
         dbContext.AssetTypes.Add(type);
         dbContext.WorkCatalogs.AddRange(new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Baja", Name = "Baja", SortOrder = 1 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Media", Name = "Media", SortOrder = 2 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Alta", Name = "Alta", SortOrder = 3 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Critica", Name = "Critica", SortOrder = 4 });
         dbContext.AssetOperationalStates.AddRange(
             new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo en Faena", IsActive = true },
-            new AssetOperationalStateEntity { Code = "FUERA_SERVICIO_TALLER", Name = "Fuera de servicio en Taller", IsActive = true });
+            new AssetOperationalStateEntity { Code = "FUERA_SERVICIO_TALLER", Name = "Fuera de servicio en Taller", Severity = 100, IsActive = true });
         await dbContext.SaveChangesAsync();
         dbContext.EquipmentFamilies.Add(new EquipmentFamilyEntity { Code = "CAMIONES", Name = "Camiones", AssetTypeId = type.Id, IsActive = true });
         dbContext.AssetAttributeDefinitions.Add(new AssetAttributeDefinitionEntity { AssetTypeId = type.Id, Code = "IDENTIFICADOR", Name = "Identificador", DataType = "TEXTO", IsRequired = true, IsIdentifier = true, IsUnique = true, IsActive = true });

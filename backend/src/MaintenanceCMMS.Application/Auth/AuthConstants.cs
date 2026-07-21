@@ -46,7 +46,10 @@ public static class AuthPermissions
     public const string ManageDocumentRequirements = "documentos.requisitos.administrar";
     public const string ManageTechnicalHierarchy = "jerarquia.gestionar";
     public const string ManageDocuments = "documentos.gestionar";
+    public const string UploadDocuments = "documentos.cargar";
+    public const string ReviewDocuments = "documentos.revisar";
     public const string ValidateDocuments = "documentos.validar";
+    public const string RejectDocuments = "documentos.rechazar";
     public const string ConfigureDocumentTypes = "documentos.configurar";
     public const string ChangeValidatedDocumentExpiry = "documentos.vencimiento_validado.modificar";
     public const string ManageAlerts = "alertas.gestionar";

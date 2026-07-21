@@ -128,7 +128,8 @@ public enum MaintenanceType
     Corrective = 0,
     Preventive = 1,
     Predictive = 2,
-    Inspection = 3
+    Inspection = 3,
+    Documentary = 4
 }
 
 public enum AuditAction

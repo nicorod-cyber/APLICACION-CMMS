@@ -99,6 +99,7 @@ public sealed class WorkOrderConfiguration : IEntityTypeConfiguration<WorkOrderE
         builder.Property(e => e.PreventiveTemplateId).HasColumnName("plantilla_preventiva_id");
         builder.Property(e => e.PreventiveTemplateVersionSnapshot).HasColumnName("plantilla_preventiva_version_snapshot");
         builder.Property(e => e.IsAutomaticPreventive).HasColumnName("preventiva_automatica");
+        builder.Property(e => e.DocumentaryMatrixVersionId).HasColumnName("matriz_documental_version_id");
         builder.Property(e => e.RequiresSignature).HasColumnName("requiere_firma");
         builder.Property(e => e.ScheduledAtUtc).HasColumnName("fecha_programada_utc").HasColumnType("timestamptz");
         builder.Property(e => e.ScheduledStartUtc).HasColumnName("inicio_programado_utc").HasColumnType("timestamptz");
@@ -136,6 +137,7 @@ public sealed class WorkOrderConfiguration : IEntityTypeConfiguration<WorkOrderE
         builder.HasOne(e => e.Criticality).WithMany().HasForeignKey(e => e.CriticalityId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.FailureClassification).WithMany().HasForeignKey(e => e.FailureClassificationId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.PreventiveTemplate).WithMany().HasForeignKey(e => e.PreventiveTemplateId).OnDelete(DeleteBehavior.Restrict).HasConstraintName("fk_ot_plantilla_preventiva");
+        builder.HasOne(e => e.DocumentaryMatrixVersion).WithMany().HasForeignKey(e => e.DocumentaryMatrixVersionId).OnDelete(DeleteBehavior.Restrict).HasConstraintName("fk_ot_matriz_documental");
         builder.HasOne(e => e.SupervisorUser).WithMany().HasForeignKey(e => e.SupervisorUserId).OnDelete(DeleteBehavior.Restrict).HasConstraintName("fk_ot_supervisor");
         builder.HasOne(e => e.SupervisorAssignedByUser).WithMany().HasForeignKey(e => e.SupervisorAssignedByUserId).OnDelete(DeleteBehavior.Restrict).HasConstraintName("fk_ot_supervisor_asignador");
         builder.ToTable(t => t.HasCheckConstraint("ck_ordenes_trabajo_sql_objetivo", "activo_id IS NOT NULL OR unidad_operativa_id IS NOT NULL"));

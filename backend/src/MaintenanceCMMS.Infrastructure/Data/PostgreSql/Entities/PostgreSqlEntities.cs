@@ -96,6 +96,7 @@ public sealed class AssetOperationalStateEntity : PostgreSqlEntity
 {
     public string Code { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public int Severity { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
@@ -163,6 +164,51 @@ public sealed class AssetStateEventEntity : PostgreSqlEntity
     public DateTimeOffset OccurredAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public string UserId { get; set; } = string.Empty;
     public string Reason { get; set; } = string.Empty;
+    public string? ReferenceType { get; set; }
+    public string? ReferenceId { get; set; }
+}
+
+public sealed class AssetTransferEntity : PostgreSqlEntity
+{
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public Guid? OriginFaenaId { get; set; }
+    public FaenaEntity? OriginFaena { get; set; }
+    public Guid? DestinationFaenaId { get; set; }
+    public FaenaEntity? DestinationFaena { get; set; }
+    public Guid? OperationalUnitId { get; set; }
+    public OperationalUnitEntity? OperationalUnit { get; set; }
+    public DateTimeOffset EffectiveAtUtc { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public string UserId { get; set; } = string.Empty;
+    public DateTimeOffset RegisteredAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string? Observations { get; set; }
+}
+
+public sealed class AssetLocationPeriodEntity : PostgreSqlEntity
+{
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public Guid? FaenaId { get; set; }
+    public FaenaEntity? Faena { get; set; }
+    public DateTimeOffset ValidFromUtc { get; set; }
+    public DateTimeOffset? ValidToUtc { get; set; }
+    public Guid? TransferId { get; set; }
+    public AssetTransferEntity? Transfer { get; set; }
+}
+
+public sealed class AssetIdentifierAliasEntity : PostgreSqlEntity
+{
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public string IdentifierType { get; set; } = string.Empty;
+    public string ScopeKey { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+    public string NormalizedValue { get; set; } = string.Empty;
+    public DateTimeOffset ValidFromUtc { get; set; }
+    public DateTimeOffset? ValidToUtc { get; set; }
+    public Guid? ReplacedByAliasId { get; set; }
+    public AssetIdentifierAliasEntity? ReplacedByAlias { get; set; }
 }
 
 public sealed class DocumentTypeEntity : PostgreSqlEntity
@@ -235,6 +281,20 @@ public sealed class DocumentVersionEntity : PostgreSqlEntity
     public string? Observations { get; set; }
     public bool IsCurrent { get; set; } = true;
     public string Status { get; set; } = "vigente";
+    public DateOnly? IssueDate { get; set; }
+    public DateOnly? ExpiresOn { get; set; }
+    public string ValidationStatus { get; set; } = "PendienteValidacion";
+    public string? ValidatedByUserId { get; set; }
+    public DateTimeOffset? ValidatedAtUtc { get; set; }
+    public string? RejectedByUserId { get; set; }
+    public DateTimeOffset? RejectedAtUtc { get; set; }
+    public string? RejectReason { get; set; }
+    public Guid? ReplacesVersionId { get; set; }
+    public DocumentVersionEntity? ReplacesVersion { get; set; }
+    public string? CorrectionResponsibleUserId { get; set; }
+    public string? CorrectionStatus { get; set; }
+    public string? CorrectionObservation { get; set; }
+    public Guid? CorrectionCycleId { get; set; }
 }
 
 public sealed class FileMetadataEntity : PostgreSqlEntity
@@ -395,6 +455,35 @@ public sealed class AssetDocumentRequirementEntity : PostgreSqlEntity
     public bool IsActive { get; set; } = true;
 }
 
+public sealed class DocumentRequirementMatrixEntity : PostgreSqlEntity
+{
+    public string Code { get; set; } = string.Empty;
+    public int VersionNumber { get; set; }
+    public DateOnly ValidFrom { get; set; }
+    public DateOnly? ValidTo { get; set; }
+    public string Status { get; set; } = "VIGENTE";
+    public Guid AssetTypeId { get; set; }
+    public AssetTypeEntity AssetType { get; set; } = null!;
+    public Guid? EquipmentFamilyId { get; set; }
+    public EquipmentFamilyEntity? EquipmentFamily { get; set; }
+    public string CreatedByUserId { get; set; } = string.Empty;
+    public string? ChangeReason { get; set; }
+    public List<DocumentRequirementMatrixItemEntity> Items { get; set; } = [];
+}
+
+public sealed class DocumentRequirementMatrixItemEntity : PostgreSqlEntity
+{
+    public Guid MatrixId { get; set; }
+    public DocumentRequirementMatrixEntity Matrix { get; set; } = null!;
+    public Guid DocumentTypeId { get; set; }
+    public DocumentTypeEntity DocumentType { get; set; } = null!;
+    public bool IsMandatory { get; set; }
+    public bool IsCritical { get; set; }
+    public bool BlocksAvailability { get; set; }
+    public bool RequiresExpirationDate { get; set; }
+    public int AlertDays { get; set; } = 45;
+}
+
 public sealed class OperationalUnitTypeEntity : PostgreSqlEntity
 {
     public string Code { get; set; } = string.Empty;
@@ -414,6 +503,12 @@ public sealed class OperationalUnitEntity : PostgreSqlEntity
     public FaenaEntity? Faena { get; set; }
     public Guid OperationalStateId { get; set; }
     public AssetOperationalStateEntity OperationalState { get; set; } = null!;
+    public Guid? BaselineOperationalStateId { get; set; }
+    public AssetOperationalStateEntity? BaselineOperationalState { get; set; }
+    public Guid? DerivedFromAssetId { get; set; }
+    public AssetEntity? DerivedFromAsset { get; set; }
+    public string? DerivedStateReason { get; set; }
+    public DateTimeOffset? DerivedStateCalculatedAtUtc { get; set; }
     public string? Criticality { get; set; }
     public DateOnly? CommissioningDate { get; set; }
     public DateOnly? DecommissioningDate { get; set; }
@@ -425,6 +520,7 @@ public sealed class OperationalUnitComponentRoleEntity : PostgreSqlEntity
     public string Code { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
+    public bool IsCritical { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
@@ -465,6 +561,11 @@ public sealed class OperationalUnitComponentEntity : PostgreSqlEntity
     public WorkOrderEntity? InstallationWorkOrder { get; set; }
     public Guid? RemovalWorkOrderId { get; set; }
     public WorkOrderEntity? RemovalWorkOrder { get; set; }
+    public string InstalledByUserId { get; set; } = string.Empty;
+    public string? InstallationReason { get; set; }
+    public string? RemovedByUserId { get; set; }
+    public string? RemovalReason { get; set; }
+    public string? CriticalRoleCode { get; set; }
     public string? Observations { get; set; }
 }
 

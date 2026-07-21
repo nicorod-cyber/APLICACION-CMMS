@@ -5,6 +5,7 @@ using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.PreventiveMaintenance;
@@ -24,7 +25,9 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
     public async Task<PreventivePlanResponse> UpsertPlanAsync(UpsertPreventivePlanRequest request, UserAccessContext user, CancellationToken ct)
     {
         EnsureManage(user); Required(request.Codigo, nameof(request.Codigo)); Required(request.Nombre, nameof(request.Nombre)); ValidateFrequency(request);
-        var asset = await OptionalAsync(_db.Assets, request.ActivoCodigo, x => x.Code, "activo", ct); var family = await OptionalAsync(_db.EquipmentFamilies, request.FamiliaEquipo, x => x.Code, "familia", ct); if (asset is null && family is null) throw new DomainException("El plan debe tener alcance por activo o familia."); if (asset?.Faena is not null) EnsureAccess(user, asset.Faena.Code);
+        var asset = await OptionalAsync(_db.Assets, request.ActivoCodigo, x => x.Code, "activo", ct); var family = await OptionalAsync(_db.EquipmentFamilies, request.FamiliaEquipo, x => x.Code, "familia", ct); if (asset is null && family is null) throw new DomainException("El plan debe tener alcance por activo o familia.");
+        if (asset is not null) { await _db.Entry(asset).Reference(x => x.OperationalState).LoadAsync(ct); await _db.Entry(asset).Reference(x => x.Faena).LoadAsync(ct); AssetOperationalPolicy.EnsureCanStartOperation(asset, "planes preventivos"); }
+        if (asset?.Faena is not null) EnsureAccess(user, asset.Faena.Code);
         var checklist = string.IsNullOrWhiteSpace(request.ChecklistCodigo) ? null : await _db.ChecklistTemplates.SingleOrDefaultAsync(x => x.Code == Code(request.ChecklistCodigo), ct) ?? throw new DomainException($"El checklist '{request.ChecklistCodigo}' no existe.");
         var plan = await PlanQuery().SingleOrDefaultAsync(x => x.Code == Code(request.Codigo), ct);
         if (plan is null) { plan = new PreventivePlanEntity { Code = Code(request.Codigo)!, CreatedByUserId = user.UserId }; _db.PreventivePlans.Add(plan); }
@@ -41,7 +44,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
     public async Task<PreventiveReadingResponse> RegisterReadingAsync(RegisterPreventiveReadingRequest request, UserAccessContext user, CancellationToken ct)
     {
         EnsureManage(user); Required(request.ActivoCodigo, nameof(request.ActivoCodigo)); if (request.Valor < 0) throw new DomainException("La lectura no puede ser negativa.");
-        var asset = await _db.Assets.Include(x => x.Faena).SingleOrDefaultAsync(x => x.Code == Code(request.ActivoCodigo), ct) ?? throw new DomainException($"El activo '{request.ActivoCodigo}' no existe."); if (asset.Faena is null) throw new DomainException("El activo no tiene faena asignada."); EnsureAccess(user, asset.Faena.Code);
+        var asset = await _db.Assets.Include(x => x.Faena).Include(x => x.OperationalState).SingleOrDefaultAsync(x => x.Code == Code(request.ActivoCodigo), ct) ?? throw new DomainException($"El activo '{request.ActivoCodigo}' no existe."); AssetOperationalPolicy.EnsureCanStartOperation(asset, "nuevas lecturas preventivas"); if (asset.Faena is null) throw new DomainException("El activo no tiene faena asignada."); EnsureAccess(user, asset.Faena.Code);
         var last = await _db.AssetReadings.Where(x => x.AssetId == asset.Id).OrderByDescending(x => x.ReadAtUtc).FirstOrDefaultAsync(ct); var correction = last is not null && request.Valor < last.Value; var reading = new AssetReadingEntity { AssetId = asset.Id, Asset = asset, Value = request.Valor, ReadAtUtc = request.FechaLectura, Source = Text(request.Origen)?.ToUpperInvariant() ?? "MANUAL", RegisteredByUserId = user.UserId, EvidenceReference = Text(request.Evidencia), Observations = Text(request.Observaciones), IsCorrection = correction, CorrectedReadingId = correction ? last?.Id : null, IsAnomalous = correction, ValidationMessage = correction ? "La lectura es inferior a la anterior; se registro como correccion." : null }; _db.AssetReadings.Add(reading); await _db.SaveChangesAsync(ct); return ToReading(reading);
     }
 
@@ -57,6 +60,7 @@ public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
     public async Task<PreventiveWorkOrderGenerationResponse> GenerateWorkOrderAsync(string planCode, GeneratePreventiveWorkOrderRequest request, UserAccessContext user, CancellationToken ct)
     {
         EnsureManage(user); var plan = await PlanQuery().SingleOrDefaultAsync(x => x.Code == Code(planCode), ct) ?? throw new DomainException($"El plan '{planCode}' no existe."); var assets = await ResolveAssetsAsync(plan, ct); if (!string.IsNullOrWhiteSpace(request.ActivoCodigo)) assets = assets.Where(x => x.Code == Code(request.ActivoCodigo)).ToList(); var asset = assets.SingleOrDefault() ?? throw new DomainException("El plan no tiene un activo objetivo unico."); if (asset.Faena is null) throw new DomainException("El activo objetivo no tiene faena."); EnsureAccess(user, asset.Faena.Code);
+        if (!_db.Entry(asset).Reference(x => x.OperationalState).IsLoaded) await _db.Entry(asset).Reference(x => x.OperationalState).LoadAsync(ct); AssetOperationalPolicy.EnsureCanStartOperation(asset, "ordenes preventivas");
         var existing = await _db.WorkOrders.FirstOrDefaultAsync(x => x.PreventivePlanCode == plan.Code && x.AssetId == asset.Id && x.SupervisorClosedAtUtc == null, ct); if (existing is not null && !request.Force) return new(plan.Code, asset.Code, existing.WorkOrderNumber, PreventiveStatus.OTGenerada, ["Ya existe una OT preventiva abierta."]);
         var status = await _db.WorkCatalogs.SingleAsync(x => x.Category == "WorkOrderLifecycleStatus" && x.Code == WorkOrderLifecycleStatus.OTCreada.ToString(), ct); var maintenanceType = await _db.WorkCatalogs.SingleAsync(x => x.Category == "MaintenanceType" && x.Code == MaintenanceType.Preventive.ToString(), ct); var number = await NextWorkOrderNumberAsync(ct); var order = new WorkOrderEntity { WorkOrderNumber = number, AssetId = asset.Id, FaenaId = asset.FaenaId!.Value, StatusId = status.Id, MaintenanceTypeId = maintenanceType.Id, Description = $"Preventivo {plan.Code}: {plan.Name}", PreventivePlanCode = plan.Code, PreventiveTemplateId = plan.ChecklistTemplateId, PreventiveTemplateVersionSnapshot = plan.ChecklistTemplateId.HasValue ? 1 : null, IsAutomaticPreventive = true, ScheduledAtUtc = plan.NextDueAtUtc, CreatedByUserId = user.UserId, CreatedByUserAtUtc = DateTimeOffset.UtcNow }; _db.WorkOrders.Add(order);
         if (plan.ChecklistTemplateId.HasValue)

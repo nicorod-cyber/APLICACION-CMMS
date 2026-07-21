@@ -151,7 +151,20 @@ public sealed record DocumentVersionResponse(
     DateTimeOffset FechaCargaUtc,
     string CargadoPor,
     string? Observaciones,
-    bool Vigente);
+    bool Vigente,
+    DateOnly? FechaEmision = null,
+    DateOnly? FechaVencimiento = null,
+    string? EstadoValidacion = null,
+    string? ValidadoPor = null,
+    DateTimeOffset? ValidadoEnUtc = null,
+    string? RechazadoPor = null,
+    DateTimeOffset? RechazadoEnUtc = null,
+    string? MotivoRechazo = null,
+    string? ReemplazaVersionId = null,
+    string? ResponsableCorreccion = null,
+    string? EstadoCorreccion = null,
+    string? ObservacionCorreccion = null,
+    string? CicloCorreccionId = null);
 
 public sealed record AssignDocumentAssetsRequest(
     IReadOnlyCollection<string> ActivoCodigos,

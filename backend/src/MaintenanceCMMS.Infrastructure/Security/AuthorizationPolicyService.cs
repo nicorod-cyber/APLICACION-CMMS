@@ -76,14 +76,13 @@ public sealed class AuthorizationPolicyService : IAuthorizationPolicyService
         return CanAdminister(user) ||
                HasRole(user, AuthRoles.Planner) ||
                HasRole(user, AuthRoles.MaintenanceSupervisor) ||
+               HasPermission(user, AuthPermissions.UploadDocuments) ||
                HasPermission(user, AuthPermissions.ManageDocuments);
     }
 
     public bool CanValidateDocuments(UserAccessContext user)
     {
-        return CanAdminister(user) ||
-               HasRole(user, AuthRoles.Planner) ||
-               HasRole(user, AuthRoles.MaintenanceSupervisor) ||
+        return HasRole(user, AuthRoles.Planner) &&
                HasPermission(user, AuthPermissions.ValidateDocuments);
     }
 

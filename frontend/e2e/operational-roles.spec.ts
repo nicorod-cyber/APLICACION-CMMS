@@ -42,7 +42,25 @@ test("supervisor loads assigned work-order view", async ({ page }) => {
   await expectOperationalView(page);
 });
 
+test("planning can open document versions and requirement matrices", async ({ page }) => {
+  await login(page, process.env.E2E_PLANNER_USERNAME ?? "");
+  await page.goto("/documentos");
+  await expect(page.getByRole("heading", { name: "Documentos" })).toBeVisible();
+  await page.getByRole("button", { name: "Matriz" }).click();
+  await expect(page.getByRole("heading", { name: "Versiones de matriz normativa" })).toBeVisible();
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+});
+
+test("supervisor cannot use document validation or rejection controls", async ({ page }) => {
+  await login(page, process.env.E2E_SUPERVISOR_USERNAME ?? "");
+  await page.goto("/documentos");
+  await expect(page.getByRole("heading", { name: "Documentos" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Validar" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Rechazar" })).toBeDisabled();
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+});
+
 test("technician loads the work-order view without a frontend error", async ({ page }) => {
   await login(page, process.env.E2E_TECHNICIAN_USERNAME ?? "");
   await expectOperationalView(page);
-});
+});

@@ -1,4 +1,5 @@
 using MaintenanceCMMS.Application.MaintenanceTargets;
+using MaintenanceCMMS.Application.Documents;
 
 namespace MaintenanceCMMS.Application.WorkOrders;
 
@@ -243,7 +244,8 @@ public sealed record WorkOrderDetailResponse(
     IReadOnlyCollection<WorkOrderChecklistItemResponse> Checklist,
     IReadOnlyCollection<WorkOrderSignatureResponse> Signatures,
     IReadOnlyCollection<WorkOrderStatusHistoryResponse> History,
-    IReadOnlyCollection<WorkOrderClosureBlocker> ClosureBlockers);
+    IReadOnlyCollection<WorkOrderClosureBlocker> ClosureBlockers,
+    DocumentaryWorkOrderProgress? ProgresoDocumental = null);
 
 public sealed record WorkOrderAssetInput(string ActivoCodigo, string Rol = "AFECTADO");
 public sealed record WorkOrderAssetResponse(string ActivoCodigo, string ActivoNombre, string Rol, bool EsPrincipal);

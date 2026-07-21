@@ -26,6 +26,8 @@ public sealed class DocumentServiceTests
             AuthPermissions.ConfigureDocumentTypes
         ],
         ["F001"]);
+    private static readonly UserAccessContext Planner = new(
+        "planner", [AuthRoles.Planner], [AuthPermissions.ManageDocuments, AuthPermissions.ReviewDocuments, AuthPermissions.ValidateDocuments, AuthPermissions.RejectDocuments], ["F001"]);
 
     [Fact]
     public async Task CreateDocument_PersistsTypeFileVersionAndTwoAssetAssociations()
@@ -177,7 +179,7 @@ public sealed class DocumentServiceTests
             Admin,
             CancellationToken.None);
 
-        var validated = await fixture.Service.ValidateAsync(document.DocumentoId, new ValidateDocumentRequest("Ok"), Admin, CancellationToken.None);
+        var validated = await fixture.Service.ValidateAsync(document.DocumentoId, new ValidateDocumentRequest("Ok"), Planner, CancellationToken.None);
         var expired = await fixture.Service.GetExpiredAsync("F001", Admin, CancellationToken.None);
 
         Assert.Equal(DocumentLifecycleStatus.Vencido, validated!.Estado);
@@ -185,6 +187,56 @@ public sealed class DocumentServiceTests
         Assert.Contains(expired, item => item.DocumentoId == document.DocumentoId);
     }
 
+    [Fact]
+    public async Task SupervisorCannotValidateOrReject_EvenWithDocumentPermissions()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await fixture.Service.CreateTypeAsync(DocumentType("TST-ROLE", alertDays: 15), Admin, CancellationToken.None);
+        var created = await fixture.Service.CreateAsync(
+            Document(["EQ-001"], "TST-ROLE", DateOnly.FromDateTime(DateTime.UtcNow.AddDays(20))),
+            Admin,
+            CancellationToken.None);
+        var supervisor = new UserAccessContext(
+            "supervisor",
+            [AuthRoles.MaintenanceSupervisor],
+            [AuthPermissions.ManageDocuments, AuthPermissions.ValidateDocuments, AuthPermissions.RejectDocuments],
+            ["F001"]);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.ValidateAsync(created.DocumentoId, new ValidateDocumentRequest("No corresponde"), supervisor, CancellationToken.None));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.RejectAsync(created.DocumentoId, new RejectDocumentRequest("No corresponde"), supervisor, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RejectionCorrectionCycle_PreservesCompleteSnapshotsAcrossVersions()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await fixture.Service.CreateTypeAsync(DocumentType("TST-CYCLE", alertDays: 30, blocksAvailability: true), Admin, CancellationToken.None);
+        var firstExpiry = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30));
+        var created = await fixture.Service.CreateAsync(Document(["EQ-001"], "TST-CYCLE", firstExpiry, critical: true, blocksAvailability: true), Admin, CancellationToken.None);
+
+        await fixture.Service.RejectAsync(created.DocumentoId, new RejectDocumentRequest("Falta firma responsable"), Planner, CancellationToken.None);
+        var secondExpiry = DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1));
+        var corrected = await fixture.Service.ReplaceAsync(
+            created.DocumentoId,
+            new ReplaceDocumentRequest(DateOnly.FromDateTime(DateTime.UtcNow), secondExpiry, "sharepoint://cycle-v2.pdf", "https://sharepoint.example/cycle-v2.pdf", "Correccion firmada"),
+            Admin,
+            CancellationToken.None);
+        var versions = (await fixture.Service.ListVersionsAsync(created.DocumentoId, Admin, CancellationToken.None)).OrderBy(item => item.NumeroVersion).ToArray();
+
+        Assert.NotNull(corrected);
+        Assert.Null(corrected!.RechazadoPor);
+        Assert.Null(corrected.MotivoRechazo);
+        Assert.Equal(DocumentLifecycleStatus.PendienteValidacion, corrected.Estado);
+        Assert.Equal(2, versions.Length);
+        Assert.Equal(firstExpiry, versions[0].FechaVencimiento);
+        Assert.Equal(DocumentLifecycleStatus.Rechazado.ToString(), versions[0].EstadoValidacion);
+        Assert.Equal("Falta firma responsable", versions[0].MotivoRechazo);
+        Assert.Equal("CORREGIDO_NUEVA_VERSION", versions[0].EstadoCorreccion);
+        Assert.Equal(secondExpiry, versions[1].FechaVencimiento);
+        Assert.Equal(versions[0].VersionId, versions[1].ReemplazaVersionId);
+        Assert.Equal(versions[0].CicloCorreccionId, versions[1].CicloCorreccionId);
+        Assert.Equal("admin", versions[1].ResponsableCorreccion);
+    }
     private static CreateDocumentTypeRequest DocumentType(
         string code,
         int alertDays,
@@ -252,7 +304,7 @@ public sealed class DocumentServiceTests
     private static async Task SeedCatalogsAsync(CmmsDbContext dbContext)
     {
         var faena = new FaenaEntity { Code = "F001", Name = "Faena Norte", IsActive = true };
-        var type = new AssetTypeEntity { Code = "CAMION", Name = "Cami�n", IsActive = true };
+        var type = new AssetTypeEntity { Code = "CAMION", Name = "Camiï¿½n", IsActive = true };
         var family = new EquipmentFamilyEntity { Code = "CAMIONES", Name = "Camiones", AssetTypeId = type.Id, IsActive = true };
         var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo en Faena", IsActive = true };
         dbContext.Faenas.Add(faena);

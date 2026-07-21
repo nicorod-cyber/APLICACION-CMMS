@@ -161,6 +161,28 @@ type ClosureBlocker = {
   message: string;
 };
 
+type DocumentaryRequirementProgress = {
+  id: string;
+  tipoDocumentoCodigo: string;
+  estado: string;
+  aplicable: boolean;
+  documentoOrigenId?: string | null;
+  versionDocumentoOrigenId?: string | null;
+  observacion?: string | null;
+  completadoEnUtc?: string | null;
+};
+
+type DocumentaryWorkOrderProgress = {
+  matrizCodigo: string;
+  matrizVersion: number;
+  total: number;
+  completados: number;
+  pendientes: number;
+  rechazados: number;
+  vencidos: number;
+  porcentaje: number;
+  requisitos: DocumentaryRequirementProgress[];
+};
 type WorkOrderDetail = {
   summary: WorkOrderSummary;
   tasks: WorkOrderTask[];
@@ -171,6 +193,7 @@ type WorkOrderDetail = {
   checklist: WorkOrderChecklist[];
   signatures: WorkOrderSignature[];
   closureBlockers: ClosureBlocker[];
+  progresoDocumental?: DocumentaryWorkOrderProgress | null;
 };
 
 type AssetSummary = {
@@ -343,7 +366,7 @@ export function WorkOrdersPage() {
         fechaProgramada: toIsoOrNull(orderForm.fechaProgramada),
         requiereFirma: orderForm.requiereFirma
       };
-      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo físico.");
+      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo fÃ­sico.");
       const created = orderForm.preventive
         ? await apiFetch<WorkOrderDetail>("/api/work-orders/preventive", { method: "POST", body: JSON.stringify(body) })
         : await apiFetch<WorkOrderDetail>("/api/work-orders", { method: "POST", body: JSON.stringify(body) });
@@ -400,14 +423,14 @@ export function WorkOrdersPage() {
     event.preventDefault();
     if (!selected) return;
     await saveAction(async () => {
-      if (!evidenceForm.file) throw new Error("Seleccione una fotografía.");
+      if (!evidenceForm.file) throw new Error("Seleccione una fotografÃ­a.");
       const form = new FormData();
       form.set("file", evidenceForm.file);
       form.set("tipo", evidenceForm.tipoEvidencia);
       if (evidenceForm.descripcion.trim()) form.set("descripcion", evidenceForm.descripcion.trim());
       await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/tasks/${encodeURIComponent(evidenceForm.codigoTarea)}/evidences`, { method: "POST", body: form });
       setEvidenceForm({ ...evidenceForm, descripcion: "", file: null });
-      setMessage("Fotografía cargada.");
+      setMessage("FotografÃ­a cargada.");
     });
   }
 
@@ -827,7 +850,7 @@ export function WorkOrdersPage() {
                 <label>Tecnico usuario ID<input value={technicianForm.tecnicoUsuarioId} onChange={(event) => setTechnicianForm({ tecnicoUsuarioId: event.target.value })} required /></label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving || !canPlan}><UserPlus size={18} /> Asignar</button>
-              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "Histórico"])} />
+              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "HistÃ³rico"])} />
             </form>
 
             <form className="panel-muted stack" onSubmit={registerLabor}>
@@ -853,11 +876,11 @@ export function WorkOrdersPage() {
               <h3>Evidencias</h3>
               <TaskSelect tasks={detail.tasks} value={evidenceForm.codigoTarea} onChange={(value) => setEvidenceForm({ ...evidenceForm, codigoTarea: value })} />
               <div className="form-grid">
-                <label>Tipo<select value={evidenceForm.tipoEvidencia} onChange={(event) => setEvidenceForm({ ...evidenceForm, tipoEvidencia: event.target.value as EvidenceType })}><option value="FotoAntes">Foto antes</option><option value="FotoDurante">Foto durante</option><option value="FotoDespues">Foto después</option><option value="FotoPrueba">Foto prueba</option></select></label>
-                <label>Fotografía<input type="file" accept="image/*" onChange={(event) => setEvidenceForm({ ...evidenceForm, file: event.target.files?.[0] ?? null })} required /></label>
-                <label className="span-2">Descripción<input value={evidenceForm.descripcion} onChange={(event) => setEvidenceForm({ ...evidenceForm, descripcion: event.target.value })} /></label>
+                <label>Tipo<select value={evidenceForm.tipoEvidencia} onChange={(event) => setEvidenceForm({ ...evidenceForm, tipoEvidencia: event.target.value as EvidenceType })}><option value="FotoAntes">Foto antes</option><option value="FotoDurante">Foto durante</option><option value="FotoDespues">Foto despuÃ©s</option><option value="FotoPrueba">Foto prueba</option></select></label>
+                <label>FotografÃ­a<input type="file" accept="image/*" onChange={(event) => setEvidenceForm({ ...evidenceForm, file: event.target.files?.[0] ?? null })} required /></label>
+                <label className="span-2">DescripciÃ³n<input value={evidenceForm.descripcion} onChange={(event) => setEvidenceForm({ ...evidenceForm, descripcion: event.target.value })} /></label>
               </div>
-              <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Cargar fotografía</button>
+              <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Cargar fotografÃ­a</button>
               <MiniTable rows={detail.evidences.map((item) => [item.codigoTarea ?? "OT", item.tipoEvidencia, item.nombre, item.sharePointUrl ?? item.localPath ?? item.archivoKey ?? "-"])} />
             </form>
 

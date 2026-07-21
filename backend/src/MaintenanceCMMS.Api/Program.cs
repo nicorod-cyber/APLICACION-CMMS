@@ -57,16 +57,28 @@ builder.Host.UseSerilog((context, services, loggerConfiguration) =>
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddHealthChecks();
-if (builder.Configuration.GetValue("PreventiveMaintenance:JobsEnabled", true))
+var preventiveJobsEnabled = builder.Configuration.GetValue("PreventiveMaintenance:JobsEnabled", true);
+var documentaryJobsEnabled = builder.Configuration.GetValue("DocumentCompliance:JobsEnabled", true);
+if (preventiveJobsEnabled || documentaryJobsEnabled)
 {
     builder.Services.AddQuartz(options =>
     {
-        var jobKey = new JobKey("preventive-maintenance-engine");
-        options.AddJob<PreventiveMaintenanceJob>(job => job.WithIdentity(jobKey));
-        options.AddTrigger(trigger => trigger
-            .ForJob(jobKey)
-            .WithIdentity("preventive-maintenance-engine-trigger")
-            .WithCronSchedule(builder.Configuration["PreventiveMaintenance:JobCron"] ?? "0 0/30 * * * ?"));
+        if (preventiveJobsEnabled)
+        {
+            var jobKey = new JobKey("preventive-maintenance-engine");
+            options.AddJob<PreventiveMaintenanceJob>(job => job.WithIdentity(jobKey));
+            options.AddTrigger(trigger => trigger
+                .ForJob(jobKey)
+                .WithIdentity("preventive-maintenance-engine-trigger")
+                .WithCronSchedule(builder.Configuration["PreventiveMaintenance:JobCron"] ?? "0 0/30 * * * ?"));
+        }
+
+        if (documentaryJobsEnabled)
+        {
+            var documentaryJobKey = new JobKey("documentary-work-order-engine");
+            options.AddJob<DocumentaryWorkOrderJob>(job => job.WithIdentity(documentaryJobKey));
+            options.AddTrigger(trigger => trigger.ForJob(documentaryJobKey).WithIdentity("documentary-work-order-engine-trigger").WithCronSchedule(builder.Configuration["DocumentCompliance:JobCron"] ?? "0 15 2 * * ?"));
+        }
     });
     builder.Services.AddQuartzHostedService(options => options.WaitForJobsToComplete = true);
 }
@@ -631,11 +643,11 @@ api.MapGet("/maintenance-targets", async (
         var targetScope = MaintenanceTargetScope.Operational;
         if (!string.IsNullOrWhiteSpace(tipo) && !Enum.TryParse<MaintenanceTargetType>(tipo, true, out targetType))
         {
-            return Results.BadRequest(new { message = "El parámetro tipo no es válido." });
+            return Results.BadRequest(new { message = "El parÃ¡metro tipo no es vÃ¡lido." });
         }
         if (!string.IsNullOrWhiteSpace(scope) && !Enum.TryParse<MaintenanceTargetScope>(scope, true, out targetScope))
         {
-            return Results.BadRequest(new { message = "El parámetro scope no es válido." });
+            return Results.BadRequest(new { message = "El parÃ¡metro scope no es vÃ¡lido." });
         }
         try
         {
@@ -785,6 +797,15 @@ assetsApi.MapPost("/{id}/state-events", async (
         }
     })
     .WithName("CreateAssetStateEvent");
+
+assetsApi.MapPost("/{id}/transfers", async (
+        string id, TransferAssetRequest request, ClaimsPrincipal user, IAssetService assetService, CancellationToken cancellationToken) =>
+    {
+        try { return Results.Ok(await assetService.TransferAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken)); }
+        catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+        catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+    })
+    .WithName("TransferAsset");
 
 assetsApi.MapGet("/{id}/history", async (
         string id,
@@ -2829,6 +2850,26 @@ documentsApi.MapGet("/expiring", async (
         }
     })
     .WithName("ListExpiringDocuments");
+
+documentsApi.MapGet("/requirement-matrices", async (bool? incluirHistoricas, ClaimsPrincipal user, IDocumentRequirementMatrixService service, CancellationToken cancellationToken) =>
+    {
+        try { return Results.Ok(await service.ListAsync(incluirHistoricas ?? false, UserAccessContext.FromClaims(user), cancellationToken)); }
+        catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+    }).WithName("ListDocumentRequirementMatrices");
+
+documentsApi.MapPost("/requirement-matrices/versions", async (CreateDocumentRequirementMatrixVersionRequest request, ClaimsPrincipal user, IDocumentRequirementMatrixService service, CancellationToken cancellationToken) =>
+    {
+        try { var created = await service.CreateVersionAsync(request, UserAccessContext.FromClaims(user), cancellationToken); return Results.Created($"/api/documents/requirement-matrices/{created.Id}", created); }
+        catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+        catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+    }).WithName("CreateDocumentRequirementMatrixVersion");
+
+documentsApi.MapPost("/documentary-engine/run", async (DateOnly? fechaReferencia, ClaimsPrincipal user, IDocumentaryWorkOrderService service, CancellationToken cancellationToken) =>
+    {
+        var access = UserAccessContext.FromClaims(user);
+        if (!access.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase)) return Results.Problem("Solo Planificacion puede ejecutar el motor documental.", statusCode: StatusCodes.Status403Forbidden);
+        return Results.Ok(await service.RunAsync(fechaReferencia ?? DateOnly.FromDateTime(DateTime.UtcNow), access.UserId, cancellationToken));
+    }).WithName("RunDocumentaryEngine");
 
 documentsApi.MapGet("/matrix", async (
         string? faenaCodigo,

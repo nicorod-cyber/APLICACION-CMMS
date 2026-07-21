@@ -12,6 +12,14 @@ type Component = {
   ordenTrabajoMontaje?: string | null;
   ordenTrabajoDesmontaje?: string | null;
   observaciones?: string | null;
+  estadoOperacionalCodigo?: string | null;
+  faenaCodigo?: string | null;
+  ubicacionTecnicaCodigo?: string | null;
+  montadoPor?: string | null;
+  motivoMontaje?: string | null;
+  desmontadoPor?: string | null;
+  motivoDesmontaje?: string | null;
+  vigente: boolean;
 };
 
 type AssetOption = { codigo: string; nombre?: string | null; numeroSerie?: string | null; tipoActivoNombre?: string | null };
@@ -21,8 +29,10 @@ type Unit = {
   nombre: string;
   tipoUnidadCodigo: string;
   faenaCodigo?: string | null;
+  ubicacionTecnicaCodigo?: string | null;
   estadoOperacionalCodigo: string;
   criticidad?: string | null;
+  estadoDerivado?: { estadoCodigo: string; activoRestrictivoCodigo?: string | null; rolRestrictivoCodigo?: string | null; motivo?: string | null; calculadoEnUtc?: string | null } | null;
   composicion: { completa: boolean; faltantes: string[]; vigentes: Component[]; historial: Component[] };
 };
 
@@ -53,8 +63,8 @@ export function OperationalUnitsPage() {
     tipoActivoCodigo: "",
     familiaEquipoCodigo: ""
   });
-  const [mount, setMount] = useState({ activoCodigo: "", rolComponenteCodigo: "", ordenTrabajoNumero: "", observaciones: "" });
-  const [replace, setReplace] = useState({ activoSalienteCodigo: "", activoEntranteCodigo: "", rolComponenteCodigo: "", ordenTrabajoNumero: "" });
+  const [mount, setMount] = useState({ activoCodigo: "", rolComponenteCodigo: "", ordenTrabajoNumero: "", observaciones: "", motivo: "" });
+  const [replace, setReplace] = useState({ activoSalienteCodigo: "", activoEntranteCodigo: "", rolComponenteCodigo: "", ordenTrabajoNumero: "", observaciones: "", motivo: "" });
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
@@ -65,8 +75,12 @@ export function OperationalUnitsPage() {
 
   async function load(preferred?: string) {
     try {
-      const list = await apiFetch<Unit[]>("/api/operational-units");
+      const [list, assetList] = await Promise.all([
+        apiFetch<Unit[]>("/api/operational-units"),
+        apiFetch<AssetOption[]>("/api/assets")
+      ]);
       setUnits(list);
+      setAssets(assetList);
       const next = preferred ? list.find((unit) => unit.codigo === preferred) ?? null : selected ? list.find((unit) => unit.codigo === selected.codigo) ?? null : list[0] ?? null;
       setSelected(next);
     } catch (loadError) {
@@ -148,7 +162,7 @@ export function OperationalUnitsPage() {
       () =>
         apiFetch(`/api/operational-units/${encodeURIComponent(selected.codigo)}/components`, {
           method: "POST",
-          body: JSON.stringify({ ...mount, ordenTrabajoNumero: empty(mount.ordenTrabajoNumero), observaciones: empty(mount.observaciones) })
+          body: JSON.stringify({ ...mount, ordenTrabajoNumero: empty(mount.ordenTrabajoNumero), observaciones: empty(mount.observaciones), motivo: mount.motivo.trim() })
         }),
       "Componente montado."
     );
@@ -164,7 +178,7 @@ export function OperationalUnitsPage() {
       () =>
         apiFetch(`/api/operational-units/${encodeURIComponent(selected.codigo)}/components/replace`, {
           method: "POST",
-          body: JSON.stringify({ ...replace, ordenTrabajoNumero: empty(replace.ordenTrabajoNumero) })
+          body: JSON.stringify({ ...replace, ordenTrabajoNumero: empty(replace.ordenTrabajoNumero), observaciones: empty(replace.observaciones), motivo: replace.motivo.trim() })
         }),
       "Componente reemplazado; el historial se conserva."
     );
@@ -175,11 +189,16 @@ export function OperationalUnitsPage() {
       return;
     }
 
+    const motivo = window.prompt(`Motivo del desmontaje de ${component.activoNombre || component.activoCodigo}:`);
+    if (!motivo?.trim()) {
+      return;
+    }
+
     void action(
       () =>
         apiFetch(`/api/operational-units/${encodeURIComponent(selected.codigo)}/components/${encodeURIComponent(component.activoCodigo)}/unmount`, {
           method: "POST",
-          body: JSON.stringify({})
+          body: JSON.stringify({ motivo: motivo.trim() })
         }),
       "Componente desmontado."
     );
@@ -213,7 +232,7 @@ export function OperationalUnitsPage() {
             >
               <b>{unit.codigo}</b>
               <div>{unit.nombre}</div>
-              <small>{unit.tipoUnidadCodigo} Â· {unit.composicion.completa ? "Composicion completa" : `Faltan: ${unit.composicion.faltantes.join(", ")}`}</small>
+              <small>{unit.tipoUnidadCodigo} Ã‚Â· {unit.composicion.completa ? "Composicion completa" : `Faltan: ${unit.composicion.faltantes.join(", ")}`}</small>
             </button>
           ))}
         </section>
@@ -224,7 +243,7 @@ export function OperationalUnitsPage() {
               <div className="section-heading">
                 <div>
                   <h2>{selected.nombre}</h2>
-                  <p>{selected.codigo} Â· {selected.faenaCodigo ?? "Sin faena"} Â· {selected.estadoOperacionalCodigo}</p>
+                  <p>{selected.codigo} / {selected.faenaCodigo ?? "Sin faena"} / ubicacion {selected.ubicacionTecnicaCodigo ?? "sin asignar"}</p><p className="text-sm font-medium">Estado derivado: {selected.estadoDerivado?.estadoCodigo ?? selected.estadoOperacionalCodigo}{selected.estadoDerivado?.activoRestrictivoCodigo ? ` por ${selected.estadoDerivado.activoRestrictivoCodigo} (${selected.estadoDerivado.rolRestrictivoCodigo ?? "componente"})` : ""}</p><p className="text-xs text-slate-500">{selected.estadoDerivado?.motivo ?? "Estado base de la unidad"}</p>
                 </div>
                 <span className={`status-pill ${selected.composicion.completa ? "success" : "danger"}`}>{selected.composicion.completa ? "Completa" : "Incompleta"}</span>
               </div>
@@ -232,7 +251,7 @@ export function OperationalUnitsPage() {
                 <h3>Composicion vigente</h3>
                 {selected.composicion.vigentes.map((component) => (
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border p-2" key={component.activoCodigo}>
-                    <span><b>{component.rolComponenteCodigo}</b>: {component.activoNombre || "Activo sin nombre"}</span>
+                    <span><b>{component.rolComponenteCodigo}</b>: {component.activoNombre || "Activo sin nombre"}<small className="block text-slate-500">{component.estadoOperacionalCodigo ?? "Sin estado"} / {component.faenaCodigo ?? "Sin faena"} / {component.ubicacionTecnicaCodigo ?? "Sin ubicacion"}{component.motivoMontaje ? ` / montaje: ${component.motivoMontaje}` : ""}</small></span>
                     <button className="secondary-button" disabled={saving} onClick={() => unmount(component)} type="button">Desmontar</button>
                   </div>
                 ))}
@@ -241,8 +260,8 @@ export function OperationalUnitsPage() {
                 <h3 className="span-2">Montar componente</h3>
                 <AssetSelect label="Activo" value={mount.activoCodigo} assets={assets} onChange={(activoCodigo) => setMount({ ...mount, activoCodigo })} />
                 <Field label="Rol de componente" value={mount.rolComponenteCodigo} change={(rolComponenteCodigo) => setMount({ ...mount, rolComponenteCodigo })} />
-                <Field label="OT origen (opcional)" value={mount.ordenTrabajoNumero} change={(ordenTrabajoNumero) => setMount({ ...mount, ordenTrabajoNumero })} />
-                <Field label="Observaciones" value={mount.observaciones} change={(observaciones) => setMount({ ...mount, observaciones })} />
+                <Field optional label="OT origen (opcional)" value={mount.ordenTrabajoNumero} change={(ordenTrabajoNumero) => setMount({ ...mount, ordenTrabajoNumero })} />
+                <Field optional label="Observaciones" value={mount.observaciones} change={(observaciones) => setMount({ ...mount, observaciones })} /><Field label="Motivo auditable" value={mount.motivo} change={(motivo) => setMount({ ...mount, motivo })} />
                 <button className="primary-button" disabled={saving}><Wrench className="h-4 w-4" />Montar</button>
               </form>
               <form className="form-grid" onSubmit={replaceComponent}>
@@ -250,14 +269,14 @@ export function OperationalUnitsPage() {
                 <AssetSelect label="Activo saliente" value={replace.activoSalienteCodigo} assets={assets} onChange={(activoSalienteCodigo) => setReplace({ ...replace, activoSalienteCodigo })} />
                 <AssetSelect label="Activo entrante" value={replace.activoEntranteCodigo} assets={assets} onChange={(activoEntranteCodigo) => setReplace({ ...replace, activoEntranteCodigo })} />
                 <Field label="Rol" value={replace.rolComponenteCodigo} change={(rolComponenteCodigo) => setReplace({ ...replace, rolComponenteCodigo })} />
-                <Field label="OT origen" value={replace.ordenTrabajoNumero} change={(ordenTrabajoNumero) => setReplace({ ...replace, ordenTrabajoNumero })} />
+                <Field optional label="OT origen" value={replace.ordenTrabajoNumero} change={(ordenTrabajoNumero) => setReplace({ ...replace, ordenTrabajoNumero })} /><Field optional label="Observaciones" value={replace.observaciones} change={(observaciones) => setReplace({ ...replace, observaciones })} /><Field label="Motivo auditable" value={replace.motivo} change={(motivo) => setReplace({ ...replace, motivo })} />
                 <button className="secondary-button" disabled={saving}><RotateCcw className="h-4 w-4" />Reemplazar</button>
               </form>
               <div>
                 <h3>Historial</h3>
                 {selected.composicion.historial.map((component, index) => (
                   <p className="text-sm" key={`${component.activoCodigo}-${index}`}>
-                    {component.rolComponenteCodigo}: {component.activoNombre || "Activo sin nombre"} Â· {new Date(component.fechaMontajeUtc).toLocaleString()} {component.fechaDesmontajeUtc ? `a ${new Date(component.fechaDesmontajeUtc).toLocaleString()}` : "(vigente)"}
+                    {component.rolComponenteCodigo}: {component.activoNombre || "Activo sin nombre"} / {new Date(component.fechaMontajeUtc).toLocaleString()} {component.fechaDesmontajeUtc ? `a ${new Date(component.fechaDesmontajeUtc).toLocaleString()}` : "(vigente)"} / {component.montadoPor ?? "usuario desconocido"}{component.motivoMontaje ? ` / ${component.motivoMontaje}` : ""}{component.motivoDesmontaje ? ` / desmontaje: ${component.motivoDesmontaje}` : ""}
                   </p>
                 ))}
               </div>
@@ -324,7 +343,7 @@ function DerivedTechnicalLocation({ faena }: { faena: FaenaRecord | null }) {
     <div className="rounded border border-slate-200 px-3 py-2 text-sm dark:border-slate-700">
       <span className="block text-xs font-medium text-slate-500 dark:text-slate-400">Ubicacion tecnica derivada</span>
       {location ? (
-        <span className="block font-medium">{location.codigo} · {location.nombre}{location.obsoleto ? " (obsoleta)" : ""}</span>
+        <span className="block font-medium">{location.codigo} Â· {location.nombre}{location.obsoleto ? " (obsoleta)" : ""}</span>
       ) : (
         <span className="block text-slate-500 dark:text-slate-400">Selecciona una faena con ubicacion tecnica.</span>
       )}
@@ -333,14 +352,14 @@ function DerivedTechnicalLocation({ faena }: { faena: FaenaRecord | null }) {
 }
 
 function AssetSelect({ label, value, assets, onChange }: { label: string; value: string; assets: AssetOption[]; onChange: (value: string) => void }) {
-  return <label>{label}<select required className="input mt-1" value={value} onChange={(event) => onChange(event.target.value)}><option value="">Selecciona un activo</option>{assets.map((asset) => <option key={asset.codigo} value={asset.codigo}>{asset.nombre || "Activo sin nombre"}{asset.numeroSerie ? ` · ${asset.numeroSerie}` : ""}{asset.tipoActivoNombre ? ` · ${asset.tipoActivoNombre}` : ""}</option>)}</select></label>;
+  return <label>{label}<select required className="input mt-1" value={value} onChange={(event) => onChange(event.target.value)}><option value="">Selecciona un activo</option>{assets.map((asset) => <option key={asset.codigo} value={asset.codigo}>{asset.nombre || "Activo sin nombre"}{asset.numeroSerie ? ` Â· ${asset.numeroSerie}` : ""}{asset.tipoActivoNombre ? ` Â· ${asset.tipoActivoNombre}` : ""}</option>)}</select></label>;
 }
 
-function Field({ label, value, change }: { label: string; value: string; change: (value: string) => void }) {
+function Field({ label, value, change, optional = false }: { label: string; value: string; change: (value: string) => void; optional?: boolean }) {
   return (
     <label>
       {label}
-      <input required className="input mt-1" value={value} onChange={(event) => change(event.target.value)} />
+      <input required={!optional} className="input mt-1" value={value} onChange={(event) => change(event.target.value)} />
     </label>
   );
 }

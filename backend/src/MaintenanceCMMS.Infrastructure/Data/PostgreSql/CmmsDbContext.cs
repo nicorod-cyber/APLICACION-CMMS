@@ -24,6 +24,8 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<AssetAttributeValueEntity> AssetAttributeValues => Set<AssetAttributeValueEntity>();
     public DbSet<AssetReadingEntity> AssetReadings => Set<AssetReadingEntity>();
     public DbSet<AssetDocumentRequirementEntity> AssetDocumentRequirements => Set<AssetDocumentRequirementEntity>();
+    public DbSet<DocumentRequirementMatrixEntity> DocumentRequirementMatrices => Set<DocumentRequirementMatrixEntity>();
+    public DbSet<DocumentRequirementMatrixItemEntity> DocumentRequirementMatrixItems => Set<DocumentRequirementMatrixItemEntity>();
     public DbSet<OperationalUnitTypeEntity> OperationalUnitTypes => Set<OperationalUnitTypeEntity>();
     public DbSet<OperationalUnitEntity> OperationalUnits => Set<OperationalUnitEntity>();
     public DbSet<OperationalUnitComponentRoleEntity> OperationalUnitComponentRoles => Set<OperationalUnitComponentRoleEntity>();
@@ -33,6 +35,9 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<EquipmentFamilyEntity> EquipmentFamilies => Set<EquipmentFamilyEntity>();
     public DbSet<AssetEntity> Assets => Set<AssetEntity>();
     public DbSet<AssetStateEventEntity> AssetStateEvents => Set<AssetStateEventEntity>();
+    public DbSet<AssetTransferEntity> AssetTransfers => Set<AssetTransferEntity>();
+    public DbSet<AssetLocationPeriodEntity> AssetLocationPeriods => Set<AssetLocationPeriodEntity>();
+    public DbSet<AssetIdentifierAliasEntity> AssetIdentifierAliases => Set<AssetIdentifierAliasEntity>();
     public DbSet<DocumentTypeEntity> DocumentTypes => Set<DocumentTypeEntity>();
     public DbSet<DocumentEntity> Documents => Set<DocumentEntity>();
     public DbSet<DocumentVersionEntity> DocumentVersions => Set<DocumentVersionEntity>();
@@ -55,6 +60,7 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<WorkOrderSignatureEntity> WorkOrderSignatures => Set<WorkOrderSignatureEntity>();
     public DbSet<WorkOrderStatusHistoryEntity> WorkOrderStatusHistory => Set<WorkOrderStatusHistoryEntity>();
     public DbSet<DocumentWorkOrderEntity> DocumentWorkOrders => Set<DocumentWorkOrderEntity>();
+    public DbSet<DocumentaryWorkOrderRequirementEntity> DocumentaryWorkOrderRequirements => Set<DocumentaryWorkOrderRequirementEntity>();
     public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
     public DbSet<InventoryCatalogEntity> InventoryCatalogs => Set<InventoryCatalogEntity>();
     public DbSet<WarehouseEntity> Warehouses => Set<WarehouseEntity>();

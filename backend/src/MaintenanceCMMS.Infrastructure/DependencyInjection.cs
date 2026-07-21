@@ -124,6 +124,8 @@ public static class DependencyInjection
         services.AddScoped<IWorkNotificationService, WorkNotificationService>();
         services.AddScoped<IWorkOrderService, WorkOrderService>();
         services.AddScoped<IDocumentService, DocumentService>();
+        services.AddScoped<IDocumentRequirementMatrixService, DocumentRequirementMatrixService>();
+        services.AddScoped<IDocumentaryWorkOrderService, DocumentaryWorkOrderService>();
         services.AddScoped<IAlertService, AlertService>();
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IPdfService, PdfService>();

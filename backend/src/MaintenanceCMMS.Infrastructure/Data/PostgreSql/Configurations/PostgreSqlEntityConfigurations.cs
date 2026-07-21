@@ -156,6 +156,7 @@ public sealed class AssetOperationalStateConfiguration : IEntityTypeConfiguratio
         builder.ConfigureBase();
         builder.Property(entity => entity.Code).HasColumnName("codigo").HasMaxLength(80).IsRequired();
         builder.Property(entity => entity.Name).HasColumnName("nombre").HasMaxLength(160).IsRequired();
+        builder.Property(entity => entity.Severity).HasColumnName("severidad").IsRequired();
         builder.Property(entity => entity.IsActive).HasColumnName("activo").IsRequired();
         builder.HasIndex(entity => entity.Code).IsUnique();
     }
@@ -205,6 +206,8 @@ public sealed class AssetStateEventConfiguration : IEntityTypeConfiguration<Asse
         builder.Property(entity => entity.OccurredAtUtc).HasColumnName("fecha_evento_utc").HasColumnType("timestamptz");
         builder.Property(entity => entity.UserId).HasColumnName("usuario_id").HasMaxLength(120).IsRequired();
         builder.Property(entity => entity.Reason).HasColumnName("motivo").HasMaxLength(500).IsRequired();
+        builder.Property(entity => entity.ReferenceType).HasColumnName("tipo_antecedente").HasMaxLength(80);
+        builder.Property(entity => entity.ReferenceId).HasColumnName("antecedente_id").HasMaxLength(240);
         builder.HasOne(entity => entity.Asset).WithMany().HasForeignKey(entity => entity.AssetId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.PreviousState).WithMany().HasForeignKey(entity => entity.PreviousStateId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.NewState).WithMany().HasForeignKey(entity => entity.NewStateId).OnDelete(DeleteBehavior.Restrict);
@@ -293,7 +296,21 @@ public sealed class DocumentVersionConfiguration : IEntityTypeConfiguration<Docu
         builder.Property(entity => entity.Observations).HasColumnName("observaciones").HasMaxLength(1000);
         builder.Property(entity => entity.IsCurrent).HasColumnName("vigente");
         builder.Property(entity => entity.Status).HasColumnName("estado").HasMaxLength(40).IsRequired();
+        builder.Property(entity => entity.IssueDate).HasColumnName("fecha_emision");
+        builder.Property(entity => entity.ExpiresOn).HasColumnName("fecha_vencimiento");
+        builder.Property(entity => entity.ValidationStatus).HasColumnName("estado_validacion").HasMaxLength(40).IsRequired();
+        builder.Property(entity => entity.ValidatedByUserId).HasColumnName("validado_por_usuario_id").HasMaxLength(120);
+        builder.Property(entity => entity.ValidatedAtUtc).HasColumnName("validado_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.RejectedByUserId).HasColumnName("rechazado_por_usuario_id").HasMaxLength(120);
+        builder.Property(entity => entity.RejectedAtUtc).HasColumnName("rechazado_utc").HasColumnType("timestamptz");
+        builder.Property(entity => entity.RejectReason).HasColumnName("motivo_rechazo").HasMaxLength(500);
+        builder.Property(entity => entity.ReplacesVersionId).HasColumnName("reemplaza_version_id");
+        builder.Property(entity => entity.CorrectionResponsibleUserId).HasColumnName("responsable_correccion_usuario_id").HasMaxLength(120);
+        builder.Property(entity => entity.CorrectionStatus).HasColumnName("estado_correccion").HasMaxLength(40);
+        builder.Property(entity => entity.CorrectionObservation).HasColumnName("observacion_correccion").HasMaxLength(1000);
+        builder.Property(entity => entity.CorrectionCycleId).HasColumnName("ciclo_correccion_id");
         builder.HasOne(entity => entity.Document).WithMany(document => document.Versions).HasForeignKey(entity => entity.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.ReplacesVersion).WithMany().HasForeignKey(entity => entity.ReplacesVersionId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.File).WithMany().HasForeignKey(entity => entity.FileId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(entity => new { entity.DocumentId, entity.VersionNumber }).IsUnique();
         builder.HasIndex(entity => new { entity.DocumentId, entity.IsCurrent })

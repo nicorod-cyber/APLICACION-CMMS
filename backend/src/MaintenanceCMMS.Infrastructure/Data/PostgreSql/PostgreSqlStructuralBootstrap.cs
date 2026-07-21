@@ -40,7 +40,15 @@ public sealed class PostgreSqlStructuralBootstrap : IPostgreSqlStructuralBootstr
         await EnsureWorkCatalogsAsync(ct);
         await EnsureInventoryCatalogsAsync(ct);
         await EnsureAdministratorAsync(roles, ct);
-        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException exception)
+        {
+            var entries = string.Join(", ", exception.Entries.Select(entry => $"{entry.Metadata.ClrType.Name}:{entry.State}:id={entry.Property("Id").CurrentValue}:xmin={entry.Property("Version").OriginalValue}:modified={string.Join("|", entry.Properties.Where(property => property.IsModified).Select(property => property.Metadata.Name))}"));
+            throw new DbUpdateConcurrencyException($"El bootstrap estructural encontro concurrencia en: {entries}.", exception);
+        }
         await transaction.CommitAsync(ct);
     }
 
@@ -67,6 +75,7 @@ public sealed class PostgreSqlStructuralBootstrap : IPostgreSqlStructuralBootstr
                 _db.Roles.Add(role);
                 rolesByCode.Add(role.Code, role);
             }
+            var desiredPermissions = definition.Permissions.ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var permissionCode in definition.Permissions)
             {
                 if (!permissionsByCode.TryGetValue(permissionCode, out var permission))
@@ -75,8 +84,25 @@ public sealed class PostgreSqlStructuralBootstrap : IPostgreSqlStructuralBootstr
                     _db.Permissions.Add(permission);
                     permissionsByCode.Add(permission.Code, permission);
                 }
-                if (!role.Permissions.Any(item => string.Equals(item.Permission.Code, permissionCode, StringComparison.OrdinalIgnoreCase)))
-                    role.Permissions.Add(new RolePermissionEntity { Role = role, Permission = permission, IsActive = true });
+
+                var relation = role.Permissions.FirstOrDefault(item => string.Equals(item.Permission.Code, permissionCode, StringComparison.OrdinalIgnoreCase));
+                if (relation is null)
+                {
+                    relation = new RolePermissionEntity { Role = role, Permission = permission, IsActive = true };
+                    role.Permissions.Add(relation);
+                    _db.RolePermissions.Add(relation);
+                }
+                else if (!relation.IsActive)
+                {
+                    relation.IsActive = true;
+                    relation.UpdatedAtUtc = DateTimeOffset.UtcNow;
+                }
+            }
+
+            foreach (var staleRelation in role.Permissions.Where(item => item.IsActive && !desiredPermissions.Contains(item.Permission.Code)))
+            {
+                staleRelation.IsActive = false;
+                staleRelation.UpdatedAtUtc = DateTimeOffset.UtcNow;
             }
         }
         return rolesByCode;

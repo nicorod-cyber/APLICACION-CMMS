@@ -198,7 +198,12 @@ public sealed class DocumentService : IDocumentService
                 UploadedByUserId = user.UserId,
                 Observations = request.Reason,
                 IsCurrent = true,
-                Status = "vigente"
+                Status = "vigente",
+                IssueDate = request.FechaEmision,
+                ExpiresOn = request.FechaVencimiento,
+                ValidationStatus = DocumentLifecycleStatus.PendienteValidacion.ToString(),
+                CorrectionResponsibleUserId = user.UserId,
+                CorrectionStatus = "PENDIENTE_REVISION"
             });
         }
 
@@ -282,10 +287,20 @@ public sealed class DocumentService : IDocumentService
             throw new DomainException("No se puede validar un documento sin archivo o enlace.");
         }
 
+        var currentVersion = document.Versions.Single(version => version.IsCurrent);
+        if (!string.Equals(currentVersion.ValidationStatus, DocumentLifecycleStatus.PendienteValidacion.ToString(), StringComparison.OrdinalIgnoreCase)) throw new DomainException("Solo una version pendiente de validacion puede ser validada.");
         var previous = Serialize(document);
+        var validatedAt = DateTimeOffset.UtcNow;
         document.Status = DocumentLifecycleStatus.Vigente.ToString();
         document.ValidatedByUserId = user.UserId;
-        document.ValidatedAtUtc = DateTimeOffset.UtcNow;
+        document.ValidatedAtUtc = validatedAt;
+        currentVersion.ValidationStatus = DocumentLifecycleStatus.Vigente.ToString();
+        currentVersion.ValidatedByUserId = user.UserId;
+        currentVersion.ValidatedAtUtc = validatedAt;
+        currentVersion.RejectedByUserId = null;
+        currentVersion.RejectedAtUtc = null;
+        currentVersion.RejectReason = null;
+        currentVersion.CorrectionStatus = "CERRADO_VALIDADO";
         document.RejectedByUserId = null;
         document.RejectedAtUtc = null;
         document.RejectReason = null;
@@ -316,11 +331,22 @@ public sealed class DocumentService : IDocumentService
 
         var response = ToDocumentResponse(document);
         EnsureCanViewDocument(document, user);
+        var currentVersion = document.Versions.SingleOrDefault(version => version.IsCurrent) ?? throw new DomainException("No existe una version vigente para rechazar.");
+        if (!string.Equals(currentVersion.ValidationStatus, DocumentLifecycleStatus.PendienteValidacion.ToString(), StringComparison.OrdinalIgnoreCase)) throw new DomainException("Solo una version pendiente de validacion puede ser rechazada.");
         var previous = Serialize(document);
+        var rejectedAt = DateTimeOffset.UtcNow;
         document.Status = DocumentLifecycleStatus.Rechazado.ToString();
         document.RejectedByUserId = user.UserId;
-        document.RejectedAtUtc = DateTimeOffset.UtcNow;
+        document.RejectedAtUtc = rejectedAt;
         document.RejectReason = request.Reason;
+        currentVersion.ValidationStatus = DocumentLifecycleStatus.Rechazado.ToString();
+        currentVersion.RejectedByUserId = user.UserId;
+        currentVersion.RejectedAtUtc = rejectedAt;
+        currentVersion.RejectReason = request.Reason;
+        currentVersion.CorrectionResponsibleUserId = currentVersion.UploadedByUserId;
+        currentVersion.CorrectionStatus = "OBSERVADO";
+        currentVersion.CorrectionObservation = request.Reason;
+        currentVersion.CorrectionCycleId ??= Guid.NewGuid();
         document.UpdatedAtUtc = DateTimeOffset.UtcNow;
         document.UpdatedByUserId = user.UserId;
         document.ChangeReason = request.Reason;
@@ -357,6 +383,9 @@ public sealed class DocumentService : IDocumentService
             : DocumentLifecycleStatus.PendienteCarga.ToString();
         document.ValidatedAtUtc = null;
         document.ValidatedByUserId = null;
+        document.RejectedAtUtc = null;
+        document.RejectedByUserId = null;
+        document.RejectReason = null;
         document.ExpiryDateValidated = false;
         document.UpdatedAtUtc = DateTimeOffset.UtcNow;
         document.UpdatedByUserId = user.UserId;
@@ -399,7 +428,20 @@ public sealed class DocumentService : IDocumentService
                 version.UploadedAtUtc,
                 version.UploadedByUserId,
                 version.Observations,
-                version.IsCurrent))
+                version.IsCurrent,
+                version.IssueDate,
+                version.ExpiresOn,
+                version.ValidationStatus,
+                version.ValidatedByUserId,
+                version.ValidatedAtUtc,
+                version.RejectedByUserId,
+                version.RejectedAtUtc,
+                version.RejectReason,
+                version.ReplacesVersionId?.ToString("D"),
+                version.CorrectionResponsibleUserId,
+                version.CorrectionStatus,
+                version.CorrectionObservation,
+                version.CorrectionCycleId?.ToString("D")))
             .ToArray();
     }
 
@@ -766,11 +808,13 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        var replacedVersion = document.Versions.SingleOrDefault(version => version.IsCurrent);
         foreach (var version in document.Versions.Where(version => version.IsCurrent))
         {
             version.IsCurrent = false;
             version.Status = "historico";
             version.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            if (string.Equals(version.ValidationStatus, DocumentLifecycleStatus.Rechazado.ToString(), StringComparison.OrdinalIgnoreCase)) version.CorrectionStatus = "CORREGIDO_NUEVA_VERSION";
         }
 
         var file = CreateFile(fileKey, sharePointUrl, originalName, mimeType, sizeBytes, checksum, user);
@@ -788,7 +832,14 @@ public sealed class DocumentService : IDocumentService
             UploadedByUserId = user.UserId,
             Observations = observations,
             IsCurrent = true,
-            Status = "vigente"
+            Status = "vigente",
+            IssueDate = document.IssueDate,
+            ExpiresOn = document.ExpiresOn,
+            ValidationStatus = DocumentLifecycleStatus.PendienteValidacion.ToString(),
+            ReplacesVersionId = replacedVersion?.Id,
+            CorrectionResponsibleUserId = user.UserId,
+            CorrectionStatus = "PENDIENTE_REVISION",
+            CorrectionCycleId = replacedVersion?.CorrectionCycleId ?? Guid.NewGuid()
         });
 
         await RecordAuditAsync(user, "document.version.created", document.Id.ToString("D"), null, Serialize(file), observations ?? "Nueva version documental", cancellationToken);
@@ -859,8 +910,9 @@ public sealed class DocumentService : IDocumentService
         var entityType = activeAssets.Length > 0 ? DocumentEntityType.Activo : activeWorkOrders.Length > 0 ? DocumentEntityType.OT : DocumentEntityType.Faena;
         var entityCodes = activeAssets.Length > 0 ? activeAssets : activeWorkOrders.Length > 0 ? activeWorkOrders : activeFaenas;
         var rawStatus = ParseLifecycle(entity.Status);
-        var effectiveStatus = ResolveStatus(rawStatus, entity.ExpiresOn, entity.DocumentType.AlertDays, currentVersion is not null);
-        var blocksNow = entity.BlocksAvailability && effectiveStatus == DocumentLifecycleStatus.Vencido;
+        var compliance = DocumentComplianceCalculator.Evaluate(rawStatus.ToString(), currentVersion?.ExpiresOn ?? entity.ExpiresOn, entity.DocumentType.AlertDays, currentVersion is not null, entity.BlocksAvailability);
+        var effectiveStatus = compliance.Status;
+        var blocksNow = compliance.BlocksAvailability;
 
         return new DocumentResponse(
             entity.Id.ToString("D"),
@@ -868,8 +920,8 @@ public sealed class DocumentService : IDocumentService
             entityCodes.FirstOrDefault() ?? string.Empty,
             entity.DocumentType.Code,
             effectiveStatus,
-            entity.IssueDate,
-            entity.ExpiresOn,
+            currentVersion?.IssueDate ?? entity.IssueDate,
+            currentVersion?.ExpiresOn ?? entity.ExpiresOn,
             currentVersion?.File.FileKey,
             currentVersion?.File.LogicalUri,
             entity.IsCritical,
@@ -889,52 +941,15 @@ public sealed class DocumentService : IDocumentService
             entity.AnnulReason,
             currentVersion?.UploadedAtUtc ?? entity.CreatedAtUtc,
             currentVersion?.UploadedByUserId ?? entity.CreatedByUserId,
-            CalculateDaysToExpire(entity.ExpiresOn),
+            compliance.DaysToExpire,
             blocksNow,
             entityCodes,
             currentVersion?.VersionNumber,
             currentVersion?.FileId.ToString("D"));
     }
 
-    private static DocumentLifecycleStatus ResolveStatus(
-        DocumentLifecycleStatus rawStatus,
-        DateOnly? expiresOn,
-        int alertDays,
-        bool hasCurrentFile)
-    {
-        if (rawStatus is DocumentLifecycleStatus.Rechazado or DocumentLifecycleStatus.Reemplazado or DocumentLifecycleStatus.Anulado)
-        {
-            return rawStatus;
-        }
-
-        if (!hasCurrentFile)
-        {
-            return DocumentLifecycleStatus.PendienteCarga;
-        }
-
-        if (rawStatus == DocumentLifecycleStatus.PendienteValidacion)
-        {
-            return DocumentLifecycleStatus.PendienteValidacion;
-        }
-
-        if (!expiresOn.HasValue)
-        {
-            return DocumentLifecycleStatus.Vigente;
-        }
-
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        if (expiresOn.Value < today)
-        {
-            return DocumentLifecycleStatus.Vencido;
-        }
-
-        if (expiresOn.Value <= today.AddDays(Math.Max(0, alertDays)))
-        {
-            return DocumentLifecycleStatus.PorVencer;
-        }
-
-        return DocumentLifecycleStatus.Vigente;
-    }
+    private static DocumentLifecycleStatus ResolveStatus(DocumentLifecycleStatus rawStatus, DateOnly? expiresOn, int alertDays, bool hasCurrentFile) =>
+        DocumentComplianceCalculator.Evaluate(rawStatus.ToString(), expiresOn, alertDays, hasCurrentFile, false).Status;
 
     private static bool MatchesEntity(DocumentEntity document, DocumentQuery query, UserAccessContext user)
     {
@@ -1192,7 +1207,3 @@ public sealed class DocumentService : IDocumentService
             : DocumentLifecycleStatus.PendienteCarga;
     }
 }
-
-
-
-

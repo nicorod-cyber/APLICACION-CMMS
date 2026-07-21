@@ -495,7 +495,8 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
         foreach (var row in rows)
         {
             var code = Code(row.Values, "Codigo");
-            if (!existing.TryGetValue(code, out var entity))
+            var isNew = !existing.TryGetValue(code, out var entity);
+            if (isNew)
             {
                 entity = new AssetEntity { Code = code };
                 Db.Assets.Add(entity);
@@ -509,13 +510,23 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
                 if (!faenas.TryGetValue(faenaCode, out faena) || faena.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene ubicacion tecnica configurada.");
             }
 
-            entity.Name = Value(row.Values, "Nombre");
-            entity.AssetTypeId = types[Code(row.Values, "TipoActivoCodigo")].Id;
-            entity.OperationalStateId = states[Code(row.Values, "EstadoOperacionalCodigo")].Id;
-            entity.FaenaId = faena?.Id;
+            var requestedTypeId = types[Code(row.Values, "TipoActivoCodigo")].Id;
+            var requestedStateId = states[Code(row.Values, "EstadoOperacionalCodigo")].Id;
+            if (!isNew && entity!.OperationalStateId != requestedStateId) throw new DomainException($"Fila {row.RowNumber}: el estado operacional no se actualiza por importacion; use un evento de transicion.");
+            if (!isNew && entity!.FaenaId != faena?.Id) throw new DomainException($"Fila {row.RowNumber}: la faena no se actualiza por importacion; use el flujo de traslado.");
+            entity!.Name = Value(row.Values, "Nombre");
+            entity.AssetTypeId = requestedTypeId;
+            if (isNew) { entity.OperationalStateId = requestedStateId; entity.FaenaId = faena?.Id; Db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = entity.Id, FaenaId = faena?.Id, ValidFromUtc = entity.CreatedAtUtc }); }
             entity.Brand = Empty(Value(row.Values, "Marca"));
             entity.Model = Empty(Value(row.Values, "Modelo"));
-            entity.SerialNumber = Empty(Value(row.Values, "NumeroSerie"));
+            var nextSerial = Empty(Value(row.Values, "NumeroSerie"));
+            if (!string.Equals(entity.SerialNumber, nextSerial, StringComparison.OrdinalIgnoreCase))
+            {
+                var currentAliases = await Db.AssetIdentifierAliases.Where(x => x.AssetId == entity.Id && x.IdentifierType == "NUMERO_SERIE" && x.ValidToUtc == null).ToListAsync(ct);
+                foreach (var alias in currentAliases) alias.ValidToUtc = DateTimeOffset.UtcNow;
+                if (nextSerial is not null) Db.AssetIdentifierAliases.Add(new AssetIdentifierAliasEntity { AssetId = entity.Id, IdentifierType = "NUMERO_SERIE", ScopeKey = $"SERIAL:{requestedTypeId:N}", Value = nextSerial, NormalizedValue = nextSerial.ToUpperInvariant(), ValidFromUtc = DateTimeOffset.UtcNow });
+            }
+            entity.SerialNumber = nextSerial;
             var criticality = Empty(Value(row.Values, "Criticidad"));
             var canonicalCriticality = criticality is null ? null : criticalities.SingleOrDefault(item => string.Equals(item.Code, criticality, StringComparison.OrdinalIgnoreCase) || string.Equals(item.Name, criticality, StringComparison.OrdinalIgnoreCase))?.Name;
             if (criticality is not null && canonicalCriticality is null) throw new DomainException($"Fila {row.RowNumber}: la criticidad '{criticality}' no existe en el catalogo WorkNotificationCriticality.");
