@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MaintenanceCMMS.Application.Assets;
@@ -276,6 +276,19 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         if (current is not null) current.ValidToUtc = r.FechaEfectivaUtc;
         _db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = asset.Id, FaenaId = destination.Id, ValidFromUtc = r.FechaEfectivaUtc, TransferId = transfer.Id });
         var origin = asset.Faena?.Code; asset.FaenaId = destination.Id; asset.Faena = destination; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        if (Same(destination.Code, "FAE_EDB"))
+        {
+            var decommissioned = await _db.AssetOperationalStates.SingleAsync(x => x.Code == AssetOperationalPolicy.DecommissionedStateCode && x.IsActive, ct);
+            var previous = asset.OperationalState;
+            if (!Same(previous.Code, decommissioned.Code))
+            {
+                asset.OperationalStateId = decommissioned.Id; asset.OperationalState = decommissioned;
+                asset.DecommissioningDate ??= DateOnly.FromDateTime(r.FechaEfectivaUtc.UtcDateTime);
+                var reason = $"Baja automática por traslado a {destination.Code}: {transfer.Reason}";
+                _db.AssetStateEvents.Add(new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = decommissioned.Id, OccurredAtUtc = r.FechaEfectivaUtc, UserId = u.UserId, Reason = reason, ReferenceType = "TRANSFER", ReferenceId = transfer.Id.ToString("D"), ReferenceText = null });
+                await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, asset.Id, reason, ct);
+            }
+        }
         return new(transfer.Id.ToString("D"), asset.Code, origin, destination.Code, transfer.EffectiveAtUtc, transfer.Reason, transfer.UserId, transfer.RegisteredAtUtc, transfer.Observations, unit?.Code);
     }
 
@@ -325,10 +338,12 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
     private async Task<(AssetTypeEntity Type, EquipmentFamilyEntity? Family, FaenaEntity? Faena, AssetOperationalStateEntity State)> ReferencesAsync(string type, string? family, string? faena, string state, UserAccessContext u, CancellationToken ct)
     {
-        Require(type, "TipoActivoCodigo"); Require(state, "EstadoOperacionalCodigo"); var typeEntity = await _db.AssetTypes.SingleOrDefaultAsync(x => x.Code == Code(type) && x.IsActive, ct) ?? throw new DomainException("Tipo de activo inexistente.");
+        Require(type, "TipoActivoCodigo"); var typeEntity = await _db.AssetTypes.SingleOrDefaultAsync(x => x.Code == Code(type) && x.IsActive, ct) ?? throw new DomainException("Tipo de activo inexistente.");
         var familyEntity = family is null or "" ? null : await _db.EquipmentFamilies.SingleOrDefaultAsync(x => x.Code == Code(family) && x.IsActive, ct) ?? throw new DomainException("Familia inexistente."); if (familyEntity is not null && familyEntity.AssetTypeId != typeEntity.Id) throw new DomainException("La familia no pertenece al tipo indicado.");
         var faenaEntity = faena is null or "" ? null : await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(faena) && x.IsActive, ct) ?? throw new DomainException("Faena inexistente."); if (faenaEntity is not null && !_authorization.CanViewFaena(u, faenaEntity.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena indicada."); if (faenaEntity is not null && faenaEntity.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene una ubicacion tecnica configurada.");
-        var stateEntity = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(state) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente."); return (typeEntity, familyEntity, faenaEntity, stateEntity);
+        var effectiveState = Same(faenaEntity?.Code, "FAE_EDB") ? AssetOperationalPolicy.DecommissionedStateCode : state;
+        Require(effectiveState, "EstadoOperacionalCodigo");
+        var stateEntity = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(effectiveState) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente."); return (typeEntity, familyEntity, faenaEntity, stateEntity);
     }
     private static AssetAttributeDefinitionResponse ToDefinition(AssetAttributeDefinitionEntity x) => new(x.Code, x.Name, x.DataType, x.Unit, x.IsRequired, x.IsIdentifier, x.IsUnique, x.IsSearchable, x.IsFilterable, x.ShowInList, x.MinimumValue, x.MaximumValue, x.ValidationPattern, x.OptionsJson, x.DisplayGroup, x.SortOrder);
     private async Task<IReadOnlyCollection<AssetAttributeDefinitionEntity>> DefinitionsAsync(Guid typeId, Guid? familyId, CancellationToken ct) => (await _db.AssetAttributeDefinitions.Where(x => x.IsActive && x.AssetTypeId == typeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == familyId)).ToListAsync(ct)).GroupBy(x => x.Code, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderByDescending(x => x.EquipmentFamilyId.HasValue).First()).OrderBy(x => x.SortOrder).ToArray();
@@ -432,7 +447,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     private static bool Option(string? json, string value) { try { using var d = JsonDocument.Parse(json ?? "[]"); return d.RootElement.ValueKind == JsonValueKind.Array && d.RootElement.EnumerateArray().Any(x => string.Equals(x.ValueKind == JsonValueKind.String ? x.GetString() : x.ToString(), value, StringComparison.OrdinalIgnoreCase)); } catch { return false; } }
     private static string? Measurement(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var type = Code(value); if (!Measurements.Contains(type)) throw new DomainException("TipoMedicionUso solo permite HOROMETRO, KILOMETRAJE o null."); return type; }
     private static string Source(string value) { var source = Code(value); if (!Sources.Contains(source)) throw new DomainException("Origen de lectura invalido."); return source; }
-    private static void ValidateDates(short? year, DateOnly? start, DateOnly? end) { if (year is { } y && (y < 1900 || y > DateTime.UtcNow.Year + 2)) throw new DomainException("AÃ±o de fabricacion invalido."); if (start is { } a && end is { } b && b < a) throw new DomainException("La fecha de baja no puede ser anterior a la puesta en servicio."); }
+    private static void ValidateDates(short? year, DateOnly? start, DateOnly? end) { if (year is { } y && (y < 1900 || y > DateTime.UtcNow.Year + 2)) throw new DomainException("Año de fabricacion invalido."); if (start is { } a && end is { } b && b < a) throw new DomainException("La fecha de baja no puede ser anterior a la puesta en servicio."); }
     private void RegisterReadings(UserAccessContext u)
     {
         if (u.Permissions.Contains(AuthPermissions.RegisterAssetReadings, StringComparer.OrdinalIgnoreCase) || _authorization.CanAdminister(u)) return;

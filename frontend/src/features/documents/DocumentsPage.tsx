@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Ban,
   CheckCircle2,
@@ -577,7 +577,7 @@ export function DocumentsPage() {
           module: "Documents",
           entityType: documentForm.entidadTipo,
           entityId: documentForm.entidadCodigo,
-          fileName: documentForm.archivoKey || `${documentForm.tipoDocumento || "documento"}.url`,
+          fileName: `${documentForm.tipoDocumento || "documento"}.url`,
           url: documentForm.sharePointUrl,
           purpose: "Document",
           faenaCodigo: context.faenaCodigo || null,
@@ -829,7 +829,7 @@ function DocumentsTable({
                       <a className="font-medium text-teal-700 hover:underline dark:text-teal-300" href={document.sharePointUrl} target="_blank" rel="noreferrer">
                         SharePoint
                       </a>
-                    ) : document.archivoKey ?? "-"}
+                    ) : "Archivo disponible"}
                   </td>
                   <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{document.bloqueaDisponibilidadActual ? "Si" : "No"}</td>
                 </tr>
@@ -915,7 +915,6 @@ function DocumentEditor({
           <SelectField label="Tipo" value={form.tipoDocumento} options={types.map((type) => type.codigo)} onChange={(value) => onForm({ ...form, tipoDocumento: value })} />
           <Field label="Fecha emision" type="date" value={form.fechaEmision} onChange={(value) => onForm({ ...form, fechaEmision: value })} />
           <Field label="Fecha vencimiento" type="date" value={form.fechaVencimiento} onChange={(value) => onForm({ ...form, fechaVencimiento: value })} />
-          <Field label="Archivo key" value={form.archivoKey} onChange={(value) => onForm({ ...form, archivoKey: value })} />
           <div className="md:col-span-2">
             <Field label="SharePoint URL" value={form.sharePointUrl} onChange={(value) => onForm({ ...form, sharePointUrl: value })} />
           </div>
@@ -930,7 +929,7 @@ function DocumentEditor({
                 </span>
                 <span className="text-xs text-slate-500 dark:text-slate-400">{storageInfo?.provider ?? "SharePoint"}</span>
               </div>
-              <p className="mt-2 break-words text-sm text-slate-700 dark:text-slate-200">{form.archivoKey || storageInfo?.rootPath || "-"}</p>
+              <p className="mt-2 break-words text-sm text-slate-700 dark:text-slate-200">{form.archivoKey ? "Archivo cargado correctamente." : "Sin archivo cargado."}</p>
             </div>
             <div className="flex flex-wrap gap-2">
               {form.sharePointUrl ? (
@@ -1018,7 +1017,7 @@ function DocumentEditor({
                 {version.validadoPor ? <p>Validada por {version.validadoPor} el {version.validadoEnUtc ? new Date(version.validadoEnUtc).toLocaleString() : "-"}</p> : null}
                 {version.rechazadoPor ? <p className="text-red-700">Rechazada por {version.rechazadoPor}: {version.motivoRechazo ?? "sin motivo"}</p> : null}
                 {version.responsableCorreccion ? <p>Correccion: {version.estadoCorreccion ?? "pendiente"} / responsable {version.responsableCorreccion}</p> : null}
-                <p className="truncate text-slate-500">Archivo: {version.archivoKey}</p>
+                {version.sharePointUrl ? <a className="text-teal-700 hover:underline" href={version.sharePointUrl} target="_blank" rel="noreferrer">Abrir documento</a> : null}
               </article>
             ))}
             {versions.length === 0 ? <p className="text-sm text-slate-500">Sin versiones registradas.</p> : null}

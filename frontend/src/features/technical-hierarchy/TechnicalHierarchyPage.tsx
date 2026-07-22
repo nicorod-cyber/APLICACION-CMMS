@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -472,8 +472,8 @@ export function TechnicalHierarchyPage() {
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <Field disabled={!isCreating} label="Codigo" value={form.codigo} onChange={(value) => setForm({ ...form, codigo: value })} />
               <Field label="Nombre" value={form.nombre} onChange={(value) => setForm({ ...form, nombre: value })} />
-              <SelectField label="Nivel" disabled={!isCreating} value={form.nivel} options={levelOptions} onChange={(value) => setForm({ ...form, nivel: value as TechnicalHierarchyLevel })} />
-              <Field label="Codigo padre" value={form.codigoPadre} onChange={(value) => setForm({ ...form, codigoPadre: value })} />
+              <SelectField label="Nivel" disabled={!isCreating} value={form.nivel} options={levelOptions} onChange={(value) => setForm({ ...form, nivel: value as TechnicalHierarchyLevel, codigoPadre: value === "Sistema" ? "" : form.codigoPadre })} />
+              <Field disabled={form.nivel === "Sistema"} label="Codigo padre" value={form.nivel === "Sistema" ? "" : form.codigoPadre} onChange={(value) => setForm({ ...form, codigoPadre: value })} />
               <FaenaSelect
                 emptyLabel="Selecciona faena"
                 includeInactive={false}
@@ -875,7 +875,7 @@ function toPayload(form: FormState) {
     codigo: form.codigo,
     nombre: form.nombre,
     nivel: form.nivel,
-    codigoPadre: emptyToNull(form.codigoPadre),
+    codigoPadre: form.nivel === "Sistema" ? null : emptyToNull(form.codigoPadre),
     faenaCodigo: emptyToNull(form.faenaCodigo),
     familiasEquipo: parseList(form.familiasEquipo),
     activosAsignados: parseList(form.activosAsignados),

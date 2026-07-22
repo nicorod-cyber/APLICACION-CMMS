@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
 using MaintenanceCMMS.Api;
@@ -643,11 +643,11 @@ api.MapGet("/maintenance-targets", async (
         var targetScope = MaintenanceTargetScope.Operational;
         if (!string.IsNullOrWhiteSpace(tipo) && !Enum.TryParse<MaintenanceTargetType>(tipo, true, out targetType))
         {
-            return Results.BadRequest(new { message = "El parÃ¡metro tipo no es vÃ¡lido." });
+            return Results.BadRequest(new { message = "El parámetro tipo no es válido." });
         }
         if (!string.IsNullOrWhiteSpace(scope) && !Enum.TryParse<MaintenanceTargetScope>(scope, true, out targetScope))
         {
-            return Results.BadRequest(new { message = "El parÃ¡metro scope no es vÃ¡lido." });
+            return Results.BadRequest(new { message = "El parámetro scope no es válido." });
         }
         try
         {

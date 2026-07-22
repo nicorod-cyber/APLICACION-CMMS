@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+﻿import { useEffect, useId, useMemo, useState } from "react";
 import { apiFetch } from "../auth/authStore";
 
 export type FaenaRecord = {
@@ -40,6 +40,7 @@ type FaenaSelectProps = {
   emptyLabel?: string;
   includeInactive?: boolean;
   disabled?: boolean;
+  searchable?: boolean;
 };
 
 type FaenaChecklistProps = {
@@ -101,43 +102,32 @@ export function useFaenas(includeInactive = true): UseFaenasResult {
 }
 
 export function FaenaSelect({
-  label = "Faena",
-  value,
-  onChange,
-  includeEmpty = true,
-  emptyLabel = "Todas",
-  includeInactive = true,
-  disabled
+  label = "Faena", value, onChange, includeEmpty = true, emptyLabel = "Todas", includeInactive = true, disabled, searchable = false
 }: FaenaSelectProps) {
   const { faenas, isLoading, error } = useFaenas(includeInactive);
+  const [search, setSearch] = useState("");
   const generatedId = useId();
   const id = `faena-select-${label.toLowerCase().replace(/\s+/g, "-")}-${generatedId}`;
+  const normalize = (text: string) => text.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase();
+  const filtered = useMemo(() => faenas.filter((faena) => !searchable || normalize(faena.nombre || faena.codigo).includes(normalize(search))), [faenas, search, searchable]);
+  const choose = (code: string) => {
+    onChange(code, faenas.find((faena) => faena.codigo === code));
+    if (code) setSearch("");
+  };
 
   return (
     <label className="block text-sm font-medium text-slate-700 dark:text-slate-200" htmlFor={id}>
       {label}
-      <select
-        id={id}
-        className="mt-2 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-900"
-        disabled={disabled || isLoading}
-        value={value}
-        onChange={(event) => {
-          const selectedValue = event.target.value;
-          onChange(selectedValue, faenas.find((faena) => faena.codigo === selectedValue));
-        }}
-      >
+      {searchable ? <input id={`${id}-search`} className="mt-2 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950" disabled={disabled || isLoading} placeholder="Buscar por nombre de faena" value={search} onChange={(event) => setSearch(event.target.value)} /> : null}
+      <select id={id} className="mt-2 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-900" disabled={disabled || isLoading} value={value} onChange={(event) => choose(event.target.value)}>
         {includeEmpty ? <option value="">{isLoading ? "Cargando faenas..." : emptyLabel}</option> : null}
-        {faenas.map((faena) => (
-          <option key={faena.codigo} value={faena.codigo} title={faena.codigo}>
-            {faena.nombre || faena.codigo}
-          </option>
-        ))}
+        {filtered.map((faena) => <option key={faena.codigo} value={faena.codigo} title={faena.codigo}>{faena.nombre || faena.codigo}</option>)}
       </select>
+      {searchable && !isLoading && search.trim() && filtered.length === 0 ? <span className="mt-1 block text-xs text-slate-500">No se encontraron faenas.</span> : null}
       {error ? <span className="mt-1 block text-xs text-red-700 dark:text-red-300">{error}</span> : null}
     </label>
   );
 }
-
 export function FaenaChecklist({ label = "Faenas", value, onChange, includeInactive = true, compact }: FaenaChecklistProps) {
   const { faenas, isLoading, error } = useFaenas(includeInactive);
   const selected = useMemo(() => new Set(value.map((item) => item.toLowerCase())), [value]);

@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+﻿import { type FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
   CalendarClock,
@@ -366,7 +366,7 @@ export function WorkOrdersPage() {
         fechaProgramada: toIsoOrNull(orderForm.fechaProgramada),
         requiereFirma: orderForm.requiereFirma
       };
-      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo fÃ­sico.");
+      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo físico.");
       const created = orderForm.preventive
         ? await apiFetch<WorkOrderDetail>("/api/work-orders/preventive", { method: "POST", body: JSON.stringify(body) })
         : await apiFetch<WorkOrderDetail>("/api/work-orders", { method: "POST", body: JSON.stringify(body) });
