@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState, type ReactNode } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Activity, AlertTriangle, Clock, Download, Gauge, Link2, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
@@ -269,11 +269,11 @@ export function AvailabilityPage() {
       if (filters.cliente) contractQuery.set("cliente", filters.cliente);
       contractQuery.set("includeInactive", "true");
 
-      const assetPath = filters.faenaCodigo ? `/api/assets?faenaCodigo=${encodeURIComponent(filters.faenaCodigo)}` : "/api/assets";
+      const assetPath = filters.faenaCodigo ? `/api/assets?faenaCodigo=${encodeURIComponent(filters.faenaCodigo)}&page=1&pageSize=100` : "/api/assets?page=1&pageSize=100";
       const [dashboardResult, contractResult, assetResult] = await Promise.all([
         apiFetch<AvailabilityDashboard>(`/api/availability/dashboard?${query}`),
         apiFetch<AvailabilityContract[]>(`/api/availability/contracts?${contractQuery}`),
-        apiFetch<AssetSummary[]>(assetPath)
+        apiFetch<{ items: AssetSummary[] }>(assetPath).then((page) => page.items)
       ]);
 
       setDashboard(dashboardResult);

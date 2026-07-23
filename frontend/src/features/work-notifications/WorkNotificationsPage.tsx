@@ -177,8 +177,8 @@ export function WorkNotificationsPage() {
 
       const [notificationResult, assetResult, unitResult] = await Promise.all([
         apiFetch<WorkNotification[]>(`/api/work-notifications?${query}`),
-        apiFetch<AssetSummary[]>("/api/assets").catch(() => [] as AssetSummary[]),
-        apiFetch<OperationalUnitSummary[]>("/api/operational-units").catch(() => [] as OperationalUnitSummary[])
+        apiFetch<{ items: AssetSummary[] }>("/api/assets?page=1&pageSize=100").then((page) => page.items).catch(() => [] as AssetSummary[]),
+        apiFetch<{ items: OperationalUnitSummary[] }>("/api/operational-units?page=1&pageSize=100").then((page) => page.items).catch(() => [] as OperationalUnitSummary[])
       ]);
       setNotifications(notificationResult);
       setAssets(assetResult);

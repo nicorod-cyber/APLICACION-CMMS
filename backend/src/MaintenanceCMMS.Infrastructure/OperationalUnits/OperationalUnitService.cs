@@ -1,4 +1,5 @@
 using System.Data;
+using MaintenanceCMMS.Application.Abstractions.Pagination;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.OperationalUnits;
@@ -14,6 +15,42 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
 {
     private static readonly HashSet<string> CriticalRoleCodes = new(StringComparer.OrdinalIgnoreCase) { "FABRICA", "CHASIS" };
 
+    public async Task<PagedResponse<OperationalUnitSummary>> ListPageAsync(OperationalUnitListQuery query, UserAccessContext user, CancellationToken ct)
+    {
+        View(user);
+        if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) EnsureView(user, query.FaenaCodigo);
+        var page = Math.Max(1, query.Page);
+        var pageSize = query.PageSize is 25 or 50 or 100 ? query.PageSize : 25;
+        var canViewAll = user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) || user.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase);
+        var authorizedFaenas = user.Faenas.Select(Code).Distinct().ToArray();
+        IQueryable<OperationalUnitEntity> source = db.OperationalUnits.AsNoTracking();
+        if (!canViewAll) source = source.Where(x => x.FaenaId == null || (x.Faena != null && authorizedFaenas.Contains(x.Faena.Code)));
+        if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) source = source.Where(x => x.Faena != null && x.Faena.Code == Code(query.FaenaCodigo));
+        if (!string.IsNullOrWhiteSpace(query.Texto))
+        {
+            var term = query.Texto.Trim();
+            source = source.Where(x => EF.Functions.ILike(x.Code, "%" + term + "%") || EF.Functions.ILike(x.Name, "%" + term + "%"));
+        }
+        var total = await source.CountAsync(ct);
+        var units = await source.OrderBy(x => x.Code).ThenBy(x => x.Id).Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(x => new { x.Id, x.Code, x.Name, x.OperationalUnitTypeId, TypeCode = x.OperationalUnitType.Code, FaenaCode = x.Faena == null ? null : x.Faena.Code, TechnicalLocationCode = x.Faena == null || x.Faena.TechnicalLocation == null ? null : x.Faena.TechnicalLocation.Code, OperationalStateCode = x.OperationalState.Code, x.Criticality })
+            .ToListAsync(ct);
+        var unitIds = units.Select(x => x.Id).ToArray();
+        var typeIds = units.Select(x => x.OperationalUnitTypeId).Distinct().ToArray();
+        var componentCounts = await db.OperationalUnitComponents.AsNoTracking().Where(x => unitIds.Contains(x.OperationalUnitId) && x.RemovedAtUtc == null)
+            .GroupBy(x => new { x.OperationalUnitId, x.ComponentRoleId }).Select(x => new { x.Key.OperationalUnitId, x.Key.ComponentRoleId, Count = x.Count() }).ToListAsync(ct);
+        var rules = await db.OperationalUnitCompositionRules.AsNoTracking().Where(x => typeIds.Contains(x.OperationalUnitTypeId) && x.IsActive && x.IsMandatory)
+            .Select(x => new { x.OperationalUnitTypeId, x.ComponentRoleId, x.MinimumQuantity, RoleCode = x.ComponentRole.Code }).ToListAsync(ct);
+        var countByUnitAndRole = componentCounts.ToDictionary(x => (x.OperationalUnitId, x.ComponentRoleId), x => x.Count);
+        var items = units.Select(unit =>
+        {
+            var missing = rules.Where(rule => rule.OperationalUnitTypeId == unit.OperationalUnitTypeId && (!countByUnitAndRole.TryGetValue((unit.Id, rule.ComponentRoleId), out var count) || count < rule.MinimumQuantity)).Select(rule => rule.RoleCode).OrderBy(code => code).ToArray();
+            return new OperationalUnitSummary(unit.Code, unit.Name, unit.TypeCode, unit.FaenaCode, unit.TechnicalLocationCode, unit.OperationalStateCode, unit.Criticality, missing.Length == 0, missing);
+        }).ToArray();
+        var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+        return new PagedResponse<OperationalUnitSummary>(items, page, pageSize, total, totalPages, page < totalPages, page > 1);
+    }
+
     public async Task<IReadOnlyCollection<OperationalUnitResponse>> ListAsync(string? faenaCodigo, UserAccessContext user, CancellationToken ct)
     {
         View(user);
@@ -22,7 +59,6 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         foreach (var unit in units.Where(x => CanView(user, x))) result.Add(await MapAsync(unit, ct));
         return result.OrderBy(x => x.Codigo).ToArray();
     }
-
     public async Task<OperationalUnitResponse?> GetAsync(string codigo, UserAccessContext user, CancellationToken ct)
     {
         View(user);

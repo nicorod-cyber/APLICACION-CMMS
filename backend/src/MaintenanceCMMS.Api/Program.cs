@@ -1,4 +1,4 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
 using MaintenanceCMMS.Api;
@@ -694,14 +694,16 @@ assetsApi.MapGet("/", async (
         string? criticidad,
         string? estadoOperacionalCodigo,
         string? texto,
+        int? page,
+        int? pageSize,
         ClaimsPrincipal user,
         IAssetService assetService,
         CancellationToken cancellationToken) =>
     {
         try
         {
-            return Results.Ok(await assetService.ListAsync(
-                new AssetListQuery(faenaCodigo, tipoActivoCodigo, familiaEquipoCodigo, criticidad, estadoOperacionalCodigo, texto),
+            return Results.Ok(await assetService.ListPageAsync(
+                new AssetListQuery(faenaCodigo, tipoActivoCodigo, familiaEquipoCodigo, criticidad, estadoOperacionalCodigo, texto, page ?? 1, pageSize ?? 25),
                 UserAccessContext.FromClaims(user),
                 cancellationToken));
         }
@@ -935,9 +937,9 @@ assetsApi.MapGet("/{id}/availability", async (
 var operationalUnitsApi = api.MapGroup("/operational-units")
     .RequireAuthorization();
 
-operationalUnitsApi.MapGet("/", async (string? faenaCodigo, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+operationalUnitsApi.MapGet("/", async (string? faenaCodigo, string? texto, int? page, int? pageSize, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
 {
-    try { return Results.Ok(await service.ListAsync(faenaCodigo, UserAccessContext.FromClaims(user), ct)); }
+    try { return Results.Ok(await service.ListPageAsync(new OperationalUnitListQuery(faenaCodigo, texto, page ?? 1, pageSize ?? 25), UserAccessContext.FromClaims(user), ct)); }
     catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
 }).RequireAuthorization("VerUnidadesOperativas").WithName("ListOperationalUnits");
 

@@ -59,17 +59,17 @@ public sealed class PostgreSqlMigrationTests
             Assert.True(await database.ExistsAsync(sequence));
         }
 
-        database.Context.Faenas.Add(new FaenaEntity { Code = "MIG-FAE", Name = "Faena migraciÃƒÆ’Ã‚Â³n", IsActive = true });
+        database.Context.Faenas.Add(new FaenaEntity { Code = "MIG-FAE", Name = "Faena migración", IsActive = true });
         await database.Context.SaveChangesAsync();
 
         var service = new InventoryService(
             database.Context,
             new PostgreSqlAuditService(database.Context, new AuditContextAccessor()),
             new AuthorizationPolicyService());
-        await service.CreateWarehouseAsync(new CreateWarehouseRequest("MIG-BOD", "Bodega migraciÃƒÆ’Ã‚Â³n", "MIG-FAE", WarehouseType.Central), Admin, CancellationToken.None);
-        var part = await service.CreateSparePartAsync(new CreateSparePartRequest("Repuesto migraciÃƒÆ’Ã‚Â³n", "UN"), Admin, CancellationToken.None);
+        await service.CreateWarehouseAsync(new CreateWarehouseRequest("MIG-BOD", "Bodega migración", "MIG-FAE", WarehouseType.Central), Admin, CancellationToken.None);
+        var part = await service.CreateSparePartAsync(new CreateSparePartRequest("Repuesto migración", "UN"), Admin, CancellationToken.None);
         var movement = await service.RegisterMovementAsync(
-            new StockMovementRequest(StockMovementType.Reception, part.Summary.Codigo, 2, "RecepciÃƒÆ’Ã‚Â³n migraciÃƒÆ’Ã‚Â³n", BodegaCodigo: "MIG-BOD"),
+            new StockMovementRequest(StockMovementType.Reception, part.Summary.Codigo, 2, "Recepción migración", BodegaCodigo: "MIG-BOD"),
             Admin,
             CancellationToken.None);
 

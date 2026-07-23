@@ -165,6 +165,50 @@ public sealed class OperationalUnitServiceTests
         await fixture.Db.Entry(await fixture.Db.Assets.SingleAsync(asset => asset.Code == "QUADRA-1020")).ReloadAsync();
         Assert.Equal(1, await fixture.Db.OperationalUnitComponents.CountAsync(component => component.Asset.Code == "QUADRA-1020" && component.RemovedAtUtc == null));
     }
+    [Fact]
+    public async Task ListPageAsync_PaginatesAndCalculatesCompositionInBatch()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Service.CreateTypeAsync(new OperationalUnitTypeRequest("PAGE", "Paginada"), Admin, CancellationToken.None);
+        await fixture.Service.CreateRoleAsync(new OperationalUnitRoleRequest("CHASIS", "Chasis"), Admin, CancellationToken.None);
+        await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("PAGE", "CHASIS", 1, 1, true), Admin, CancellationToken.None);
+        var type = await fixture.Db.OperationalUnitTypes.SingleAsync(x => x.Code == "PAGE");
+        var faena = await fixture.Db.Faenas.SingleAsync(x => x.Code == "F001");
+        var state = await fixture.Db.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO_FAENA");
+        for (var index = 1; index <= 30; index++) fixture.Db.OperationalUnits.Add(new OperationalUnitEntity { Code = $"PAGE-{index:D3}", Name = $"Unidad paginada {index:D3}", OperationalUnitTypeId = type.Id, FaenaId = faena.Id, OperationalStateId = state.Id, BaselineOperationalStateId = state.Id });
+        await fixture.Db.SaveChangesAsync();
+
+        var first = await fixture.Service.ListPageAsync(new OperationalUnitListQuery(Texto: "PAGE", Page: 1, PageSize: 25), Admin, CancellationToken.None);
+        var second = await fixture.Service.ListPageAsync(new OperationalUnitListQuery(Texto: "PAGE", Page: 2, PageSize: 25), Admin, CancellationToken.None);
+        var restricted = new UserAccessContext("viewer-f002", [AuthRoles.FaenaViewer], [AuthPermissions.ViewOperationalUnits], ["F002"]);
+        var inaccessible = await fixture.Service.ListPageAsync(new OperationalUnitListQuery(Texto: "PAGE", Page: 1, PageSize: 25), restricted, CancellationToken.None);
+
+        Assert.Equal(30, first.TotalCount);
+        Assert.True(first.HasNextPage);
+        Assert.Equal(25, first.Items.Count);
+        Assert.Equal(5, second.Items.Count);
+        Assert.All(first.Items, item => { Assert.False(item.ComposicionCompleta); Assert.Contains("CHASIS", item.RolesFaltantes); });
+        Assert.Empty(first.Items.Select(x => x.Codigo).Intersect(second.Items.Select(x => x.Codigo)));
+        Assert.Empty(inaccessible.Items);
+
+        var counter = new DbCommandCounter();
+        var options = new DbContextOptionsBuilder<CmmsDbContext>()
+            .UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
+            .AddInterceptors(counter)
+            .Options;
+        await using var measuredDb = new CmmsDbContext(options);
+        var measuredService = new OperationalUnitService(measuredDb, new PostgreSqlAuditService(measuredDb, new AuditContextAccessor()));
+
+        counter.Reset();
+        await measuredService.ListPageAsync(new OperationalUnitListQuery(Texto: "PAGE", Page: 1, PageSize: 25), Admin, CancellationToken.None);
+        var commandsFor25 = counter.Count;
+        counter.Reset();
+        await measuredService.ListPageAsync(new OperationalUnitListQuery(Texto: "PAGE", Page: 1, PageSize: 50), Admin, CancellationToken.None);
+        var commandsFor50 = counter.Count;
+
+        Assert.Equal(4, commandsFor25);
+        Assert.Equal(commandsFor25, commandsFor50);
+    }
     private sealed record Fixture(string DatabaseName, string AdminConnectionString, CmmsDbContext Db, IOperationalUnitService Service) : IAsyncDisposable
     {
         public static async Task<Fixture> CreateAsync()

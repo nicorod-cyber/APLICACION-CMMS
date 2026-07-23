@@ -1,3 +1,4 @@
+using MaintenanceCMMS.Application.Abstractions.Pagination;
 using MaintenanceCMMS.Application.Auth;
 
 namespace MaintenanceCMMS.Application.OperationalUnits;
@@ -15,10 +16,13 @@ public sealed record OperationalUnitComponentResponse(string ActivoCodigo, strin
 public sealed record OperationalUnitCompositionResponse(bool Completa, IReadOnlyCollection<string> Faltantes, IReadOnlyCollection<OperationalUnitComponentResponse> Vigentes, IReadOnlyCollection<OperationalUnitComponentResponse> Historial);
 public sealed record OperationalUnitDerivedStateResponse(string EstadoCodigo, string? ActivoRestrictivoCodigo, string? RolRestrictivoCodigo, string? Motivo, DateTimeOffset? CalculadoEnUtc);
 public sealed record OperationalUnitResponse(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string? UbicacionTecnicaCodigo, string EstadoOperacionalCodigo, string? Criticidad, DateOnly? FechaPuestaServicio, DateOnly? FechaBaja, string? Observaciones, OperationalUnitCompositionResponse Composicion, OperationalUnitDerivedStateResponse? EstadoDerivado = null);
+public sealed record OperationalUnitListQuery(string? FaenaCodigo = null, string? Texto = null, int Page = 1, int PageSize = 25);
+public sealed record OperationalUnitSummary(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string? UbicacionTecnicaCodigo, string EstadoOperacionalCodigo, string? Criticidad, bool ComposicionCompleta, IReadOnlyCollection<string> RolesFaltantes);
 public sealed record OperationalUnitRuleResponse(string TipoUnidadCodigo, string RolComponenteCodigo, int CantidadMinima, int CantidadMaxima, bool Obligatorio, IReadOnlyCollection<AllowedComponentRequest> Permitidos);
 
 public interface IOperationalUnitService
 {
+    Task<PagedResponse<OperationalUnitSummary>> ListPageAsync(OperationalUnitListQuery query, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<OperationalUnitResponse>> ListAsync(string? faenaCodigo, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitResponse?> GetAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitResponse> CreateAsync(OperationalUnitRequest request, UserAccessContext user, CancellationToken cancellationToken);

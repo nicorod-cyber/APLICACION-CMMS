@@ -1,4 +1,4 @@
-﻿import { type FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
   CalendarClock,
@@ -315,9 +315,9 @@ export function WorkOrdersPage() {
 
       const [orderResult, assetResult, spareResult, unitResult] = await Promise.all([
         apiFetch<WorkOrderSummary[]>(`/api/work-orders?${query}`),
-        apiFetch<AssetSummary[]>("/api/assets").catch(() => [] as AssetSummary[]),
+        apiFetch<{ items: AssetSummary[] }>("/api/assets?page=1&pageSize=100").then((page) => page.items).catch(() => [] as AssetSummary[]),
         apiFetch<SparePartSummary[]>("/api/inventory/spare-parts?includeObsolete=true").catch(() => [] as SparePartSummary[]),
-        apiFetch<OperationalUnitSummary[]>("/api/operational-units").catch(() => [] as OperationalUnitSummary[])
+        apiFetch<{ items: OperationalUnitSummary[] }>("/api/operational-units?page=1&pageSize=100").then((page) => page.items).catch(() => [] as OperationalUnitSummary[])
       ]);
       setOrders(orderResult);
       setAssets(assetResult);
@@ -423,14 +423,14 @@ export function WorkOrdersPage() {
     event.preventDefault();
     if (!selected) return;
     await saveAction(async () => {
-      if (!evidenceForm.file) throw new Error("Seleccione una fotografÃ­a.");
+      if (!evidenceForm.file) throw new Error("Seleccione una fotografía.");
       const form = new FormData();
       form.set("file", evidenceForm.file);
       form.set("tipo", evidenceForm.tipoEvidencia);
       if (evidenceForm.descripcion.trim()) form.set("descripcion", evidenceForm.descripcion.trim());
       await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/tasks/${encodeURIComponent(evidenceForm.codigoTarea)}/evidences`, { method: "POST", body: form });
       setEvidenceForm({ ...evidenceForm, descripcion: "", file: null });
-      setMessage("FotografÃ­a cargada.");
+      setMessage("Fotografía cargada.");
     });
   }
 
@@ -835,7 +835,7 @@ export function WorkOrdersPage() {
             <form className="panel-muted stack" onSubmit={addTask}>
               <h3>Tareas internas</h3>
               <div className="form-grid">
-                <label className="span-2">Descripcion<input value={taskForm.descripcion} onChange={(event) => setTaskForm({ ...taskForm, descripcion: event.target.value })} required /></label>
+                <label className="span-2">Descripción<input value={taskForm.descripcion} onChange={(event) => setTaskForm({ ...taskForm, descripcion: event.target.value })} required /></label>
                 <label className="check-row"><input type="checkbox" checked={taskForm.requiereEvidencia} onChange={(event) => setTaskForm({ ...taskForm, requiereEvidencia: event.target.checked })} />Evidencia</label>
                 <label className="check-row"><input type="checkbox" checked={taskForm.requiereHH} onChange={(event) => setTaskForm({ ...taskForm, requiereHH: event.target.checked })} />HH</label>
                 <label className="check-row"><input type="checkbox" checked={taskForm.checklistObligatorio} onChange={(event) => setTaskForm({ ...taskForm, checklistObligatorio: event.target.checked })} />Checklist</label>
@@ -850,7 +850,7 @@ export function WorkOrdersPage() {
                 <label>Tecnico usuario ID<input value={technicianForm.tecnicoUsuarioId} onChange={(event) => setTechnicianForm({ tecnicoUsuarioId: event.target.value })} required /></label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving || !canPlan}><UserPlus size={18} /> Asignar</button>
-              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "HistÃ³rico"])} />
+              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "Histórico"])} />
             </form>
 
             <form className="panel-muted stack" onSubmit={registerLabor}>
@@ -876,11 +876,11 @@ export function WorkOrdersPage() {
               <h3>Evidencias</h3>
               <TaskSelect tasks={detail.tasks} value={evidenceForm.codigoTarea} onChange={(value) => setEvidenceForm({ ...evidenceForm, codigoTarea: value })} />
               <div className="form-grid">
-                <label>Tipo<select value={evidenceForm.tipoEvidencia} onChange={(event) => setEvidenceForm({ ...evidenceForm, tipoEvidencia: event.target.value as EvidenceType })}><option value="FotoAntes">Foto antes</option><option value="FotoDurante">Foto durante</option><option value="FotoDespues">Foto despuÃ©s</option><option value="FotoPrueba">Foto prueba</option></select></label>
-                <label>FotografÃ­a<input type="file" accept="image/*" onChange={(event) => setEvidenceForm({ ...evidenceForm, file: event.target.files?.[0] ?? null })} required /></label>
-                <label className="span-2">DescripciÃ³n<input value={evidenceForm.descripcion} onChange={(event) => setEvidenceForm({ ...evidenceForm, descripcion: event.target.value })} /></label>
+                <label>Tipo<select value={evidenceForm.tipoEvidencia} onChange={(event) => setEvidenceForm({ ...evidenceForm, tipoEvidencia: event.target.value as EvidenceType })}><option value="FotoAntes">Foto antes</option><option value="FotoDurante">Foto durante</option><option value="FotoDespues">Foto después</option><option value="FotoPrueba">Foto prueba</option></select></label>
+                <label>Fotografía<input type="file" accept="image/*" onChange={(event) => setEvidenceForm({ ...evidenceForm, file: event.target.files?.[0] ?? null })} required /></label>
+                <label className="span-2">Descripción<input value={evidenceForm.descripcion} onChange={(event) => setEvidenceForm({ ...evidenceForm, descripcion: event.target.value })} /></label>
               </div>
-              <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Cargar fotografÃ­a</button>
+              <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Cargar fotografía</button>
               <MiniTable rows={detail.evidences.map((item) => [item.codigoTarea ?? "OT", item.tipoEvidencia, item.nombre, item.sharePointUrl ?? item.localPath ?? item.archivoKey ?? "-"])} />
             </form>
 

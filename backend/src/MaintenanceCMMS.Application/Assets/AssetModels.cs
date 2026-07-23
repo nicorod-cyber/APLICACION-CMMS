@@ -1,3 +1,5 @@
+using MaintenanceCMMS.Application.Abstractions.Pagination;
+
 namespace MaintenanceCMMS.Application.Assets;
 
 public sealed record AssetListQuery(
@@ -6,7 +8,9 @@ public sealed record AssetListQuery(
     string? FamiliaEquipoCodigo = null,
     string? Criticidad = null,
     string? EstadoOperacionalCodigo = null,
-    string? Texto = null);
+    string? Texto = null,
+    int Page = 1,
+    int PageSize = 25);
 
 public sealed record AssetCatalogItem(string Codigo, string Nombre, string? TipoActivoCodigo = null, string? FaenaCodigo = null);
 public sealed record AssetCatalogResponse(IReadOnlyCollection<AssetCatalogItem> TiposActivo, IReadOnlyCollection<AssetCatalogItem> FamiliasEquipo, IReadOnlyCollection<AssetCatalogItem> EstadosOperacionales, IReadOnlyCollection<AssetCatalogItem> UbicacionesTecnicas, IReadOnlyCollection<AssetCatalogItem> Criticidades);

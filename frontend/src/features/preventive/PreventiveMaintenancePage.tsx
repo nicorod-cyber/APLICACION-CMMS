@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarDays, Clock, Gauge, PlayCircle, RefreshCw, Save, Wrench } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
@@ -173,7 +173,7 @@ export function PreventiveMaintenancePage() {
       if (filters.activoCodigo) query.set("activoCodigo", filters.activoCodigo);
       const [dashboardResult, assetResult] = await Promise.all([
         apiFetch<PreventiveDashboard>(`/api/preventive/dashboard?${query}`),
-        apiFetch<AssetSummary[]>(filters.faenaCodigo ? `/api/assets?faenaCodigo=${encodeURIComponent(filters.faenaCodigo)}` : "/api/assets")
+        apiFetch<{ items: AssetSummary[] }>(filters.faenaCodigo ? `/api/assets?faenaCodigo=${encodeURIComponent(filters.faenaCodigo)}&page=1&pageSize=100` : "/api/assets?page=1&pageSize=100").then((page) => page.items)
       ]);
       const selectedAssets = filters.activoCodigo ? assetResult.filter((asset) => asset.codigo === filters.activoCodigo) : assetResult;
       const readingGroups = await Promise.all(selectedAssets.map(async (asset) => {

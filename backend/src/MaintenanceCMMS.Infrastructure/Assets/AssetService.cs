@@ -1,6 +1,7 @@
-﻿using System.Data;
+using System.Data;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MaintenanceCMMS.Application.Abstractions.Pagination;
 using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
@@ -51,19 +52,28 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         }
         return (await DefinitionsAsync(type.Id, family?.Id, ct)).Select(ToDefinition).ToArray();
     }
-    public async Task<IReadOnlyCollection<AssetSummary>> ListAsync(AssetListQuery query, UserAccessContext user, CancellationToken ct)
+    public async Task<IReadOnlyCollection<AssetSummary>> ListAsync(AssetListQuery query, UserAccessContext user, CancellationToken ct) => (await ListPageAsync(query with { Page = 1, PageSize = 100 }, user, ct)).Items;
+
+    public async Task<PagedResponse<AssetSummary>> ListPageAsync(AssetListQuery query, UserAccessContext user, CancellationToken ct)
     {
         if (query.FaenaCodigo is not null && !_authorization.CanViewFaena(user, query.FaenaCodigo)) throw new UnauthorizedAccessException("No tiene acceso a la faena solicitada.");
-        var assets = await Query().AsNoTracking().ToListAsync(ct);
-        var list = new List<AssetSummary>();
-        foreach (var asset in assets.Where(a => CanView(user, a)))
-        {
-            var item = await SummaryAsync(asset, ct);
-            if ((query.FaenaCodigo is null || Same(item.FaenaCodigo, query.FaenaCodigo)) && (query.TipoActivoCodigo is null || Same(item.TipoActivoCodigo, query.TipoActivoCodigo)) && (query.FamiliaEquipoCodigo is null || Same(item.FamiliaEquipoCodigo, query.FamiliaEquipoCodigo)) && (query.Criticidad is null || Same(item.Criticidad, query.Criticidad)) && (query.EstadoOperacionalCodigo is null || Same(item.EstadoOperacionalCodigo, query.EstadoOperacionalCodigo)) && (query.Texto is null || string.Join(' ', item.Codigo, item.Nombre, item.TipoActivoCodigo, item.FamiliaEquipoCodigo).Contains(query.Texto, StringComparison.OrdinalIgnoreCase))) list.Add(item);
-        }
-        return list.OrderBy(x => x.Codigo).ToArray();
+        var page = Math.Max(1, query.Page); var pageSize = query.PageSize is 25 or 50 or 100 ? query.PageSize : 25;
+        var canViewAll = user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) || user.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase);
+        var authorizedFaenas = user.Faenas.Select(Code).Distinct().ToArray();
+        IQueryable<AssetEntity> source = _db.Assets.AsNoTracking();
+        if (!canViewAll) source = source.Where(a => a.FaenaId == null || (a.Faena != null && authorizedFaenas.Contains(a.Faena.Code)));
+        if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) source = source.Where(a => a.Faena != null && a.Faena.Code == Code(query.FaenaCodigo));
+        if (!string.IsNullOrWhiteSpace(query.TipoActivoCodigo)) source = source.Where(a => a.AssetTypeDefinition.Code == Code(query.TipoActivoCodigo));
+        if (!string.IsNullOrWhiteSpace(query.FamiliaEquipoCodigo)) source = source.Where(a => a.Family != null && a.Family.Code == Code(query.FamiliaEquipoCodigo));
+        if (!string.IsNullOrWhiteSpace(query.Criticidad)) source = source.Where(a => a.Criticality != null && a.Criticality == query.Criticidad.Trim());
+        if (!string.IsNullOrWhiteSpace(query.EstadoOperacionalCodigo)) source = source.Where(a => a.OperationalState.Code == Code(query.EstadoOperacionalCodigo));
+        if (!string.IsNullOrWhiteSpace(query.Texto)) { var term=query.Texto.Trim(); source=source.Where(a=>EF.Functions.ILike(a.Code, "%" + term + "%") || EF.Functions.ILike(a.Name, "%" + term + "%")); }
+        var total = await source.CountAsync(ct);
+        var entities = await source.OrderBy(a => a.Code).ThenBy(a => a.Id).Skip((page - 1) * pageSize).Take(pageSize).Include(a => a.AssetTypeDefinition).Include(a => a.Family).Include(a => a.Faena).ThenInclude(f => f!.TechnicalLocation).Include(a => a.OperationalState).ToListAsync(ct);
+        var items = await SummariesAsync(entities, ct);
+        var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+        return new(items, page, pageSize, total, totalPages, page < totalPages, page > 1);
     }
-
     public async Task<AssetDetail?> GetByIdAsync(string codigo, UserAccessContext user, CancellationToken ct)
     {
         var asset = await FindAsync(codigo, false, ct); if (asset is null) return null; View(user, asset); return await DetailAsync(asset, ct);
@@ -376,6 +386,63 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         return new AssetSummary(asset.Code, asset.Name, asset.AssetTypeDefinition.Code, asset.AssetTypeDefinition.Name, asset.Family?.Code, asset.Family?.Name, asset.Faena?.Code, asset.Faena?.TechnicalLocation?.Code, asset.OperationalState.Code, asset.Criticality, asset.UsageMeasurementType, latest?.Value, Unit(asset.UsageMeasurementType), completeness, DocumentState(matrix), !matrix.Any(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER"));
     }
 
+    private async Task<IReadOnlyCollection<AssetSummary>> SummariesAsync(IReadOnlyCollection<AssetEntity> assets, CancellationToken ct)
+    {
+        if (assets.Count == 0) return [];
+
+        var assetIds = assets.Select(x => x.Id).ToArray();
+        var typeIds = assets.Select(x => x.AssetTypeId).Distinct().ToArray();
+        var familyIds = assets.Where(x => x.FamilyId.HasValue).Select(x => x.FamilyId!.Value).Distinct().ToArray();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var definitions = await _db.AssetAttributeDefinitions.AsNoTracking()
+            .Where(x => x.IsActive && typeIds.Contains(x.AssetTypeId) && (x.EquipmentFamilyId == null || familyIds.Contains(x.EquipmentFamilyId.Value)))
+            .ToListAsync(ct);
+        var values = await _db.AssetAttributeValues.AsNoTracking().Where(x => assetIds.Contains(x.AssetId)).ToListAsync(ct);
+        var readings = await _db.AssetReadings.AsNoTracking().Where(x => assetIds.Contains(x.AssetId)).ToListAsync(ct);
+        var matrices = await _db.DocumentRequirementMatrices.AsNoTracking().Include(x => x.Items).ThenInclude(x => x.DocumentType)
+            .Where(x => x.Status == "VIGENTE" && typeIds.Contains(x.AssetTypeId) && (x.EquipmentFamilyId == null || familyIds.Contains(x.EquipmentFamilyId.Value)) && x.ValidFrom <= today && (x.ValidTo == null || x.ValidTo >= today))
+            .ToListAsync(ct);
+        var legacyRequirements = await _db.AssetDocumentRequirements.AsNoTracking().Include(x => x.DocumentType)
+            .Where(x => x.IsActive && typeIds.Contains(x.AssetTypeId) && (x.EquipmentFamilyId == null || familyIds.Contains(x.EquipmentFamilyId.Value)))
+            .ToListAsync(ct);
+        var documentLinks = await _db.DocumentAssets.AsNoTracking().Include(x => x.Document).ThenInclude(x => x.DocumentType).Include(x => x.Document).ThenInclude(x => x.Versions)
+            .Where(x => assetIds.Contains(x.AssetId) && x.IsActive).ToListAsync(ct);
+        var valuesByAsset = values.GroupBy(x => x.AssetId).ToDictionary(x => x.Key, x => x.ToArray());
+        var readingsByAsset = readings.GroupBy(x => x.AssetId).ToDictionary(x => x.Key, x => x.ToArray());
+        var documentsByAsset = documentLinks.GroupBy(x => x.AssetId).ToDictionary(x => x.Key, x => x.Select(link => link.Document).ToArray());
+
+        return assets.Select(asset =>
+        {
+            var applicableDefinitions = definitions.Where(x => x.AssetTypeId == asset.AssetTypeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == asset.FamilyId))
+                .GroupBy(x => x.Code, StringComparer.OrdinalIgnoreCase).Select(group => group.OrderByDescending(x => x.EquipmentFamilyId.HasValue).First()).ToArray();
+            var assetValues = valuesByAsset.GetValueOrDefault(asset.Id, []);
+            var populatedDefinitionIds = assetValues.Where(x => x.TextValue is not null || x.NumericValue.HasValue || x.BooleanValue.HasValue || x.DateValue.HasValue).Select(x => x.AttributeDefinitionId).ToHashSet();
+            var requiredDefinitions = applicableDefinitions.Where(x => x.IsRequired).ToArray();
+            var missing = requiredDefinitions.Where(x => !populatedDefinitionIds.Contains(x.Id)).Select(x => x.Code).ToArray();
+            var completed = requiredDefinitions.Length - missing.Length;
+            var percentage = requiredDefinitions.Length == 0 ? 100 : (int)Math.Round(completed * 100m / requiredDefinitions.Length);
+            var completeness = new AssetCompleteness(requiredDefinitions.Length, completed, percentage, percentage == 100 ? "COMPLETA" : completed == 0 ? "PENDIENTE" : "PARCIAL", missing);
+
+            var assetReadings = readingsByAsset.GetValueOrDefault(asset.Id, []);
+            var replacedReadingIds = assetReadings.Where(x => x.CorrectedReadingId.HasValue).Select(x => x.CorrectedReadingId!.Value).ToHashSet();
+            var latestReading = assetReadings.Where(x => !replacedReadingIds.Contains(x.Id)).OrderByDescending(x => x.ReadAtUtc).ThenByDescending(x => x.CreatedAtUtc).FirstOrDefault();
+            var documents = documentsByAsset.GetValueOrDefault(asset.Id, []);
+            var matrix = matrices.Where(x => x.AssetTypeId == asset.AssetTypeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == asset.FamilyId))
+                .OrderByDescending(x => x.EquipmentFamilyId.HasValue).ThenByDescending(x => x.ValidFrom).ThenByDescending(x => x.VersionNumber).FirstOrDefault();
+            IReadOnlyCollection<AssetDocumentMatrixRow> rows;
+            if (matrix is not null)
+            {
+                rows = matrix.Items.OrderBy(x => x.DocumentType.Code).Select(rule => MatrixRow(rule.DocumentType, rule.IsMandatory, rule.IsCritical, rule.BlocksAvailability, rule.AlertDays, BestDocument(documents, rule.DocumentTypeId), today)).ToArray();
+            }
+            else
+            {
+                rows = legacyRequirements.Where(x => x.AssetTypeId == asset.AssetTypeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == asset.FamilyId))
+                    .GroupBy(x => x.DocumentTypeId).Select(group => group.OrderByDescending(x => x.EquipmentFamilyId.HasValue).First()).OrderBy(x => x.DocumentType.Code)
+                    .Select(rule => MatrixRow(rule.DocumentType, rule.IsMandatory, rule.IsCritical, rule.BlocksAvailability, rule.AlertDays ?? rule.DocumentType.AlertDays, BestDocument(documents, rule.DocumentTypeId), today)).ToArray();
+            }
+            return new AssetSummary(asset.Code, asset.Name, asset.AssetTypeDefinition.Code, asset.AssetTypeDefinition.Name, asset.Family?.Code, asset.Family?.Name, asset.Faena?.Code, asset.Faena?.TechnicalLocation?.Code, asset.OperationalState.Code, asset.Criticality, asset.UsageMeasurementType, latestReading?.Value, Unit(asset.UsageMeasurementType), completeness, DocumentState(rows), !rows.Any(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER"));
+        }).ToArray();
+    }
     private async Task<AssetDetail> DetailAsync(AssetEntity asset, CancellationToken ct)
     {
         var summary = await SummaryAsync(asset, ct); var definitions = await DefinitionsAsync(asset.AssetTypeId, asset.FamilyId, ct); var values = await _db.AssetAttributeValues.AsNoTracking().Include(x => x.AttributeDefinition).Where(x => x.AssetId == asset.Id).ToListAsync(ct); var readings = MapReadings(await ValidReadingsAsync(asset.Id, ct), asset.UsageMeasurementType); var components = await _db.OperationalUnitComponents.AsNoTracking().Include(x => x.OperationalUnit).Include(x => x.ComponentRole).Where(x => x.AssetId == asset.Id).OrderByDescending(x => x.InstalledAtUtc).ToListAsync(ct); var orders = await _db.WorkOrders.AsNoTracking().Include(x => x.Status).Include(x => x.MaintenanceType).Where(x => x.AssetId == asset.Id || x.RelatedAssets.Any(related => related.AssetId == asset.Id)).OrderByDescending(x => x.ScheduledAtUtc ?? x.CreatedAtUtc).Select(x => new AssetWorkOrderSummary(x.WorkOrderNumber, x.Status.Code, x.MaintenanceType.Code, x.Description, x.ScheduledAtUtc.HasValue ? DateOnly.FromDateTime(x.ScheduledAtUtc.Value.UtcDateTime) : null)).ToArrayAsync(ct); var documents = (await MatrixAsync(asset, ct)).Select(x => new AssetDocumentResponse("Activo", asset.Code, x.TipoDocumento, x.Estado, x.FechaVencimiento, x.DocumentoVigente, x.Critico, x.Estado == "VENCIDO", x.BloqueaDisponibilidad)).ToArray();

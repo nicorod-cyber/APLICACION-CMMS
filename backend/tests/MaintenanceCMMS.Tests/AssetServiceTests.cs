@@ -153,6 +153,48 @@ public sealed class AssetServiceTests
         Assert.Equal("Instruccion verbal del supervisor", otherReference.ReferenciaAntecedente);
     }
 
+    [Fact]
+    public async Task ListPageAsync_PaginatesInStableOrderAndRespectsFaenaAccess()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var type = await fixture.DbContext.AssetTypes.SingleAsync(x => x.Code == "CAMION");
+        var family = await fixture.DbContext.EquipmentFamilies.SingleAsync(x => x.Code == "CAMIONES");
+        var faena = await fixture.DbContext.Faenas.SingleAsync(x => x.Code == "F001");
+        var state = await fixture.DbContext.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO_FAENA");
+        for (var index = 1; index <= 30; index++) fixture.DbContext.Assets.Add(new AssetEntity { Code = $"PAGE-{index:D3}", Name = $"Activo paginado {index:D3}", AssetTypeId = type.Id, FamilyId = family.Id, FaenaId = faena.Id, OperationalStateId = state.Id });
+        await fixture.DbContext.SaveChangesAsync();
+
+        var first = await fixture.Service.ListPageAsync(new AssetListQuery(Texto: "PAGE", Page: 1, PageSize: 25), Admin, CancellationToken.None);
+        var second = await fixture.Service.ListPageAsync(new AssetListQuery(Texto: "PAGE", Page: 2, PageSize: 25), Admin, CancellationToken.None);
+        var restricted = new UserAccessContext("viewer-f002", [AuthRoles.FaenaViewer], [], ["F002"]);
+        var inaccessible = await fixture.Service.ListPageAsync(new AssetListQuery(Texto: "PAGE", Page: 1, PageSize: 25), restricted, CancellationToken.None);
+
+        Assert.Equal(30, first.TotalCount);
+        Assert.True(first.HasNextPage);
+        Assert.Equal(25, first.Items.Count);
+        Assert.Equal(5, second.Items.Count);
+        Assert.Empty(first.Items.Select(x => x.Codigo).Intersect(second.Items.Select(x => x.Codigo)));
+        Assert.Equal(first.Items.Select(x => x.Codigo).Order().ToArray(), first.Items.Select(x => x.Codigo).ToArray());
+        Assert.Empty(inaccessible.Items);
+
+        var counter = new DbCommandCounter();
+        var options = new DbContextOptionsBuilder<CmmsDbContext>()
+            .UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
+            .AddInterceptors(counter)
+            .Options;
+        await using var measuredDb = new CmmsDbContext(options);
+        var measuredService = new AssetService(measuredDb, new PostgreSqlAuditService(measuredDb, new AuditContextAccessor()), new AuthorizationPolicyService());
+
+        counter.Reset();
+        await measuredService.ListPageAsync(new AssetListQuery(Texto: "PAGE", Page: 1, PageSize: 25), Admin, CancellationToken.None);
+        var commandsFor25 = counter.Count;
+        counter.Reset();
+        await measuredService.ListPageAsync(new AssetListQuery(Texto: "PAGE", Page: 1, PageSize: 50), Admin, CancellationToken.None);
+        var commandsFor50 = counter.Count;
+
+        Assert.Equal(8, commandsFor25);
+        Assert.Equal(commandsFor25, commandsFor50);
+    }
     private static async Task<WorkOrderEntity> CreateWorkOrderAsync(CmmsDbContext db, string assetCode, string number, string description)
     {
         var asset = await db.Assets.SingleAsync(x => x.Code == assetCode);

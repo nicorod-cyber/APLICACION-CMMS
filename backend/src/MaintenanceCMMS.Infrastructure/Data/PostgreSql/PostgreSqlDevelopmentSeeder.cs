@@ -43,13 +43,13 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
         await UpsertPermissionAsync(AuthPermissions.EditFaenas, "Editar faenas", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.DeactivateFaenas, "Desactivar faenas", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.ManageEquipmentFamilies, "Gestionar familias de equipo", cancellationToken);
-        await UpsertPermissionAsync(AuthPermissions.ManageAssetCatalogs, "Administrar cat�logos de activos", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.ManageAssetCatalogs, "Administrar catálogos de activos", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.ManageAssetAttributes, "Administrar atributos de activos", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.RegisterAssetReadings, "Registrar lecturas de activos", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.CorrectAssetReadings, "Corregir lecturas de activos", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.ViewOperationalUnits, "Ver unidades operativas", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.ManageOperationalUnits, "Administrar unidades operativas", cancellationToken);
-        await UpsertPermissionAsync(AuthPermissions.ManageOperationalUnitComposition, "Gestionar composici�n de unidades", cancellationToken);
+        await UpsertPermissionAsync(AuthPermissions.ManageOperationalUnitComposition, "Gestionar composición de unidades", cancellationToken);
         await UpsertPermissionAsync(AuthPermissions.ManageDocumentRequirements, "Administrar requisitos documentales", cancellationToken);
         await UpsertDocumentTypeAsync("REV-TEC", "Revision tecnica", DocumentEntityType.Activo, true, true, true, 30, cancellationToken);
         await UpsertDocumentTypeAsync("PERMISO", "Permiso operacional", DocumentEntityType.Activo, true, false, false, 30, cancellationToken);
