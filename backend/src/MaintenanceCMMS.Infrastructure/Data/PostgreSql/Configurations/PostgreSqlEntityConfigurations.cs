@@ -1,3 +1,4 @@
+using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -127,6 +128,7 @@ public sealed class FaenaConfiguration : IEntityTypeConfiguration<FaenaEntity>
         builder.Property(entity => entity.Zone).HasColumnName("zona").HasMaxLength(80);
         builder.Property(entity => entity.Client).HasColumnName("cliente").HasMaxLength(160);
         builder.Property(entity => entity.CostCenter).HasColumnName("centro_costes").HasMaxLength(80);
+        builder.Property(entity => entity.AdministradorContrato).HasColumnName("administrador_contrato").HasColumnType("text");
         builder.Property(entity => entity.FaenaType).HasColumnName("tipo_faena").HasMaxLength(80);
         builder.Property(entity => entity.Region).HasColumnName("region").HasMaxLength(120);
         builder.Property(entity => entity.Commune).HasColumnName("comuna").HasMaxLength(120);
@@ -144,6 +146,7 @@ public sealed class FaenaConfiguration : IEntityTypeConfiguration<FaenaEntity>
         {
             table.HasCheckConstraint("ck_faenas_latitud", "latitud IS NULL OR latitud BETWEEN -90 AND 90");
             table.HasCheckConstraint("ck_faenas_longitud", "longitud IS NULL OR longitud BETWEEN -180 AND 180");
+            table.HasCheckConstraint("ck_faenas_zona_valida", FaenaZones.CheckConstraintSql);
         });
     }
 }

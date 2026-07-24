@@ -1,5 +1,6 @@
 using ClosedXML.Excel;
 using MaintenanceCMMS.Application.Auditing;
+using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
@@ -34,6 +35,16 @@ public sealed class ExcelImportWorkflowTests
         Assert.Equal(2, result.Import.Summary.DuplicateRows);
         Assert.All(result.Rows, row => Assert.Equal("Error", row.Operation));
         Assert.Equal(2, await fixture.Database.DbContext.ImportErrors.CountAsync());
+    }
+
+    [Fact]
+    public async Task UploadAsync_RejectsInvalidFaenaZoneBeforeApproval()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var result = await fixture.Service.UploadAsync(new ExcelImportUploadCommand("faenas", "faenas.xlsx", Workbook(FaenaHeaders, [FaenaRow("F-INVALID-ZONE", "UT-INVALID-ZONE", "Activo", "Zona 5")]), "admin", false), CancellationToken.None);
+
+        Assert.Equal(ImportStatus.Validating, result.Import.Status);
+        Assert.Contains(result.Errors, error => error.ColumnName == "Zona" && error.Message == FaenaZones.ValidationMessage);
     }
 
     [Fact]
@@ -89,8 +100,8 @@ public sealed class ExcelImportWorkflowTests
     private static byte[] ValidFaenaWorkbook(string code, string locationCode, string state) =>
         Workbook(FaenaHeaders, [FaenaRow(code, locationCode, state)]);
 
-    private static string[] FaenaRow(string code, string locationCode, string state) =>
-        [code, "Faena nueva", locationCode, "Ubicacion " + locationCode, "Zona Norte", "Cliente", "CC-01", "Operacion", "Antofagasta", "Antofagasta", "-23.6500", "-70.4000", "admin", state];
+    private static string[] FaenaRow(string code, string locationCode, string state, string zone = "Zona 0") =>
+        [code, "Faena nueva", locationCode, "Ubicacion " + locationCode, zone, "Cliente", "CC-01", "Operacion", "Antofagasta", "Antofagasta", "-23.6500", "-70.4000", "admin", state];
 
     private sealed record Fixture(PostgreSqlWorkTestFixture Database, IExcelImportWorkflowService Service) : IAsyncDisposable
     { public ValueTask DisposeAsync() => Database.DisposeAsync(); }

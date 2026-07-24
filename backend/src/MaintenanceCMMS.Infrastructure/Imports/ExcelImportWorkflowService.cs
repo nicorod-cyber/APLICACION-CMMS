@@ -114,7 +114,7 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
     {
         using var stream = new MemoryStream(content); using var workbook = new XLWorkbook(stream); var sheet = workbook.Worksheets.FirstOrDefault(item => item.Name.Equals(schema.WorksheetName, StringComparison.OrdinalIgnoreCase)) ?? workbook.Worksheets.First(); var headers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         for (var column = 1; column <= (sheet.LastColumnUsed()?.ColumnNumber() ?? 0); column++) { var name = sheet.Cell(1, column).GetString().Trim(); if (name.Length > 0 && !headers.ContainsKey(name)) headers[name] = column; }
-        var rows = new List<IReadOnlyDictionary<string, string?>>(); for (var number = 2; number <= (sheet.LastRowUsed()?.RowNumber() ?? 1); number++) { var values = headers.ToDictionary(header => header.Key, header => (string?)sheet.Cell(number, header.Value).GetFormattedString().Trim(), StringComparer.OrdinalIgnoreCase); foreach (var column in schema.Columns) values.TryAdd(column.Name, null); if (values.Values.Any(value => !string.IsNullOrWhiteSpace(value))) rows.Add(values); }
+        var rows = new List<IReadOnlyDictionary<string, string?>>(); for (var number = 2; number <= (sheet.LastRowUsed()?.RowNumber() ?? 1); number++) { var values = headers.ToDictionary(header => header.Key, header => (string?)sheet.Cell(number, header.Value).GetFormattedString(), StringComparer.OrdinalIgnoreCase); foreach (var column in schema.Columns) values.TryAdd(column.Name, null); if (values.Values.Any(value => !string.IsNullOrWhiteSpace(value))) rows.Add(values); }
         return new ParsedWorkbook(headers.Keys.ToArray(), rows);
     }
 

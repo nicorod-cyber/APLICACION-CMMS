@@ -146,7 +146,7 @@ public sealed class FaenaService : IFaenaService
         CancellationToken cancellationToken)
     {
         var name = RequireText(request.Nombre, "Nombre");
-        var zone = RequireText(request.Zona, "Zona");
+        var zone = RequireValidZone(request.Zona);
         var client = RequireText(request.Cliente, "Cliente");
         var faenaType = RequireText(request.TipoFaena, "TipoFaena");
         var region = RequireText(request.Region, "Region");
@@ -188,6 +188,7 @@ public sealed class FaenaService : IFaenaService
         entity.Zone = zone;
         entity.Client = client;
         entity.CostCenter = OptionalText(request.CentroCostes);
+        entity.AdministradorContrato = OptionalText(request.AdministradorContrato);
         entity.FaenaType = faenaType;
         entity.Region = region;
         entity.Commune = commune;
@@ -230,6 +231,7 @@ public sealed class FaenaService : IFaenaService
         entity.Zone,
         entity.Client,
         entity.CostCenter,
+        entity.AdministradorContrato,
         entity.FaenaType,
         entity.Region,
         entity.Commune,
@@ -277,6 +279,21 @@ public sealed class FaenaService : IFaenaService
         !string.IsNullOrWhiteSpace(value) &&
         !string.IsNullOrWhiteSpace(search) &&
         value.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static string RequireValidZone(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new DomainException("Zona es obligatorio.");
+        }
+
+        if (!FaenaZones.IsValid(value))
+        {
+            throw new DomainException(FaenaZones.ValidationMessage);
+        }
+
+        return value;
+    }
 
     private static string NormalizeRequiredCode(string? value, string field) =>
         RequireText(value, field).ToUpperInvariant();

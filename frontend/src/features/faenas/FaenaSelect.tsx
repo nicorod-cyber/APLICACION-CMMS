@@ -1,4 +1,4 @@
-﻿import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { apiFetch } from "../auth/authStore";
 
 export type FaenaRecord = {
@@ -8,6 +8,7 @@ export type FaenaRecord = {
   zona?: string | null;
   cliente?: string | null;
   centroCostes?: string | null;
+  administradorContrato?: string | null;
   tipoFaena?: string | null;
   region?: string | null;
   comuna?: string | null;

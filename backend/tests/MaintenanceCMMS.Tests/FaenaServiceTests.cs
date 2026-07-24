@@ -6,6 +6,8 @@ using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using MaintenanceCMMS.Infrastructure.Faenas;
 using MaintenanceCMMS.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Xunit;
 
 namespace MaintenanceCMMS.Tests;
@@ -27,9 +29,10 @@ public sealed class FaenaServiceTests
 
         Assert.Equal("FN-ALFA", created.Codigo);
         Assert.Equal("Faena FN-ALFA", created.Nombre);
-        Assert.Equal("Zona Norte", created.Zona);
+        Assert.Equal("Zona 0", created.Zona);
         Assert.Equal("Cliente Principal", created.Cliente);
         Assert.Equal("CC-100", created.CentroCostes);
+        Assert.Equal("Administrador Alfa", created.AdministradorContrato);
         Assert.Equal("Operacion", created.TipoFaena);
         Assert.Equal("Antofagasta", created.Region);
         Assert.Equal("Calama", created.Comuna);
@@ -48,6 +51,7 @@ public sealed class FaenaServiceTests
             .SingleAsync(item => item.Code == "FN-ALFA");
 
         Assert.Equal(responsible.Id, persisted.ResponsibleUserId);
+        Assert.Equal("Administrador Alfa", persisted.AdministradorContrato);
         Assert.NotNull(persisted.TechnicalLocation);
         Assert.Equal(persisted.Id, persisted.TechnicalLocation!.FaenaId);
         Assert.Equal(1, await read.TechnicalLocations.CountAsync(item => item.FaenaId == persisted.Id));
@@ -58,7 +62,7 @@ public sealed class FaenaServiceTests
     {
         await using var fixture = await Fixture.CreateAsync();
         var responsible = await fixture.AddUserAsync("responsable-update");
-        await fixture.Service.CreateAsync(
+        var original = await fixture.Service.CreateAsync(
             Request("fn-original", "ut-original", responsible.Id),
             Admin,
             CancellationToken.None);
@@ -70,11 +74,22 @@ public sealed class FaenaServiceTests
             CancellationToken.None);
 
         Assert.NotNull(updated);
+        Assert.Null(original.AdministradorContrato);
         Assert.Equal("FN-ACTUALIZADA", updated!.Codigo);
+        Assert.Equal("Administrador Alfa", updated.AdministradorContrato);
         Assert.False(updated.Activo);
         Assert.NotNull(updated.UbicacionTecnica);
         Assert.Equal("UT-ACTUALIZADA", updated.UbicacionTecnica!.Codigo);
         Assert.True(updated.UbicacionTecnica.Obsoleto);
+
+        var cleared = await fixture.Service.UpdateAsync(
+            "FN-ACTUALIZADA",
+            Request("fn-actualizada", "ut-actualizada", responsible.Id, active: false, obsolete: true) with { AdministradorContrato = " " },
+            Admin,
+            CancellationToken.None);
+
+        Assert.NotNull(cleared);
+        Assert.Null(cleared!.AdministradorContrato);
 
         await using var read = fixture.NewContext();
         var persisted = await read.Faenas
@@ -82,6 +97,7 @@ public sealed class FaenaServiceTests
             .SingleAsync(item => item.Code == "FN-ACTUALIZADA");
 
         Assert.False(persisted.IsActive);
+        Assert.Null(persisted.AdministradorContrato);
         Assert.Equal("UT-ACTUALIZADA", persisted.TechnicalLocation!.Code);
         Assert.True(persisted.TechnicalLocation.IsObsolete);
         Assert.Equal(1, await read.TechnicalLocations.CountAsync(item => item.FaenaId == persisted.Id));
@@ -185,6 +201,54 @@ public sealed class FaenaServiceTests
     }
 
     [Fact]
+    public async Task CreateAndUpdateAsync_AcceptEveryConfiguredZone()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var responsible = await fixture.AddUserAsync("responsable-zones");
+        var index = 0;
+
+        foreach (var zone in FaenaZones.All)
+        {
+            var code = $"fn-zone-{index}";
+            var locationCode = $"ut-zone-{index}";
+            var created = await fixture.Service.CreateAsync(
+                Request(code, locationCode, responsible.Id) with { Zona = zone },
+                Admin,
+                CancellationToken.None);
+
+            Assert.Equal(zone, created.Zona);
+
+            var updated = await fixture.Service.UpdateAsync(
+                created.Codigo,
+                Request(code, locationCode, responsible.Id) with { Zona = zone },
+                Admin,
+                CancellationToken.None);
+
+            Assert.NotNull(updated);
+            Assert.Equal(zone, updated!.Zona);
+            index++;
+        }
+    }
+
+    [Theory]
+    [InlineData("Zona 5")]
+    [InlineData("Zona1")]
+    [InlineData("zona 1")]
+    [InlineData("Zona 1 ")]
+    [InlineData("Zona libre")]
+    public async Task CreateAsync_RejectsInvalidZone(string zone)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var responsible = await fixture.AddUserAsync("responsable-invalid-zone");
+
+        var exception = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.CreateAsync(
+            Request("fn-invalid-zone", "ut-invalid-zone", responsible.Id) with { Zona = zone },
+            Admin,
+            CancellationToken.None));
+
+        Assert.Equal(FaenaZones.ValidationMessage, exception.Message);
+    }
+    [Fact]
     public async Task ListAsync_AppliesExplicitZoneClientRegionAndResponsibleFilters()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -194,7 +258,7 @@ public sealed class FaenaServiceTests
         await fixture.Service.CreateAsync(
             Request("fn-north", "ut-north", northResponsible.Id) with
             {
-                Zona = "Zona Norte",
+                Zona = "Zona 1",
                 Cliente = "Cliente Norte",
                 Region = "Antofagasta"
             },
@@ -203,13 +267,13 @@ public sealed class FaenaServiceTests
         await fixture.Service.CreateAsync(
             Request("fn-south", "ut-south", southResponsible.Id, region: "Biobio") with
             {
-                Zona = "Zona Sur",
+                Zona = "Zona 2",
                 Cliente = "Cliente Sur"
             },
             Admin,
             CancellationToken.None);
 
-        var byZone = await fixture.Service.ListAsync(new FaenaQuery(Zona: "sur"), Admin, CancellationToken.None);
+        var byZone = await fixture.Service.ListAsync(new FaenaQuery(Zona: "Zona 2"), Admin, CancellationToken.None);
         var byClient = await fixture.Service.ListAsync(new FaenaQuery(Cliente: "norte"), Admin, CancellationToken.None);
         var byRegion = await fixture.Service.ListAsync(new FaenaQuery(Region: "biobio"), Admin, CancellationToken.None);
         var byResponsible = await fixture.Service.ListAsync(
@@ -245,6 +309,11 @@ public sealed class FaenaServiceTests
 
         var only = Assert.Single(listed);
         Assert.Equal("FN-NORTE", only.Codigo);
+        Assert.Equal("Zona 0", only.Zona);
+        Assert.Equal("Administrador Alfa", only.AdministradorContrato);
+        var detail = await fixture.Service.GetByCodeAsync("FN-NORTE", Admin, CancellationToken.None);
+        Assert.NotNull(detail);
+        Assert.Equal("Administrador Alfa", detail!.AdministradorContrato);
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.GetByCodeAsync(
             "FN-SUR",
             scopedUser,
@@ -259,8 +328,9 @@ public sealed class FaenaServiceTests
             .Options;
         using var db = new CmmsDbContext(options);
 
-        var faenaType = db.Model.FindEntityType(typeof(FaenaEntity))!;
-        var locationType = db.Model.FindEntityType(typeof(TechnicalLocationEntity))!;
+        var model = db.GetService<IDesignTimeModel>().Model;
+        var faenaType = model.FindEntityType(typeof(FaenaEntity))!;
+        var locationType = model.FindEntityType(typeof(TechnicalLocationEntity))!;
         var locationForeignKey = Assert.Single(locationType.GetForeignKeys().Where(
             item => item.PrincipalEntityType.ClrType == typeof(FaenaEntity)));
         var responsibleForeignKey = Assert.Single(faenaType.GetForeignKeys().Where(
@@ -270,9 +340,16 @@ public sealed class FaenaServiceTests
         Assert.Equal(nameof(TechnicalLocationEntity.FaenaId), Assert.Single(locationForeignKey.Properties).Name);
         Assert.False(responsibleForeignKey.IsUnique);
         Assert.Equal(DeleteBehavior.Restrict, responsibleForeignKey.DeleteBehavior);
-        Assert.Null(db.Model.FindEntityType(typeof(AssetEntity))!.FindProperty("TechnicalLocationId"));
-        Assert.Null(db.Model.FindEntityType(typeof(OperationalUnitEntity))!.FindProperty("TechnicalLocationId"));
-        Assert.Null(db.Model.FindEntityType(typeof(TechnicalNodeEntity))!.FindProperty("TechnicalLocationId"));
+        Assert.Null(model.FindEntityType(typeof(AssetEntity))!.FindProperty("TechnicalLocationId"));
+        Assert.Null(model.FindEntityType(typeof(OperationalUnitEntity))!.FindProperty("TechnicalLocationId"));
+        Assert.Null(model.FindEntityType(typeof(TechnicalNodeEntity))!.FindProperty("TechnicalLocationId"));
+        var administrator = faenaType.FindProperty(nameof(FaenaEntity.AdministradorContrato));
+        Assert.NotNull(administrator);
+        Assert.True(administrator!.IsNullable);
+        Assert.Equal("administrador_contrato", administrator.GetColumnName());
+        Assert.Equal("text", administrator.GetColumnType());
+        var zoneConstraint = Assert.Single(faenaType.GetCheckConstraints().Where(item => item.Name == "ck_faenas_zona_valida"));
+        Assert.Equal(FaenaZones.CheckConstraintSql, zoneConstraint.Sql);
     }
 
     private static UpsertFaenaRequest Request(
@@ -288,9 +365,10 @@ public sealed class FaenaServiceTests
         string? commune = null) => new(
         code,
         name ?? $"Faena {code.ToUpperInvariant()}",
-        "Zona Norte",
+        "Zona 0",
         "Cliente Principal",
         "CC-100",
+        code.Equals("fn-original", StringComparison.OrdinalIgnoreCase) ? null : "  Administrador Alfa  ",
         "Operacion",
         region ?? "Antofagasta",
         commune ?? "Calama",

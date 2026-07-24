@@ -81,6 +81,7 @@ public sealed class FaenaEntity : PostgreSqlEntity
     public string? Zone { get; set; }
     public string? Client { get; set; }
     public string? CostCenter { get; set; }
+    public string? AdministradorContrato { get; set; }
     public string? FaenaType { get; set; }
     public string? Region { get; set; }
     public string? Commune { get; set; }

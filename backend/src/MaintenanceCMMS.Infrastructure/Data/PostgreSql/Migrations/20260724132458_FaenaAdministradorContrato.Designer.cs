@@ -3,6 +3,7 @@ using System;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
 {
     [DbContext(typeof(CmmsDbContext))]
-    partial class CmmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260724132458_FaenaAdministradorContrato")]
+    partial class FaenaAdministradorContrato
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2942,8 +2945,6 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
                             t.HasCheckConstraint("ck_faenas_latitud", "latitud IS NULL OR latitud BETWEEN -90 AND 90");
 
                             t.HasCheckConstraint("ck_faenas_longitud", "longitud IS NULL OR longitud BETWEEN -180 AND 180");
-
-                            t.HasCheckConstraint("ck_faenas_zona_valida", "zona IS NULL OR zona IN ('Zona 0', 'Zona 1', 'Zona 2', 'Zona 3', 'Zona 4')");
                         });
                 });
 

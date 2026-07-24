@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { MapPinned, Pencil, Plus, RefreshCw, Save, X } from "lucide-react";
 import { apiFetch, type CurrentUser } from "../auth/authStore";
 import type { FaenaRecord } from "./FaenaSelect";
+import { FAENA_ZONES } from "./faenaZones";
 
 type FaenaForm = {
   codigo: string;
@@ -9,6 +10,7 @@ type FaenaForm = {
   zona: string;
   cliente: string;
   centroCostes: string;
+  administradorContrato: string;
   tipoFaena: string;
   region: string;
   comuna: string;
@@ -30,6 +32,7 @@ const emptyForm = (): FaenaForm => ({
   zona: "",
   cliente: "",
   centroCostes: "",
+  administradorContrato: "",
   tipoFaena: "",
   region: "",
   comuna: "",
@@ -335,9 +338,25 @@ function FaenaEditor({
       <div className="mt-5 grid gap-3 md:grid-cols-2">
         <Field label="Código" required disabled={!isCreating} value={form.codigo} onChange={(codigo) => onChange({ codigo })} />
         <Field label="Nombre" required value={form.nombre} onChange={(nombre) => onChange({ nombre })} />
-        <Field label="Zona" required value={form.zona} onChange={(zona) => onChange({ zona })} />
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
+          Zona
+          <select
+            className="mt-2 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-teal-500 transition focus:ring-2 dark:border-slate-700 dark:bg-slate-950"
+            required
+            value={form.zona}
+            onChange={(event) => onChange({ zona: event.target.value })}
+          >
+            <option disabled value="">Seleccione una zona</option>
+            {FAENA_ZONES.map((zona) => (
+              <option key={zona} value={zona}>
+                {zona}
+              </option>
+            ))}
+          </select>
+        </label>
         <Field label="Cliente" required value={form.cliente} onChange={(cliente) => onChange({ cliente })} />
         <Field label="Centro de costes" value={form.centroCostes} onChange={(centroCostes) => onChange({ centroCostes })} />
+        <Field label="Administrador de contrato" value={form.administradorContrato} onChange={(administradorContrato) => onChange({ administradorContrato })} />
         <Field label="Tipo de faena" required value={form.tipoFaena} onChange={(tipoFaena) => onChange({ tipoFaena })} />
         <Field label="Región" required value={form.region} onChange={(region) => onChange({ region })} />
         <Field label="Comuna" required value={form.comuna} onChange={(comuna) => onChange({ comuna })} />
@@ -434,6 +453,7 @@ function FaenaDetail({ faena, onEdit }: { faena: FaenaRecord; onEdit: () => void
         <DetailItem label="Zona" value={faena.zona} />
         <DetailItem label="Cliente" value={faena.cliente} />
         <DetailItem label="Centro de costes" value={faena.centroCostes} />
+        <DetailItem label="Administrador de contrato" value={faena.administradorContrato} />
         <DetailItem label="Tipo de faena" value={faena.tipoFaena} />
         <DetailItem label="Región" value={faena.region} />
         <DetailItem label="Comuna" value={faena.comuna} />
@@ -569,6 +589,7 @@ function toForm(faena: FaenaRecord): FaenaForm {
     zona: faena.zona ?? "",
     cliente: faena.cliente ?? "",
     centroCostes: faena.centroCostes ?? "",
+    administradorContrato: faena.administradorContrato ?? "",
     tipoFaena: faena.tipoFaena ?? "",
     region: faena.region ?? "",
     comuna: faena.comuna ?? "",
@@ -586,9 +607,10 @@ function toPayload(form: FaenaForm) {
   return {
     codigo: form.codigo.trim(),
     nombre: form.nombre.trim(),
-    zona: form.zona.trim(),
+    zona: form.zona,
     cliente: form.cliente.trim(),
     centroCostes: emptyToNull(form.centroCostes),
+    administradorContrato: emptyToNull(form.administradorContrato),
     tipoFaena: form.tipoFaena.trim(),
     region: form.region.trim(),
     comuna: form.comuna.trim(),

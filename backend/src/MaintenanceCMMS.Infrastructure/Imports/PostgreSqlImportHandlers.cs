@@ -1,4 +1,5 @@
 using System.Globalization;
+using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
@@ -56,6 +57,9 @@ public abstract class PostgreSqlImportHandlerBase(CmmsDbContext db) : IPostgreSq
         IReadOnlyCollection<PostgreSqlImportRow> rows,
         string appliedBy,
         CancellationToken cancellationToken);
+
+    protected static string RawValue(IReadOnlyDictionary<string, string?> values, string name) =>
+        values.TryGetValue(name, out var value) ? value ?? string.Empty : string.Empty;
 
     protected static string Value(IReadOnlyDictionary<string, string?> values, string name) =>
         values.TryGetValue(name, out var value) ? value?.Trim() ?? string.Empty : string.Empty;
@@ -129,6 +133,8 @@ public sealed class FaenaPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             var code = Code(row.Values, "Codigo");
             var locationCode = Code(row.Values, "UbicacionTecnicaCodigo");
             var username = Value(row.Values, "ResponsableUsername");
+            var zone = RawValue(row.Values, "Zona");
+            if (!FaenaZones.IsValid(zone)) errors.Add(Error(row, "Zona", FaenaZones.ValidationMessage));
             if (!TryOptionalDecimal(row.Values, "Latitud", out var latitude)) errors.Add(Error(row, "Latitud", "La latitud debe ser numerica."));
             if (!TryOptionalDecimal(row.Values, "Longitud", out var longitude)) errors.Add(Error(row, "Longitud", "La longitud debe ser numerica."));
             if (latitude is < -90 or > 90) errors.Add(Error(row, "Latitud", "La latitud debe estar entre -90 y 90."));
@@ -174,6 +180,12 @@ public sealed class FaenaPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             var code = Code(row.Values, "Codigo");
             var locationCode = Code(row.Values, "UbicacionTecnicaCodigo");
             var username = Value(row.Values, "ResponsableUsername");
+            var zone = RawValue(row.Values, "Zona");
+            if (!FaenaZones.IsValid(zone))
+            {
+                throw new DomainException(FaenaZones.ValidationMessage);
+            }
+
             if (!users.TryGetValue(username, out var responsible) || !responsible.IsActive || responsible.IsLocked)
             {
                 throw new DomainException("El usuario responsable no existe o no esta disponible.");
@@ -210,7 +222,7 @@ public sealed class FaenaPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             }
 
             faena.Name = Value(row.Values, "Nombre");
-            faena.Zone = Value(row.Values, "Zona");
+            faena.Zone = zone;
             faena.Client = Value(row.Values, "Cliente");
             faena.CostCenter = Empty(Value(row.Values, "CentroCostes"));
             faena.FaenaType = Value(row.Values, "TipoFaena");
@@ -262,7 +274,7 @@ public sealed class FaenaPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
         if (!TryReadFaenaState(row.Values, out var isActive)) return false;
 
         return string.Equals(faena.Name, Value(row.Values, "Nombre"), StringComparison.Ordinal) &&
-               string.Equals(faena.Zone, Value(row.Values, "Zona"), StringComparison.Ordinal) &&
+               string.Equals(faena.Zone, RawValue(row.Values, "Zona"), StringComparison.Ordinal) &&
                string.Equals(faena.Client, Value(row.Values, "Cliente"), StringComparison.Ordinal) &&
                string.Equals(faena.CostCenter, Empty(Value(row.Values, "CentroCostes")), StringComparison.Ordinal) &&
                string.Equals(faena.FaenaType, Value(row.Values, "TipoFaena"), StringComparison.Ordinal) &&

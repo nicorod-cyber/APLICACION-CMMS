@@ -45,6 +45,7 @@ public sealed class PostgreSqlMigrationTests
 
         Assert.True(await database.ExistsAsync("usuarios"));
         Assert.True(await database.ExistsAsync("faenas"));
+        Assert.True(await database.ColumnExistsAsync("faenas", "administrador_contrato"));
         Assert.True(await database.ExistsAsync("documentos"));
         Assert.True(await database.ExistsAsync("avisos_trabajo_sql"));
         Assert.True(await database.ExistsAsync("ordenes_trabajo_sql"));
@@ -350,6 +351,41 @@ public sealed class PostgreSqlMigrationTests
         Assert.False(await database.ColumnExistsAsync("nodos_tecnicos", "ubicacion_tecnica_id"));
         Assert.Contains(database.FaenaTechnicalLocationMigrationId, await verification.Database.GetAppliedMigrationsAsync());
     }
+    [Fact]
+    public async Task MigrateWhenContractAdministratorColumnAlreadyExists_IsIdempotent()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        var migrator = database.Context.Database.GetService<IMigrator>();
+        await migrator.MigrateAsync(database.PreviousMigrationId);
+        await database.Context.Database.ExecuteSqlRawAsync("ALTER TABLE public.faenas ADD COLUMN administrador_contrato text NULL;");
+
+        await database.Context.Database.MigrateAsync();
+
+        Assert.True(await database.ColumnExistsAsync("faenas", "administrador_contrato"));
+        Assert.Contains(database.FaenaAdministradorContratoMigrationId, await database.Context.Database.GetAppliedMigrationsAsync());
+    }
+    [Fact]
+    public async Task MigrateWhenZoneConstraintAlreadyExists_IsIdempotentAndRejectsInvalidValues()
+    {
+        await using var database = await MigrationDatabase.CreateAsync();
+        var migrator = database.Context.Database.GetService<IMigrator>();
+        await migrator.MigrateAsync(database.FaenaAdministradorContratoMigrationId);
+        await database.Context.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE public.faenas
+            ADD CONSTRAINT ck_faenas_zona_valida
+            CHECK (zona IS NULL OR zona IN ('Zona 0', 'Zona 1', 'Zona 2', 'Zona 3', 'Zona 4'));
+            """);
+
+        await database.Context.Database.MigrateAsync();
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => database.Context.Database.ExecuteSqlRawAsync("""
+            INSERT INTO faenas (id, codigo, nombre, zona, activo, created_at_utc)
+            VALUES (gen_random_uuid(), 'MIG-ZONA-INVALIDA', 'Faena zona inválida', 'Zona 5', true, now());
+            """));
+
+        Assert.Equal("23514", exception.SqlState);
+        Assert.Contains(database.FaenaZonaValidaMigrationId, await database.Context.Database.GetAppliedMigrationsAsync());
+    }
     private sealed class MigrationDatabase : IAsyncDisposable
     {
         private MigrationDatabase(string name, string adminConnectionString, CmmsDbContext context)
@@ -368,6 +404,9 @@ public sealed class PostgreSqlMigrationTests
         public string OperationalUnitAllowedComponentsMigrationId => "20260714170216_OperationalUnitAllowedComponents";
         public string RelationalOperationalModulesMigrationId => "20260715123551_RelationalOperationalModules";
         public string FaenaTechnicalLocationMigrationId => "20260715201243_FaenaTechnicalLocationOneToOne";
+        public string PreviousMigrationId => "20260721223941_AssetStateEventAntecedentReference";
+        public string FaenaAdministradorContratoMigrationId => "20260724132458_FaenaAdministradorContrato";
+        public string FaenaZonaValidaMigrationId => "20260724135138_FaenaZonaValida";
         public static async Task<MigrationDatabase> CreateAsync()
         {
             var name = $"cmms_test_migration_{Guid.NewGuid():N}";
