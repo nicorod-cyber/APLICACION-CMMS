@@ -36,7 +36,7 @@ Base: `/api/scheduling`
 
 ## Hojas Excel
 
-- `programacion_talleres.xlsx`: talleres, faena, capacidad, horario y especialidad.
+- `programacion_talleres.xlsx`: talleres globales, comuna, supervisor de mantenimiento y capacidad de equipos.
 - `programacion_ot.xlsx`: asignacion de OT a taller, inicio, fin, HH estimadas, tecnico y motivo.
 - `programacion_dependencias.xlsx`: dependencias Gantt entre OT.
 - `programacion_alertas.xlsx`: alertas operativas de programacion.

@@ -69,13 +69,23 @@ public abstract class PostgreSqlImportHandlerBase(CmmsDbContext db) : IPostgreSq
 
     protected static string? Empty(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    protected static string? UsageMeasurementType(IReadOnlyDictionary<string, string?> values, string name)
+    {
+        var value = Empty(Value(values, name));
+        if (value is null) return null;
+        var normalized = value.ToUpperInvariant();
+        if (normalized is not ("HOROMETRO" or "KILOMETRAJE"))
+            throw new DomainException($"{name} solo permite HOROMETRO, KILOMETRAJE o vacio.");
+        return normalized;
+    }
+
     protected static bool Bool(IReadOnlyDictionary<string, string?> values, string name, bool fallback = false)
     {
         var value = Value(values, name);
         return string.IsNullOrWhiteSpace(value)
             ? fallback
             : value.Equals("si", StringComparison.OrdinalIgnoreCase) ||
-              value.Equals("sí", StringComparison.OrdinalIgnoreCase) ||
+              value.Equals("sÃƒÂ­", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("activo", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("activa", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1";
@@ -528,7 +538,7 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             if (!isNew && entity!.FaenaId != faena?.Id) throw new DomainException($"Fila {row.RowNumber}: la faena no se actualiza por importacion; use el flujo de traslado.");
             entity!.Name = Value(row.Values, "Nombre");
             entity.AssetTypeId = requestedTypeId;
-            if (isNew) { entity.OperationalStateId = requestedStateId; entity.FaenaId = faena?.Id; Db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = entity.Id, FaenaId = faena?.Id, ValidFromUtc = entity.CreatedAtUtc }); }
+            if (isNew) { entity.OperationalStateId = requestedStateId; entity.FaenaId = faena?.Id; Db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = entity.Id, FaenaId = faena?.Id, ValidFromUtc = entity.CreatedAtUtc }); if (faena is not null) Db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = entity.Id, LocationType = "FAENA", FaenaId = faena.Id, ValidFromUtc = entity.CreatedAtUtc, RegisteredByUserId = appliedBy, Reason = "Ubicacion inicial importada" }); }
             entity.Brand = Empty(Value(row.Values, "Marca"));
             entity.Model = Empty(Value(row.Values, "Modelo"));
             var nextSerial = Empty(Value(row.Values, "NumeroSerie"));
@@ -543,7 +553,7 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             var canonicalCriticality = criticality is null ? null : criticalities.SingleOrDefault(item => string.Equals(item.Code, criticality, StringComparison.OrdinalIgnoreCase) || string.Equals(item.Name, criticality, StringComparison.OrdinalIgnoreCase))?.Name;
             if (criticality is not null && canonicalCriticality is null) throw new DomainException($"Fila {row.RowNumber}: la criticidad '{criticality}' no existe en el catalogo WorkNotificationCriticality.");
             entity.Criticality = canonicalCriticality;
-            entity.UsageMeasurementType = Empty(Value(row.Values, "TipoMedicionUso"));
+            entity.UsageMeasurementType = UsageMeasurementType(row.Values, "TipoMedicionUso");
             entity.Observations = Empty(Value(row.Values, "Observaciones"));
             entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
         }

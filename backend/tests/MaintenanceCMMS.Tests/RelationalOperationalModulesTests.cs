@@ -96,6 +96,46 @@ public sealed class RelationalOperationalModulesTests
         Assert.DoesNotContain("Pauta modificada despues de generar la OT", snapshotTitles);
     }
     [Fact]
+    public async Task Scheduling_WorkshopResponsible_AcceptsEligibleAdminOrSupervisor_AndRejectsInvalidAssignments()
+    {
+        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        var db = fixture.DbContext;
+        var service = new SchedulingService(db);
+        var administrator = await db.Users.SingleAsync(x => x.Username == "admin");
+        var supervisor = await db.Users.SingleAsync(x => x.Id == PostgreSqlWorkTestFixture.SupervisorUserId);
+        var technician = await db.Users.SingleAsync(x => x.Id == PostgreSqlWorkTestFixture.TechnicianOneUserId);
+        var administratorRole = new RoleEntity { Code = AuthRoles.Admin, Name = "Administrador", Type = "System", IsActive = true };
+        db.Roles.Add(administratorRole);
+        db.UserRoles.Add(new UserRoleEntity { User = administrator, Role = administratorRole });
+        await db.SaveChangesAsync();
+
+        var eligible = await service.ListWorkshopSupervisorsAsync(Admin, CancellationToken.None);
+        Assert.Contains(eligible, x => x.UsuarioId == administrator.Id.ToString("D"));
+        Assert.Contains(eligible, x => x.UsuarioId == supervisor.Id.ToString("D"));
+        var workshop = await service.UpsertWorkshopAsync(new("TAL-ADMIN", "Taller administrado", 2, "Antofagasta", administrator.Id.ToString("D")), Admin, CancellationToken.None);
+        Assert.Equal(administrator.Id.ToString("D"), workshop.SupervisorUsuarioId);
+        await Assert.ThrowsAsync<MaintenanceCMMS.Domain.Common.DomainException>(() => service.UpsertWorkshopAsync(new("TAL-TECH", "Taller técnico", 2, "Antofagasta", technician.Id.ToString("D")), Admin, CancellationToken.None));
+
+        administrator.IsLocked = true; await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<MaintenanceCMMS.Domain.Common.DomainException>(() => service.UpsertWorkshopAsync(new("TAL-LOCK", "Taller bloqueado", 2, "Antofagasta", administrator.Id.ToString("D")), Admin, CancellationToken.None));
+        administrator.IsLocked = false; administrator.IsActive = false; await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<MaintenanceCMMS.Domain.Common.DomainException>(() => service.UpsertWorkshopAsync(new("TAL-INACTIVE", "Taller inactivo", 2, "Antofagasta", administrator.Id.ToString("D")), Admin, CancellationToken.None));
+        administrator.IsActive = true;
+        var administratorAssignment = await db.UserRoles.SingleAsync(x => x.UserId == administrator.Id && x.RoleId == administratorRole.Id);
+        administratorAssignment.IsActive = false; await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<MaintenanceCMMS.Domain.Common.DomainException>(() => service.UpsertWorkshopAsync(new("TAL-NOROLE", "Taller sin rol", 2, "Antofagasta", administrator.Id.ToString("D")), Admin, CancellationToken.None));
+
+        var supervisorAssignment = await db.UserRoles.SingleAsync(x => x.UserId == supervisor.Id && x.Role.Code == AuthRoles.MaintenanceSupervisor);
+        supervisorAssignment.IsActive = false; await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<MaintenanceCMMS.Domain.Common.DomainException>(() => service.UpsertWorkshopAsync(new("TAL-SUP-NOROLE", "Taller supervisor sin rol", 2, "Antofagasta", supervisor.Id.ToString("D")), Admin, CancellationToken.None));
+        supervisorAssignment.IsActive = true;
+        db.UserRoles.Add(new UserRoleEntity { User = supervisor, Role = administratorRole });
+        await db.SaveChangesAsync();
+        eligible = await service.ListWorkshopSupervisorsAsync(Admin, CancellationToken.None);
+        Assert.Equal(1, eligible.Count(x => x.UsuarioId == supervisor.Id.ToString("D")));
+    }
+
+    [Fact]
     public async Task Scheduling_DependencyRejectsDuplicateAndCycle_AndPersists()
     {
         await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
@@ -110,10 +150,10 @@ public sealed class RelationalOperationalModulesTests
         await db.SaveChangesAsync();
 
         var service = new SchedulingService(db);
-        await service.UpsertWorkshopAsync(new("TAL-REL", "Taller relacional", "FAE-1", 16, 4, "08:00-17:00", "Mecánica"), Admin, CancellationToken.None);
+        await service.UpsertWorkshopAsync(new("TAL-REL", "Taller relacional", 4, "Antofagasta", PostgreSqlWorkTestFixture.SupervisorUserId.ToString("D")), Admin, CancellationToken.None);
         var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(8), TimeSpan.Zero);
-        await service.ScheduleWorkOrderAsync("OT-REL-1", new("TAL-REL", start, start.AddHours(2), 2, "Planificación"), Admin, CancellationToken.None);
-        await service.ScheduleWorkOrderAsync("OT-REL-2", new("TAL-REL", start.AddHours(3), start.AddHours(5), 2, "Planificación"), Admin, CancellationToken.None);
+        await service.ScheduleWorkOrderAsync("OT-REL-1", new("TAL-REL", start, start.AddHours(2), 2, "PlanificaciÃ³n"), Admin, CancellationToken.None);
+        await service.ScheduleWorkOrderAsync("OT-REL-2", new("TAL-REL", start.AddHours(3), start.AddHours(5), 2, "PlanificaciÃ³n"), Admin, CancellationToken.None);
         await service.AddDependencyAsync(new("OT-REL-1", "OT-REL-2"), Admin, CancellationToken.None);
 
         await Assert.ThrowsAsync<MaintenanceCMMS.Domain.Common.DomainException>(() => service.AddDependencyAsync(new("OT-REL-1", "OT-REL-2"), Admin, CancellationToken.None));
@@ -132,7 +172,7 @@ public sealed class RelationalOperationalModulesTests
         var service = new ProcurementService(fixture.DbContext, inventory, audit);
 
         await service.CreateSupplierAsync(new("76.123.456-7", "Proveedor relacional"), Admin, CancellationToken.None);
-        var request = await service.CreateRequestAsync(new("Filtro hidráulico", 2, "UN", "Reposición", FaenaCodigo: "FAE-1"), Admin, CancellationToken.None);
+        var request = await service.CreateRequestAsync(new("Filtro hidrÃ¡ulico", 2, "UN", "ReposiciÃ³n", FaenaCodigo: "FAE-1"), Admin, CancellationToken.None);
         var linked = await service.LinkPurchaseOrderAsync(request.SolicitudId, new("OC-REL-1", "76.123.456-7", DateTimeOffset.UtcNow.AddDays(7), "Compra aprobada"), Admin, CancellationToken.None);
 
         Assert.NotNull(linked);

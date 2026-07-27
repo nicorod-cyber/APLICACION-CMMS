@@ -643,11 +643,11 @@ api.MapGet("/maintenance-targets", async (
         var targetScope = MaintenanceTargetScope.Operational;
         if (!string.IsNullOrWhiteSpace(tipo) && !Enum.TryParse<MaintenanceTargetType>(tipo, true, out targetType))
         {
-            return Results.BadRequest(new { message = "El parámetro tipo no es válido." });
+            return Results.BadRequest(new { message = "El parÃ¡metro tipo no es vÃ¡lido." });
         }
         if (!string.IsNullOrWhiteSpace(scope) && !Enum.TryParse<MaintenanceTargetScope>(scope, true, out targetScope))
         {
-            return Results.BadRequest(new { message = "El parámetro scope no es válido." });
+            return Results.BadRequest(new { message = "El parÃ¡metro scope no es vÃ¡lido." });
         }
         try
         {
@@ -875,6 +875,10 @@ assetsApi.MapGet("/{id}/document-matrix", async (
     })
     .WithName("GetAssetDocumentMatrix");
 
+assetsApi.MapGet("/{id}/physical-location", async (string id, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { var result = await service.GetPhysicalLocationAsync(id, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).WithName("GetAssetPhysicalLocation");
+assetsApi.MapGet("/{id}/physical-location-history", async (string id, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.GetPhysicalLocationHistoryAsync(id, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).WithName("GetAssetPhysicalLocationHistory");
+assetsApi.MapPost("/{id}/physical-location/workshop-entry", async (string id, RegisterWorkshopEntryRequest request, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.RegisterWorkshopEntryAsync(id, request, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).RequireAuthorization().WithName("RegisterAssetWorkshopEntry");
+assetsApi.MapPost("/{id}/physical-location/return-to-site", async (string id, RegisterReturnToSiteRequest request, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.RegisterReturnToSiteAsync(id, request, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).RequireAuthorization().WithName("RegisterAssetReturnToSite");
 assetsApi.MapGet("/{id}/readings", async (
         string id, ClaimsPrincipal user, IAssetService assetService, CancellationToken cancellationToken) =>
     {
@@ -2481,6 +2485,21 @@ schedulingApi.MapGet("/workshops", async (
     })
     .WithName("ListSchedulingWorkshops");
 
+schedulingApi.MapGet("/workshop-supervisors", async (
+        ClaimsPrincipal user,
+        ISchedulingService service,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await service.ListWorkshopSupervisorsAsync(UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .WithName("ListWorkshopSupervisors");
 schedulingApi.MapPost("/workshops", async (
         UpsertWorkshopRequest request,
         ClaimsPrincipal user,

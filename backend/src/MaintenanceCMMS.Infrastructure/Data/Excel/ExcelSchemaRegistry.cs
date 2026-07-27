@@ -562,14 +562,11 @@ public sealed class ExcelSchemaRegistry : IExcelSchemaRegistry
             RequiredText("UsuarioId"),
             RequiredText("Motivo")),
 
-        Schema("programacion_talleres", "programacion_talleres.xlsx", ["TallerCodigo"], true, true,
-            RequiredText("TallerCodigo"),
+        Schema("programacion_talleres", "programacion_talleres.xlsx", ["TallerCodigo"], true, true,            RequiredText("TallerCodigo"),
             RequiredText("Nombre"),
-            RequiredText("FaenaCodigo"),
-            RequiredNumber("CapacidadDiariaHH"),
             RequiredNumber("CapacidadEquipos"),
-            RequiredText("Horario"),
-            RequiredText("Especialidad"),
+            OptionalText("Comuna"),
+            OptionalText("SupervisorUsuarioId"),
             OptionalBoolean("Activo")),
 
         Schema("programacion_ot", "programacion_ot.xlsx", ["ProgramacionId"], true, true,

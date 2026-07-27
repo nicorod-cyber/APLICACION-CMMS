@@ -45,6 +45,7 @@ public sealed class AssetServiceTests
     {
         await using var fixture = await CreateFixtureAsync();
         var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-300"), Admin, CancellationToken.None);
+        await PlaceInWorkshopAsync(fixture.DbContext, asset.Resumen.Codigo);
         await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Ingreso a taller"), Admin, CancellationToken.None);
         var original = await fixture.Service.AddReadingAsync(asset.Resumen.Codigo, new CreateAssetReadingRequest(100m), Admin, CancellationToken.None);
         var corrected = await fixture.Service.CorrectReadingAsync(asset.Resumen.Codigo, original!.Id, new CorrectAssetReadingRequest(110m, "Correccion respaldada"), Admin, CancellationToken.None);
@@ -56,6 +57,7 @@ public sealed class AssetServiceTests
         Assert.Single(readings);
         Assert.Equal(110m, readings.Single().Valor);
 
+        await ReturnToSiteAsync(fixture.DbContext, asset.Resumen.Codigo);
         await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("DADO_DE_BAJA", "Baja definitiva", TipoAntecedente: "OTHER", ReferenciaAntecedente: "Acta de baja ACTA-001"), Admin, CancellationToken.None);
         await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddReadingAsync(asset.Resumen.Codigo, new CreateAssetReadingRequest(120m), Admin, CancellationToken.None));
     }
@@ -114,6 +116,7 @@ public sealed class AssetServiceTests
         await using var fixture = await CreateFixtureAsync();
         var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-OT-1"), Admin, CancellationToken.None);
         var workOrder = await CreateWorkOrderAsync(fixture.DbContext, asset.Resumen.Codigo, "OT-000245", "Falla sistema hidraulico");
+        await PlaceInWorkshopAsync(fixture.DbContext, asset.Resumen.Codigo);
 
         var response = await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla detectada", TipoAntecedente: "WORK_ORDER", AntecedenteId: workOrder.Id.ToString("D")), Admin, CancellationToken.None);
         var search = await fixture.Service.SearchStateEventAntecedentsAsync(asset.Resumen.Codigo, "WORK_ORDER", "000245", 1, 1, Admin, CancellationToken.None);
@@ -141,6 +144,7 @@ public sealed class AssetServiceTests
         var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-OT-2"), Admin, CancellationToken.None);
         var other = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-OT-3"), Admin, CancellationToken.None);
         var foreignOrder = await CreateWorkOrderAsync(fixture.DbContext, other.Resumen.Codigo, "OT-000246", "Falla de otro activo");
+        await PlaceInWorkshopAsync(fixture.DbContext, asset.Resumen.Codigo);
 
         var mismatch = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Prueba", TipoAntecedente: "WORK_ORDER", AntecedenteId: foreignOrder.Id.ToString("D")), Admin, CancellationToken.None));
         Assert.Contains("no corresponde al activo", mismatch.Message, StringComparison.OrdinalIgnoreCase);
@@ -194,6 +198,26 @@ public sealed class AssetServiceTests
 
         Assert.Equal(8, commandsFor25);
         Assert.Equal(commandsFor25, commandsFor50);
+    }
+    private static async Task PlaceInWorkshopAsync(CmmsDbContext db, string assetCode)
+    {
+        var asset = await db.Assets.SingleAsync(x => x.Code == assetCode);
+        var current = await db.AssetPhysicalLocationPeriods.SingleAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null);
+        var workshop = new WorkshopEntity { Code = $"TAL-{Guid.NewGuid():N}".ToUpperInvariant(), Name = "Taller de prueba", EquipmentCapacity = 1, Commune = "Antofagasta", IsActive = true, CreatedByUserId = "admin" };
+        var effectiveAt = current.ValidFromUtc.AddMinutes(1);
+        current.ValidToUtc = effectiveAt;
+        db.Workshops.Add(workshop);
+        db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, LocationType = "TALLER", Workshop = workshop, ValidFromUtc = effectiveAt, RegisteredByUserId = "admin", Reason = "Preparacion de prueba" });
+        await db.SaveChangesAsync();
+    }
+    private static async Task ReturnToSiteAsync(CmmsDbContext db, string assetCode)
+    {
+        var asset = await db.Assets.SingleAsync(x => x.Code == assetCode);
+        var current = await db.AssetPhysicalLocationPeriods.SingleAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null);
+        var effectiveAt = current.ValidFromUtc.AddMinutes(1);
+        current.ValidToUtc = effectiveAt;
+        db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, LocationType = "FAENA", FaenaId = asset.FaenaId, ValidFromUtc = effectiveAt, RegisteredByUserId = "admin", Reason = "Retorno de prueba" });
+        await db.SaveChangesAsync();
     }
     private static async Task<WorkOrderEntity> CreateWorkOrderAsync(CmmsDbContext db, string assetCode, string number, string description)
     {

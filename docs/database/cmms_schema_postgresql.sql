@@ -698,21 +698,9 @@ CREATE TABLE historial_estado_ot (
 -- 7. EJECUCION PREVENTIVA
 -- ============================================================
 
-CREATE TABLE lecturas_medidor (
-    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    activo_id           uuid NOT NULL REFERENCES activos(id),
-    horometro           numeric(18,2),
-    kilometraje         numeric(18,2),
-    fecha_lectura       timestamptz NOT NULL,
-    usuario_id          uuid REFERENCES usuarios(id),
-    evidencia_archivo_id uuid REFERENCES archivos(id),
-    es_correccion       boolean NOT NULL DEFAULT false,
-    es_anomala          boolean NOT NULL DEFAULT false,
-    mensaje_validacion  text,
-    motivo_correccion   text,
-    autorizado_por      uuid REFERENCES usuarios(id),
-    creado_en           timestamptz NOT NULL DEFAULT now()
-);
+-- Las lecturas de uso se almacenan exclusivamente en activos.lecturas / asset_readings:
+-- una fila tiene un unico valor y su unidad se deriva de activos.tipo_medicion_uso.
+-- Las correcciones son nuevas filas inmutables que referencian la lectura corregida.
 
 CREATE TABLE evaluaciones_preventivas (
     id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1058,15 +1046,32 @@ CREATE TABLE snapshots_disponibilidad (
 
 CREATE TABLE talleres (
     id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    codigo                  varchar(60) NOT NULL UNIQUE,
-    nombre                  varchar(200) NOT NULL,
-    faena_id                uuid NOT NULL REFERENCES faenas(id),
-    capacidad_diaria_hh     numeric(10,2) NOT NULL,
-    capacidad_equipos       integer,
-    horario                 varchar(200),
-    especialidad            varchar(160),
-    activo                  boolean NOT NULL DEFAULT true
+    codigo                  varchar(80) NOT NULL UNIQUE,
+    nombre                  varchar(240) NOT NULL,
+    capacidad_equipos       integer NOT NULL CHECK (capacidad_equipos >= 0),
+    comuna                  varchar(160),
+    supervisor_usuario_id   uuid REFERENCES usuarios(id) ON DELETE RESTRICT,
+    activo                  boolean NOT NULL DEFAULT true,
+    creado_por_usuario_id   varchar(120) NOT NULL,
+    actualizado_por_usuario_id varchar(120),
+    created_at_utc          timestamptz NOT NULL DEFAULT now(),
+    updated_at_utc          timestamptz
 );
+
+-- Historial físico, independiente de vigencias_ubicacion_activo (faena administrativa).
+CREATE TABLE vigencias_ubicacion_fisica_activo (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), activo_id uuid NOT NULL REFERENCES activos(id) ON DELETE RESTRICT,
+    tipo_ubicacion varchar(16) NOT NULL, faena_id uuid REFERENCES faenas(id) ON DELETE RESTRICT,
+    taller_id uuid REFERENCES talleres(id) ON DELETE RESTRICT, vigencia_desde_utc timestamptz NOT NULL,
+    vigencia_hasta_utc timestamptz, motivo varchar(1000), registrado_por_usuario_id varchar(120) NOT NULL,
+    orden_trabajo_id uuid REFERENCES ordenes_trabajo(id) ON DELETE RESTRICT, unidad_operativa_id uuid REFERENCES unidades_operativas(id) ON DELETE RESTRICT,
+    observaciones varchar(2000), created_at_utc timestamptz NOT NULL DEFAULT now(), updated_at_utc timestamptz,
+    CONSTRAINT ck_vigencias_ubicacion_fisica_tipo CHECK ((tipo_ubicacion='FAENA' AND faena_id IS NOT NULL AND taller_id IS NULL) OR (tipo_ubicacion='TALLER' AND taller_id IS NOT NULL AND faena_id IS NULL)),
+    CONSTRAINT ck_vigencias_ubicacion_fisica_fechas CHECK (vigencia_hasta_utc IS NULL OR vigencia_hasta_utc > vigencia_desde_utc)
+);
+CREATE UNIQUE INDEX ux_ubicacion_fisica_activo_abierta ON vigencias_ubicacion_fisica_activo(activo_id) WHERE vigencia_hasta_utc IS NULL;
+CREATE INDEX ix_ubicacion_fisica_taller ON vigencias_ubicacion_fisica_activo(taller_id);
+CREATE INDEX ix_ubicacion_fisica_faena ON vigencias_ubicacion_fisica_activo(faena_id);
 
 CREATE TABLE programaciones_ot (
     id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),

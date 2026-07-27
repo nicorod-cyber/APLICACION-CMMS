@@ -11,12 +11,18 @@ type ScheduleAlertType = "TallerSobrecargado" | "OTVencida" | "ProgramacionExced
 type Workshop = {
   tallerCodigo: string;
   nombre: string;
-  faenaCodigo: string;
-  capacidadDiariaHH: number;
   capacidadEquipos: number;
-  horario: string;
-  especialidad: string;
+  comuna?: string | null;
+  supervisorUsuarioId?: string | null;
+  supervisorNombre?: string | null;
+  activosActualmenteEnTaller: number;
   activo: boolean;
+};
+
+type WorkshopSupervisor = {
+  usuarioId: string;
+  nombre: string;
+  username: string;
 };
 
 type ScheduleItem = {
@@ -42,8 +48,6 @@ type WorkshopLoad = {
   tallerCodigo: string;
   tallerNombre: string;
   fecha: string;
-  capacidadHH: number;
-  hhProgramadas: number;
   capacidadEquipos: number;
   equiposProgramados: number;
   sobrecargado: boolean;
@@ -108,11 +112,9 @@ const statusLabels: Record<ScheduleItemStatus, string> = {
 const emptyWorkshop = {
   tallerCodigo: "",
   nombre: "",
-  faenaCodigo: "",
-  capacidadDiariaHH: "8",
-  capacidadEquipos: "2",
-  horario: "08:00-18:00",
-  especialidad: "Mecanica"
+  comuna: "",
+  supervisorUsuarioId: "",
+  capacidadEquipos: "2"
 };
 
 const emptySchedule = {
@@ -129,6 +131,7 @@ const emptySchedule = {
 export function SchedulingPage() {
   const [board, setBoard] = useState<ScheduleBoard | null>(null);
   const [orders, setOrders] = useState<WorkOrderSummary[]>([]);
+  const [supervisors, setSupervisors] = useState<WorkshopSupervisor[]>([]);
   const [filters, setFilters] = useState({ view: "Semanal" as ScheduleViewMode, faenaCodigo: "", tallerCodigo: "", from: "", to: "", includeClosed: false });
   const [workshopForm, setWorkshopForm] = useState(emptyWorkshop);
   const [scheduleForm, setScheduleForm] = useState(emptySchedule);
@@ -167,12 +170,14 @@ export function SchedulingPage() {
       if (filters.tallerCodigo) query.set("tallerCodigo", filters.tallerCodigo);
       if (filters.from) query.set("from", toIsoDate(filters.from));
       if (filters.to) query.set("to", toIsoDate(filters.to));
-      const [boardResult, orderResult] = await Promise.all([
+      const [boardResult, orderResult, supervisorResult] = await Promise.all([
         apiFetch<ScheduleBoard>(`/api/scheduling/board?${query}`),
-        apiFetch<WorkOrderSummary[]>("/api/work-orders?includeClosed=false")
+        apiFetch<WorkOrderSummary[]>("/api/work-orders?includeClosed=false"),
+        apiFetch<WorkshopSupervisor[]>("/api/scheduling/workshop-supervisors")
       ]);
       setBoard(boardResult);
       setOrders(orderResult);
+      setSupervisors(supervisorResult);
       setScheduleForm((current) => ({ ...current, tallerCodigo: current.tallerCodigo || boardResult.workshops[0]?.tallerCodigo || "" }));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "No fue posible cargar programacion.");
@@ -188,12 +193,9 @@ export function SchedulingPage() {
         method: "POST",
         body: JSON.stringify({
           tallerCodigo: workshopForm.tallerCodigo,
-          nombre: workshopForm.nombre,
-          faenaCodigo: workshopForm.faenaCodigo,
-          capacidadDiariaHH: Number(workshopForm.capacidadDiariaHH),
-          capacidadEquipos: Number(workshopForm.capacidadEquipos),
-          horario: workshopForm.horario,
-          especialidad: workshopForm.especialidad,
+          nombre: workshopForm.nombre,          capacidadEquipos: Number(workshopForm.capacidadEquipos),
+          comuna: emptyToNull(workshopForm.comuna),
+          supervisorUsuarioId: emptyToNull(workshopForm.supervisorUsuarioId),
           activo: true,
           reason: "Configuracion taller"
         })
@@ -306,7 +308,7 @@ export function SchedulingPage() {
           <input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} />
           <select value={filters.tallerCodigo} onChange={(event) => setFilters({ ...filters, tallerCodigo: event.target.value })}>
             <option value="">Todos los talleres</option>
-            {(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre}</option>)}
+            {(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre} — {item.comuna ?? "sin comuna"}</option>)}
           </select>
           <label className="check-row"><input type="checkbox" checked={filters.includeClosed} onChange={(event) => setFilters({ ...filters, includeClosed: event.target.checked })} />Cerradas</label>
         </div>
@@ -318,12 +320,9 @@ export function SchedulingPage() {
           <div className="section-heading"><h2>Taller</h2></div>
           <div className="form-grid">
             <label>Codigo<input value={workshopForm.tallerCodigo} onChange={(event) => setWorkshopForm({ ...workshopForm, tallerCodigo: event.target.value })} required /></label>
-            <label>Nombre<input value={workshopForm.nombre} onChange={(event) => setWorkshopForm({ ...workshopForm, nombre: event.target.value })} required /></label>
-            <FaenaSelect emptyLabel="Faena" value={workshopForm.faenaCodigo} onChange={(value) => setWorkshopForm({ ...workshopForm, faenaCodigo: value })} />
-            <label>HH/dia<input type="number" min="0" step="0.5" value={workshopForm.capacidadDiariaHH} onChange={(event) => setWorkshopForm({ ...workshopForm, capacidadDiariaHH: event.target.value })} required /></label>
-            <label>Equipos<input type="number" min="0" value={workshopForm.capacidadEquipos} onChange={(event) => setWorkshopForm({ ...workshopForm, capacidadEquipos: event.target.value })} required /></label>
-            <label>Horario<input value={workshopForm.horario} onChange={(event) => setWorkshopForm({ ...workshopForm, horario: event.target.value })} required /></label>
-            <label>Especialidad<input value={workshopForm.especialidad} onChange={(event) => setWorkshopForm({ ...workshopForm, especialidad: event.target.value })} required /></label>
+            <label>Nombre<input value={workshopForm.nombre} onChange={(event) => setWorkshopForm({ ...workshopForm, nombre: event.target.value })} required /></label>            <label>Comuna<input value={workshopForm.comuna} onChange={(event) => setWorkshopForm({ ...workshopForm, comuna: event.target.value })} required /></label>
+            <label>Responsable del taller<select value={workshopForm.supervisorUsuarioId} onChange={(event) => setWorkshopForm({ ...workshopForm, supervisorUsuarioId: event.target.value })} required><option value="">Selecciona un responsable elegible</option>{supervisors.map((item) => <option key={item.usuarioId} value={item.usuarioId}>{item.nombre} ({item.username})</option>)}</select></label>
+            <label>Capacidad de equipos<input type="number" min="0" value={workshopForm.capacidadEquipos} onChange={(event) => setWorkshopForm({ ...workshopForm, capacidadEquipos: event.target.value })} required /></label>
           </div>
           <button className="primary-button" type="submit" disabled={isSaving}><Save size={18} /> Guardar taller</button>
         </form>
@@ -332,7 +331,7 @@ export function SchedulingPage() {
           <div className="section-heading"><h2>Programar OT</h2></div>
           <div className="form-grid">
             <label>OT<select value={scheduleForm.numeroOT} onChange={(event) => setScheduleForm({ ...scheduleForm, numeroOT: event.target.value })} required><option value="">Selecciona OT</option>{orders.map((item) => <option key={item.numeroOT} value={item.numeroOT}>{item.numeroOT} - {workOrderTargetLabel(item)}</option>)}</select></label>
-            <label>Taller<select value={scheduleForm.tallerCodigo} onChange={(event) => setScheduleForm({ ...scheduleForm, tallerCodigo: event.target.value })} required><option value="">Selecciona taller</option>{(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre}</option>)}</select></label>
+            <label>Taller<select value={scheduleForm.tallerCodigo} onChange={(event) => setScheduleForm({ ...scheduleForm, tallerCodigo: event.target.value })} required><option value="">Selecciona taller</option>{(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre} — {item.comuna ?? "sin comuna"}</option>)}</select></label>
             <label>Inicio<input type="datetime-local" value={scheduleForm.fechaInicio} onChange={(event) => setScheduleForm({ ...scheduleForm, fechaInicio: event.target.value })} required /></label>
             <label>Fin<input type="datetime-local" value={scheduleForm.fechaFin} onChange={(event) => setScheduleForm({ ...scheduleForm, fechaFin: event.target.value })} required /></label>
             <label>HH estimadas<input type="number" min="0.1" step="0.1" value={scheduleForm.hhEstimadas} onChange={(event) => setScheduleForm({ ...scheduleForm, hhEstimadas: event.target.value })} required /></label>
@@ -354,7 +353,6 @@ export function SchedulingPage() {
                 {loads.map((load) => (
                   <div key={`${load.tallerCodigo}-${load.fecha}`} className={`rounded-md border p-2 text-sm ${load.sobrecargado ? "border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30" : "border-slate-200 dark:border-slate-800"}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => void dropOnDay(event, load)}>
                     <strong>{load.tallerNombre}</strong>
-                    <p>{load.hhProgramadas}/{load.capacidadHH} HH</p>
                     <p>{load.equiposProgramados}/{load.capacidadEquipos} equipos</p>
                   </div>
                 ))}

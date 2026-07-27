@@ -18,6 +18,10 @@ public interface ISchedulingService
         UserAccessContext user,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyCollection<WorkshopSupervisorResponse>> ListWorkshopSupervisorsAsync(
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
     Task<ScheduleWorkOrderResponse> ScheduleWorkOrderAsync(
         string numeroOt,
         ScheduleWorkOrderPlanningRequest request,

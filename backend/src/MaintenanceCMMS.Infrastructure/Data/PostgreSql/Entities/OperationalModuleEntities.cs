@@ -137,12 +137,10 @@ public sealed class WorkshopEntity : PostgreSqlEntity
 {
     public string Code { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public Guid FaenaId { get; set; }
-    public FaenaEntity Faena { get; set; } = null!;
-    public decimal DailyLaborCapacity { get; set; }
     public int EquipmentCapacity { get; set; }
-    public string Schedule { get; set; } = string.Empty;
-    public string Specialty { get; set; } = string.Empty;
+    public string? Commune { get; set; }
+    public Guid? SupervisorUserId { get; set; }
+    public AppUserEntity? SupervisorUser { get; set; }
     public bool IsActive { get; set; } = true;
     public string CreatedByUserId { get; set; } = string.Empty;
     public string? UpdatedByUserId { get; set; }

@@ -199,6 +199,27 @@ public sealed class AssetLocationPeriodEntity : PostgreSqlEntity
     public AssetTransferEntity? Transfer { get; set; }
 }
 
+/// <summary>Historical physical location; administrative faena history remains in AssetLocationPeriodEntity.</summary>
+public sealed class AssetPhysicalLocationPeriodEntity : PostgreSqlEntity
+{
+    public Guid AssetId { get; set; }
+    public AssetEntity Asset { get; set; } = null!;
+    public string LocationType { get; set; } = string.Empty;
+    public Guid? FaenaId { get; set; }
+    public FaenaEntity? Faena { get; set; }
+    public Guid? WorkshopId { get; set; }
+    public WorkshopEntity? Workshop { get; set; }
+    public DateTimeOffset ValidFromUtc { get; set; }
+    public DateTimeOffset? ValidToUtc { get; set; }
+    public string? Reason { get; set; }
+    public string RegisteredByUserId { get; set; } = string.Empty;
+    public Guid? WorkOrderId { get; set; }
+    public WorkOrderEntity? WorkOrder { get; set; }
+    public Guid? OperationalUnitId { get; set; }
+    public OperationalUnitEntity? OperationalUnit { get; set; }
+    public string? Observations { get; set; }
+}
+
 public sealed class AssetIdentifierAliasEntity : PostgreSqlEntity
 {
     public Guid AssetId { get; set; }

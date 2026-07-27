@@ -73,7 +73,7 @@ La propuesta resultante contiene un modelo normalizado para PostgreSQL 16, divid
 | `planes_preventivos.xlsx` | `planes_preventivos, plan_activos, plan_familias_equipo, plan_checklists, plan_repuestos` | Separa alcance, checklist y repuestos sugeridos. |
 | `preventivo_evaluaciones.xlsx` | `evaluaciones_preventivas` | Resultado calculado por plan y activo, con OT generada opcional. |
 | `preventivo_historial.xlsx` | `historial_preventivo` | Cambios y reprogramaciones append-only. |
-| `preventivo_lecturas.xlsx` | `lecturas_medidor, archivos` | La evidencia se guarda fuera de SQL y se referencia por FK. |
+| `preventivo_lecturas.xlsx` | `asset_readings, archivos` | Una lectura por activo, con unidad derivada de `tipo_medicion_uso`; la evidencia se guarda fuera de SQL y se referencia por FK. |
 | `programacion_alertas.xlsx` | `alertas, vinculos_alerta` | Se integra al motor general de alertas usando origen PROGRAMACION. |
 | `programacion_dependencias.xlsx` | `dependencias_ot` | Relacion dirigida OT predecesora -> OT sucesora. |
 | `programacion_ot.xlsx` | `programaciones_ot` | Programa OT por taller, tecnico y ventana temporal. |

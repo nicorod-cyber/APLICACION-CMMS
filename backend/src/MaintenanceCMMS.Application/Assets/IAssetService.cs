@@ -15,6 +15,10 @@ public interface IAssetService
     Task<AssetStateEventAntecedentSearchResponse> SearchStateEventAntecedentsAsync(string codigo, string origen, string? texto, int pagina, int tamanoPagina, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AssetHistoryEntry>> GetHistoryAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
+    Task<AssetPhysicalLocationResponse?> GetPhysicalLocationAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> GetPhysicalLocationHistoryAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterWorkshopEntryAsync(string codigo, RegisterWorkshopEntryRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterReturnToSiteAsync(string codigo, RegisterReturnToSiteRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AssetDocumentResponse>> GetDocumentsAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AssetDocumentMatrixRow>> GetDocumentMatrixAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
     Task<AssetCostSummary?> GetCostsAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);

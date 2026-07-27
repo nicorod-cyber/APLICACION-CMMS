@@ -37,6 +37,7 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<AssetStateEventEntity> AssetStateEvents => Set<AssetStateEventEntity>();
     public DbSet<AssetTransferEntity> AssetTransfers => Set<AssetTransferEntity>();
     public DbSet<AssetLocationPeriodEntity> AssetLocationPeriods => Set<AssetLocationPeriodEntity>();
+    public DbSet<AssetPhysicalLocationPeriodEntity> AssetPhysicalLocationPeriods => Set<AssetPhysicalLocationPeriodEntity>();
     public DbSet<AssetIdentifierAliasEntity> AssetIdentifierAliases => Set<AssetIdentifierAliasEntity>();
     public DbSet<DocumentTypeEntity> DocumentTypes => Set<DocumentTypeEntity>();
     public DbSet<DocumentEntity> Documents => Set<DocumentEntity>();

@@ -42,6 +42,11 @@ public static class AssetOperationalPolicy
         }
     }
 
+    public static void EnsureCompatibleWithPhysicalLocation(string? locationType, string stateCode)
+    {
+        if (string.Equals(locationType, "TALLER", StringComparison.OrdinalIgnoreCase) && !string.Equals(stateCode, "FUERA_SERVICIO_TALLER", StringComparison.OrdinalIgnoreCase)) throw new DomainException("Un activo ubicado en taller debe mantener un estado operacional compatible con taller.");
+        if (string.Equals(locationType, "FAENA", StringComparison.OrdinalIgnoreCase) && string.Equals(stateCode, "FUERA_SERVICIO_TALLER", StringComparison.OrdinalIgnoreCase)) throw new DomainException("Un activo ubicado en faena no puede conservar un estado exclusivo de taller.");
+    }
     public static int Severity(AssetOperationalStateEntity state) => state.Severity != 0
         ? state.Severity
         : state.Code.ToUpperInvariant() switch
@@ -56,4 +61,15 @@ public static class AssetOperationalPolicy
 
     private static IReadOnlySet<string> Set(params string[] values) =>
         new HashSet<string>(values, StringComparer.OrdinalIgnoreCase);
+}
+
+public static class AssetReadingPolicy
+{
+    public static void EnsureCanRegister(AssetEntity asset, decimal value, DateTimeOffset? readAt, string operation)
+    {
+        AssetOperationalPolicy.EnsureCanStartOperation(asset, operation);
+        if (asset.UsageMeasurementType is not "HOROMETRO" and not "KILOMETRAJE") throw new DomainException("El activo no tiene un tipo de medicion de uso valido.");
+        if (value < 0) throw new DomainException("La lectura no puede ser negativa.");
+        if (readAt is { } valueDate && valueDate > DateTimeOffset.UtcNow.AddMinutes(5)) throw new DomainException("La fecha de lectura no puede estar en el futuro.");
+    }
 }

@@ -48,6 +48,18 @@ public sealed class AssetLocationPeriodConfiguration : IEntityTypeConfiguration<
     }
 }
 
+public sealed class AssetPhysicalLocationPeriodConfiguration : IEntityTypeConfiguration<AssetPhysicalLocationPeriodEntity>
+{
+    public void Configure(EntityTypeBuilder<AssetPhysicalLocationPeriodEntity> builder)
+    {
+        builder.ToTable("vigencias_ubicacion_fisica_activo"); builder.ConfigureBase();
+        builder.Property(x => x.AssetId).HasColumnName("activo_id"); builder.Property(x => x.LocationType).HasColumnName("tipo_ubicacion").HasMaxLength(16).IsRequired(); builder.Property(x => x.FaenaId).HasColumnName("faena_id"); builder.Property(x => x.WorkshopId).HasColumnName("taller_id"); builder.Property(x => x.ValidFromUtc).HasColumnName("vigencia_desde_utc").HasColumnType("timestamptz"); builder.Property(x => x.ValidToUtc).HasColumnName("vigencia_hasta_utc").HasColumnType("timestamptz"); builder.Property(x => x.Reason).HasColumnName("motivo").HasMaxLength(1000); builder.Property(x => x.RegisteredByUserId).HasColumnName("registrado_por_usuario_id").HasMaxLength(120).IsRequired(); builder.Property(x => x.WorkOrderId).HasColumnName("orden_trabajo_id"); builder.Property(x => x.OperationalUnitId).HasColumnName("unidad_operativa_id"); builder.Property(x => x.Observations).HasColumnName("observaciones").HasMaxLength(2000);
+        builder.HasIndex(x => new { x.AssetId, x.ValidFromUtc }).IsUnique(); builder.HasIndex(x => x.FaenaId); builder.HasIndex(x => x.WorkshopId); builder.HasIndex(x => x.AssetId).IsUnique().HasFilter("vigencia_hasta_utc IS NULL");
+        builder.HasOne(x => x.Asset).WithMany().HasForeignKey(x => x.AssetId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.Faena).WithMany().HasForeignKey(x => x.FaenaId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.Workshop).WithMany().HasForeignKey(x => x.WorkshopId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.WorkOrder).WithMany().HasForeignKey(x => x.WorkOrderId).OnDelete(DeleteBehavior.Restrict); builder.HasOne(x => x.OperationalUnit).WithMany().HasForeignKey(x => x.OperationalUnitId).OnDelete(DeleteBehavior.Restrict);
+        builder.ToTable(t => { t.HasCheckConstraint("ck_vigencias_ubicacion_fisica_tipo", "(tipo_ubicacion = 'FAENA' AND faena_id IS NOT NULL AND taller_id IS NULL) OR (tipo_ubicacion = 'TALLER' AND taller_id IS NOT NULL AND faena_id IS NULL)"); t.HasCheckConstraint("ck_vigencias_ubicacion_fisica_fechas", "vigencia_hasta_utc IS NULL OR vigencia_hasta_utc > vigencia_desde_utc"); });
+    }
+}
+
 public sealed class AssetIdentifierAliasConfiguration : IEntityTypeConfiguration<AssetIdentifierAliasEntity>
 {
     public void Configure(EntityTypeBuilder<AssetIdentifierAliasEntity> builder)

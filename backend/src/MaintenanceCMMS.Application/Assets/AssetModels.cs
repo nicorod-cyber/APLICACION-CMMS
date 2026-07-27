@@ -70,6 +70,9 @@ public sealed record TransferAssetRequest(
     string? Observaciones = null,
     bool TrasladarUnidadCompleta = false);
 
+public sealed record RegisterWorkshopEntryRequest(string TallerCodigo, DateTimeOffset FechaEfectivaUtc, string? OrdenTrabajoId = null, string? Motivo = null, string? Observaciones = null);
+public sealed record RegisterReturnToSiteRequest(DateTimeOffset FechaEfectivaUtc, string? EstadoOperacionalDestinoCodigo = null, string? OrdenTrabajoId = null, string? Motivo = null, string? Observaciones = null);
+public sealed record AssetPhysicalLocationResponse(string ActivoCodigo, string TipoUbicacion, string NombreUbicacion, string? Comuna, DateTimeOffset VigenciaDesdeUtc, DateTimeOffset? VigenciaHastaUtc, string UsuarioId, string? OrdenTrabajoNumero, string? Motivo, string? Observaciones, string? UnidadOperativaCodigo, IReadOnlyCollection<string>? ActivosAfectados = null);
 public sealed record CreateAssetReadingRequest(
     decimal Valor,
     DateTimeOffset? FechaLecturaUtc = null,

@@ -36,11 +36,9 @@ public sealed record ScheduleBoardQuery(
 public sealed record UpsertWorkshopRequest(
     string TallerCodigo,
     string Nombre,
-    string FaenaCodigo,
-    decimal CapacidadDiariaHH,
     int CapacidadEquipos,
-    string Horario,
-    string Especialidad,
+    string? Comuna,
+    string? SupervisorUsuarioId,
     bool Activo = true,
     string? Reason = null);
 
@@ -70,12 +68,14 @@ public sealed record ScheduleBoardResponse(
 public sealed record WorkshopResponse(
     string TallerCodigo,
     string Nombre,
-    string FaenaCodigo,
-    decimal CapacidadDiariaHH,
     int CapacidadEquipos,
-    string Horario,
-    string Especialidad,
+    string? Comuna,
+    string? SupervisorUsuarioId,
+    string? SupervisorNombre,
+    int ActivosActualmenteEnTaller,
     bool Activo);
+
+public sealed record WorkshopSupervisorResponse(string UsuarioId, string Nombre, string Username);
 
 public sealed record ScheduleItemResponse(
     string ProgramacionId,
@@ -98,8 +98,6 @@ public sealed record WorkshopLoadResponse(
     string TallerCodigo,
     string TallerNombre,
     DateOnly Fecha,
-    decimal CapacidadHH,
-    decimal HHProgramadas,
     int CapacidadEquipos,
     int EquiposProgramados,
     bool Sobrecargado);
