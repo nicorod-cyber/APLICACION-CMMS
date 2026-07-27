@@ -41,8 +41,8 @@ export const navigationItems: NavigationItem[] = [
     roles: [AUTH_ROLES.admin]
   },
   {
-    label: "Activos",
-    path: "/activos",
+    label: "Equipos",
+    path: "/equipos",
     icon: Boxes,
     accent: "bg-sky-500",
     roles: [

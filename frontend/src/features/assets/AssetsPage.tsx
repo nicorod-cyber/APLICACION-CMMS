@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { ArrowRightLeft, FileText, Gauge, History, Pencil, Plus, RefreshCw, Save, Wrench } from "lucide-react";
 import { apiFetch, AUTH_ROLES, useAuthStore } from "../auth/authStore";
 import { FaenaRecord, FaenaSelect, useFaenas } from "../faenas/FaenaSelect";
@@ -26,6 +27,7 @@ const emptyAttr=():Attr=>({texto:"",numero:"",booleano:"",fecha:""});
 const emptyStateEvent=():StateEvent=>({estadoOperacionalCodigo:"",motivo:"",tipoAntecedente:"NONE",antecedenteId:"",referenciaAntecedente:"",antecedenteDescripcion:""});
 
 export function AssetsPage(){
+ const [searchParams]=useSearchParams();
  const queryClient=useQueryClient();
  const canMaintain=useAuthStore(state=>state.hasRole([AUTH_ROLES.admin,AUTH_ROLES.planner,AUTH_ROLES.maintenanceSupervisor])); const [detail,setDetail]=useState<Detail|null>(null),[definitions,setDefinitions]=useState<Definition[]>([]),[matrix,setMatrix]=useState<Matrix[]>([]),[form,setForm]=useState<Form>(blank),[editing,setEditing]=useState(false),[creating,setCreating]=useState(false),[query,setQuery]=useState({texto:"",faenaCodigo:"",tipoActivoCodigo:""}),[filters,setFilters]=useState({texto:"",faenaCodigo:"",tipoActivoCodigo:""}),[saving,setSaving]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState(""),[reading,setReading]=useState(""),[readingDate,setReadingDate]=useState(new Date().toISOString().slice(0,16)),[correction,setCorrection]=useState({id:"",valor:"",motivo:""}),[stateEvent,setStateEvent]=useState<StateEvent>(emptyStateEvent()),[transfer,setTransfer]=useState({faenaDestinoCodigo:"",fechaEfectivaUtc:new Date().toISOString().slice(0,16),motivo:"",observaciones:"",trasladarUnidadCompleta:false}),[selectedFaenaFromPicker,setSelectedFaenaFromPicker]=useState<FaenaRecord|null>(null),[physicalLocation,setPhysicalLocation]=useState<PhysicalLocation|null>(null),[physicalHistory,setPhysicalHistory]=useState<PhysicalLocation[]>([]),[workshops,setWorkshops]=useState<{tallerCodigo:string;nombre:string;comuna?:string|null}[]>([]),[locationAction,setLocationAction]=useState<LocationAction>({tallerCodigo:"",fechaEfectivaUtc:new Date().toISOString().slice(0,16),estadoOperacionalDestinoCodigo:"OPERATIVO_FAENA",ordenTrabajoId:"",motivo:"",observaciones:""});
  const {faenas}=useFaenas(true);
@@ -36,6 +38,8 @@ export function AssetsPage(){
  const assetTotal=assetsQuery.data?.pages[0]?.totalCount??0;
  const families=useMemo(()=>catalog.familiasEquipo.filter(x=>!form.tipoActivoCodigo||x.tipoActivoCodigo===form.tipoActivoCodigo),[catalog,form.tipoActivoCodigo]);
  const selectedFaena=useMemo(()=>selectedFaenaFromPicker?.codigo===form.faenaCodigo?selectedFaenaFromPicker:faenas.find(x=>x.codigo===form.faenaCodigo)??null,[faenas,form.faenaCodigo,selectedFaenaFromPicker]);
+ const assetFromRoute=searchParams.get("asset");
+ useEffect(()=>{if(assetFromRoute&&assetFromRoute!==detail?.resumen.codigo)void select(assetFromRoute)},[assetFromRoute]);
  const listError=assetsQuery.error??catalogQuery.error;
  async function refresh(preferred?:string){setError("");await queryClient.invalidateQueries({queryKey:["assets"]});if(preferred)await select(preferred)}
  function applyFilters(){setError("");if(JSON.stringify(filters)===JSON.stringify(query))void assetsQuery.refetch();else setFilters({...query});}

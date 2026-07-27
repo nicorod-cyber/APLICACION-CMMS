@@ -74,6 +74,218 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
         return new(items, page, pageSize, total, totalPages, page < totalPages, page > 1);
     }
+    public async Task<PagedResponse<EquipmentOverviewRow>> ListEquipmentOverviewAsync(EquipmentOverviewQuery query, UserAccessContext user, CancellationToken ct)
+    {
+        var page = Math.Max(1, query.Page);
+        var pageSize = query.PageSize is 25 or 50 or 100 ? query.PageSize : 25;
+        var canViewAll = user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase)
+            || user.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase);
+        var authorizedFaenas = user.Faenas.Select(Code).Distinct().ToArray();
+
+        IQueryable<AssetEntity> assets = _db.Assets.AsNoTracking();
+        IQueryable<OperationalUnitEntity> units = _db.OperationalUnits.AsNoTracking();
+
+        if (!canViewAll)
+        {
+            assets = assets.Where(x => x.FaenaId == null || (x.Faena != null && authorizedFaenas.Contains(x.Faena.Code)));
+            units = units.Where(x => x.FaenaId == null || (x.Faena != null && authorizedFaenas.Contains(x.Faena.Code)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.FaenaCodigo))
+        {
+            var siteCode = Code(query.FaenaCodigo);
+            assets = assets.Where(x => x.Faena != null && x.Faena.Code == siteCode);
+            units = units.Where(x => x.Faena != null && x.Faena.Code == siteCode);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Zona))
+        {
+            var zone = query.Zona.Trim();
+            assets = assets.Where(x => x.Faena != null && x.Faena.Zone == zone);
+            units = units.Where(x => x.Faena != null && x.Faena.Zone == zone);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.TipoActivoCodigo))
+        {
+            var assetTypeCode = Code(query.TipoActivoCodigo);
+            assets = assets.Where(x => x.AssetTypeDefinition.Code == assetTypeCode);
+            units = units.Where(_ => false);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.EstadoOperacionalCodigo))
+        {
+            var operationalStateCode = Code(query.EstadoOperacionalCodigo);
+            assets = assets.Where(x => x.OperationalState.Code == operationalStateCode);
+            units = units.Where(x => x.OperationalState.Code == operationalStateCode);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            assets = assets.Where(x => EF.Functions.ILike(x.Code, "%" + term + "%")
+                || EF.Functions.ILike(x.Name, "%" + term + "%")
+                || (x.SerialNumber != null && EF.Functions.ILike(x.SerialNumber, "%" + term + "%")));
+            units = units.Where(x => EF.Functions.ILike(x.Code, "%" + term + "%") || EF.Functions.ILike(x.Name, "%" + term + "%"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.TipoUbicacionFisica))
+        {
+            var physicalLocationType = Code(query.TipoUbicacionFisica);
+            assets = assets.Where(x => _db.AssetPhysicalLocationPeriods.Any(p => p.AssetId == x.Id && p.ValidToUtc == null && p.LocationType == physicalLocationType));
+            units = units.Where(_ => false);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.TallerCodigo))
+        {
+            var workshopCode = Code(query.TallerCodigo);
+            assets = assets.Where(x => _db.AssetPhysicalLocationPeriods.Any(p => p.AssetId == x.Id && p.ValidToUtc == null && p.Workshop != null && p.Workshop.Code == workshopCode));
+            units = units.Where(_ => false);
+        }
+
+        // No preventive or regulatory-document status is currently reliable as a unified projection.
+        // A requested status therefore has no matching rows rather than presenting inferred information.
+        if (!string.IsNullOrWhiteSpace(query.EstadoPreventivo) || !string.IsNullOrWhiteSpace(query.EstadoDocumental))
+        {
+            assets = assets.Where(_ => false);
+            units = units.Where(_ => false);
+        }
+
+        // A mounted component is represented by its operational unit. A component that was removed
+        // stays visible as LOOSE_COMPONENT, while all other independent assets are ASSET.
+        assets = assets.Where(x => !_db.OperationalUnitComponents.Any(c => c.AssetId == x.Id && c.RemovedAtUtc == null));
+
+        var assetKeys = assets.Select(x => new
+        {
+            AssetId = (Guid?)x.Id,
+            OperationalUnitId = (Guid?)null,
+            RowType = _db.OperationalUnitComponents.Any(c => c.AssetId == x.Id) ? "LOOSE_COMPONENT" : "ASSET",
+            x.Code,
+            x.Name
+        });
+        var unitKeys = units.Select(x => new
+        {
+            AssetId = (Guid?)null,
+            OperationalUnitId = (Guid?)x.Id,
+            RowType = "COMPOSITE_UNIT",
+            x.Code,
+            x.Name
+        });
+        var keys = assetKeys.Concat(unitKeys);
+
+        var total = await keys.CountAsync(ct);
+        var pageKeys = await keys
+            .OrderBy(x => x.Name)
+            .ThenBy(x => x.Code)
+            .ThenBy(x => x.RowType)
+            .ThenBy(x => x.AssetId)
+            .ThenBy(x => x.OperationalUnitId)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToArrayAsync(ct);
+
+        var assetIds = pageKeys.Where(x => x.AssetId.HasValue).Select(x => x.AssetId!.Value).ToArray();
+        var unitIds = pageKeys.Where(x => x.OperationalUnitId.HasValue).Select(x => x.OperationalUnitId!.Value).ToArray();
+
+        var assetRows = await _db.Assets.AsNoTracking()
+            .Where(x => assetIds.Contains(x.Id))
+            .Select(x => new EquipmentOverviewRow(
+                x.Id.ToString("D"),
+                _db.OperationalUnitComponents.Any(c => c.AssetId == x.Id) ? "LOOSE_COMPONENT" : "ASSET",
+                x.Id.ToString("D"),
+                null,
+                x.Code,
+                x.Name,
+                x.Faena == null ? null : x.Faena.Zone,
+                x.FaenaId == null ? null : x.FaenaId.ToString(),
+                x.Faena == null ? null : x.Faena.Code,
+                x.Faena == null ? null : x.Faena.Name,
+                x.OperationalState.Code,
+                x.OperationalState.Name,
+                _db.AssetPhysicalLocationPeriods.Where(p => p.AssetId == x.Id && p.ValidToUtc == null).Select(p => p.LocationType).FirstOrDefault(),
+                _db.AssetPhysicalLocationPeriods.Where(p => p.AssetId == x.Id && p.ValidToUtc == null).Select(p => p.WorkshopId != null ? p.WorkshopId.ToString() : p.FaenaId != null ? p.FaenaId.ToString() : null).FirstOrDefault(),
+                _db.AssetPhysicalLocationPeriods.Where(p => p.AssetId == x.Id && p.ValidToUtc == null).Select(p => p.Workshop != null ? p.Workshop.Name : p.Faena != null ? p.Faena.Name : null).FirstOrDefault(),
+                _db.AssetPhysicalLocationPeriods.Where(p => p.AssetId == x.Id && p.ValidToUtc == null).Select(p => p.Workshop == null ? null : p.Workshop.Commune).FirstOrDefault(),
+                _db.AssetPhysicalLocationPeriods.Where(p => p.AssetId == x.Id && p.ValidToUtc == null).Select(p => (DateTimeOffset?)p.ValidFromUtc).FirstOrDefault(),
+                x.AssetTypeDefinition.Code,
+                x.AssetTypeDefinition.Name,
+                x.Brand,
+                x.ManufacturingYear,
+                x.UsageMeasurementType,
+                _db.AssetReadings.Where(r => r.AssetId == x.Id && !r.IsAnomalous).OrderByDescending(r => r.ReadAtUtc).Select(r => (decimal?)r.Value).FirstOrDefault(),
+                x.UsageMeasurementType == "HOROMETRO" ? "h" : x.UsageMeasurementType == "KILOMETRAJE" ? "km" : null,
+                null,
+                null,
+                null,
+                "No existe una regla preventiva agregada confiable para esta vista.",
+                null,
+                null,
+                null,
+                null,
+                null))
+            .ToArrayAsync(ct);
+
+        var unitRows = await _db.OperationalUnits.AsNoTracking()
+            .Where(x => unitIds.Contains(x.Id))
+            .Select(x => new EquipmentOverviewRow(
+                x.Id.ToString("D"),
+                "COMPOSITE_UNIT",
+                null,
+                x.Id.ToString("D"),
+                x.Code,
+                x.Name,
+                x.Faena == null ? null : x.Faena.Zone,
+                x.FaenaId == null ? null : x.FaenaId.ToString(),
+                x.Faena == null ? null : x.Faena.Code,
+                x.Faena == null ? null : x.Faena.Name,
+                x.OperationalState.Code,
+                x.OperationalState.Name,
+                null,
+                null,
+                null,
+                null,
+                null,
+                x.OperationalUnitType.Code,
+                x.OperationalUnitType.Name,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "No existe una consolidacion preventiva o documental aprobada para la unidad compuesta.",
+                null,
+                null,
+                null,
+                null,
+                null))
+            .ToArrayAsync(ct);
+
+        var componentsByUnit = unitIds.Length == 0
+            ? new Dictionary<Guid, IReadOnlyCollection<string>>()
+            : (await _db.OperationalUnitComponents.AsNoTracking()
+                .Where(x => unitIds.Contains(x.OperationalUnitId) && x.RemovedAtUtc == null)
+                .OrderBy(x => x.ComponentRole.Code)
+                .ThenBy(x => x.Asset.Code)
+                .Select(x => new { x.OperationalUnitId, x.Asset.Code })
+                .ToArrayAsync(ct))
+                .GroupBy(x => x.OperationalUnitId)
+                .ToDictionary(x => x.Key, x => (IReadOnlyCollection<string>)x.Select(component => component.Code).ToArray());
+
+        var rowsById = assetRows.Concat(unitRows).ToDictionary(x => x.RowId);
+        var items = pageKeys.Select(key =>
+        {
+            var rowId = key.AssetId?.ToString("D") ?? key.OperationalUnitId!.Value.ToString("D");
+            var row = rowsById[rowId];
+            return key.OperationalUnitId.HasValue && componentsByUnit.TryGetValue(key.OperationalUnitId.Value, out var components)
+                ? row with { Components = components }
+                : row;
+        }).ToArray();
+
+        var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+        return new PagedResponse<EquipmentOverviewRow>(items, page, pageSize, total, totalPages, page < totalPages, page > 1);
+    }
     public async Task<AssetDetail?> GetByIdAsync(string codigo, UserAccessContext user, CancellationToken ct)
     {
         var asset = await FindAsync(codigo, false, ct); if (asset is null) return null; View(user, asset); return await DetailAsync(asset, ct);
@@ -434,7 +646,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     {
         var definitions = await DefinitionsAsync(asset.AssetTypeId, asset.FamilyId, ct); var values = await _db.AssetAttributeValues.AsNoTracking().Where(x => x.AssetId == asset.Id).ToListAsync(ct); var readings = await ValidReadingsAsync(asset.Id, ct); var latest = readings.OrderByDescending(x => x.ReadAtUtc).ThenByDescending(x => x.CreatedAtUtc).FirstOrDefault(); var matrix = await MatrixAsync(asset, ct);
         var required = definitions.Where(x => x.IsRequired).ToArray(); var ids = values.Where(x => x.TextValue is not null || x.NumericValue.HasValue || x.BooleanValue.HasValue || x.DateValue.HasValue).Select(x => x.AttributeDefinitionId).ToHashSet(); var missing = required.Where(x => !ids.Contains(x.Id)).Select(x => x.Code).ToArray(); var completed = required.Length - missing.Length; var percentage = required.Length == 0 ? 100 : (int)Math.Round(completed * 100m / required.Length); var completeness = new AssetCompleteness(required.Length, completed, percentage, percentage == 100 ? "COMPLETA" : completed == 0 ? "PENDIENTE" : "PARCIAL", missing);
-        return new AssetSummary(asset.Code, asset.Name, asset.AssetTypeDefinition.Code, asset.AssetTypeDefinition.Name, asset.Family?.Code, asset.Family?.Name, asset.Faena?.Code, asset.Faena?.TechnicalLocation?.Code, asset.OperationalState.Code, asset.Criticality, asset.UsageMeasurementType, latest?.Value, Unit(asset.UsageMeasurementType), completeness, DocumentState(matrix), !matrix.Any(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER"));
+        return new AssetSummary(asset.Code, asset.Name, asset.AssetTypeDefinition.Code, asset.AssetTypeDefinition.Name, asset.Family?.Code, asset.Family?.Name, asset.Faena?.Code, asset.Faena?.TechnicalLocation?.Code, asset.OperationalState.Code, asset.Criticality, asset.UsageMeasurementType, latest?.Value, Unit(asset.UsageMeasurementType), completeness, DocumentState(matrix), !matrix.Any(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER"), asset.Faena?.Name, asset.Faena?.Zone, asset.OperationalState.Name);
     }
 
     private async Task<IReadOnlyCollection<AssetSummary>> SummariesAsync(IReadOnlyCollection<AssetEntity> assets, CancellationToken ct)
@@ -491,7 +703,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                     .GroupBy(x => x.DocumentTypeId).Select(group => group.OrderByDescending(x => x.EquipmentFamilyId.HasValue).First()).OrderBy(x => x.DocumentType.Code)
                     .Select(rule => MatrixRow(rule.DocumentType, rule.IsMandatory, rule.IsCritical, rule.BlocksAvailability, rule.AlertDays ?? rule.DocumentType.AlertDays, BestDocument(documents, rule.DocumentTypeId), today)).ToArray();
             }
-            return new AssetSummary(asset.Code, asset.Name, asset.AssetTypeDefinition.Code, asset.AssetTypeDefinition.Name, asset.Family?.Code, asset.Family?.Name, asset.Faena?.Code, asset.Faena?.TechnicalLocation?.Code, asset.OperationalState.Code, asset.Criticality, asset.UsageMeasurementType, latestReading?.Value, Unit(asset.UsageMeasurementType), completeness, DocumentState(rows), !rows.Any(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER"));
+            return new AssetSummary(asset.Code, asset.Name, asset.AssetTypeDefinition.Code, asset.AssetTypeDefinition.Name, asset.Family?.Code, asset.Family?.Name, asset.Faena?.Code, asset.Faena?.TechnicalLocation?.Code, asset.OperationalState.Code, asset.Criticality, asset.UsageMeasurementType, latestReading?.Value, Unit(asset.UsageMeasurementType), completeness, DocumentState(rows), !rows.Any(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER"), asset.Faena?.Name, asset.Faena?.Zone, asset.OperationalState.Name);
         }).ToArray();
     }
     private async Task<AssetDetail> DetailAsync(AssetEntity asset, CancellationToken ct)

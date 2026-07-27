@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { Plus, RefreshCw, RotateCcw, Wrench } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect, type FaenaRecord } from "../faenas/FaenaSelect";
@@ -12,13 +13,16 @@ type AssetOption={codigo:string;nombre:string;faenaCodigo?:string|null;tipoActiv
 const unitBlank={codigo:"",nombre:"",tipoUnidadCodigo:"",faenaCodigo:"",estadoOperacionalCodigo:"",criticidad:"",observaciones:""};
 
 export function OperationalUnitsPage(){
+ const [searchParams]=useSearchParams();
  const queryClient=useQueryClient();
  const [filters,setFilters]=useState({faenaCodigo:"",texto:""}),[draftFilters,setDraftFilters]=useState({faenaCodigo:"",texto:""}),[selectedCode,setSelectedCode]=useState<string|null>(null),[selectedUnitFaena,setSelectedUnitFaena]=useState<FaenaRecord|null>(null),[unitForm,setUnitForm]=useState(unitBlank),[typeForm,setTypeForm]=useState({codigo:"",nombre:"",descripcion:""}),[roleForm,setRoleForm]=useState({codigo:"",nombre:"",descripcion:""}),[ruleForm,setRuleForm]=useState({tipoUnidadCodigo:"",rolComponenteCodigo:"",cantidadMinima:"0",cantidadMaxima:"1",obligatorio:true,tipoActivoCodigo:"",familiaEquipoCodigo:""}),[mount,setMount]=useState({activoCodigo:"",rolComponenteCodigo:"",ordenTrabajoNumero:"",observaciones:"",motivo:""}),[replace,setReplace]=useState({activoSalienteCodigo:"",activoEntranteCodigo:"",rolComponenteCodigo:"",ordenTrabajoNumero:"",observaciones:"",motivo:""}),[assetSearch,setAssetSearch]=useState(""),[debouncedAssetSearch,setDebouncedAssetSearch]=useState(""),[error,setError]=useState(""),[notice,setNotice]=useState(""),[saving,setSaving]=useState(false);
  const unitsQuery=useInfiniteQuery({queryKey:["operational-units",filters],initialPageParam:1,queryFn:async({pageParam})=>{const p=new URLSearchParams({page:String(pageParam),pageSize:"25"});if(filters.faenaCodigo)p.set("faenaCodigo",filters.faenaCodigo);if(filters.texto)p.set("texto",filters.texto);const result=await apiFetch<Page<UnitSummary>>(`/api/operational-units?${p}`);if(!result||!Array.isArray(result.items))throw new Error("La respuesta paginada de unidades operativas tiene un formato inválido.");return result;},getNextPageParam:last=>last.hasNextPage?last.page+1:undefined});
  const units=(unitsQuery.data?.pages.flatMap(page=>page.items)??[]).filter((unit,index,all)=>all.findIndex(other=>other.codigo===unit.codigo)===index);
  const total=unitsQuery.data?.pages[0]?.totalCount??0;
  const detailQuery=useQuery({queryKey:["operational-unit",selectedCode],enabled:!!selectedCode,queryFn:()=>apiFetch<UnitDetail>(`/api/operational-units/${encodeURIComponent(selectedCode!)}`)});
- const selected=detailQuery.data??null;
+ const selected=detailQuery.data??null; const unitFromRoute=searchParams.get("unit");
+ useEffect(()=>{if(unitFromRoute&&unitFromRoute!==selectedCode)setSelectedCode(unitFromRoute)},[unitFromRoute]);
+
  useEffect(()=>{const timer=window.setTimeout(()=>setDebouncedAssetSearch(assetSearch.trim()),300);return()=>window.clearTimeout(timer)},[assetSearch]);
  const assetQuery=useQuery({queryKey:["operational-unit-asset-search",selected?.faenaCodigo??null,debouncedAssetSearch],enabled:!!selected&&debouncedAssetSearch.length>=2,queryFn:async()=>{const p=new URLSearchParams({page:"1",pageSize:"25",texto:debouncedAssetSearch});if(selected?.faenaCodigo)p.set("faenaCodigo",selected.faenaCodigo);const result=await apiFetch<Page<AssetOption>>(`/api/assets?${p}`);if(!Array.isArray(result?.items))throw new Error("La búsqueda de activos devolvió un formato inválido.");return result.items;}});
  function updateCachedSummary(detail:UnitDetail){queryClient.setQueryData<InfiniteData<Page<UnitSummary>>>(["operational-units",filters],data=>data?{...data,pages:data.pages.map(page=>({...page,items:page.items.map(unit=>unit.codigo===detail.codigo?{...unit,nombre:detail.nombre,tipoUnidadCodigo:detail.tipoUnidadCodigo,faenaCodigo:detail.faenaCodigo,ubicacionTecnicaCodigo:detail.ubicacionTecnicaCodigo,estadoOperacionalCodigo:detail.estadoOperacionalCodigo,criticidad:detail.criticidad,composicionCompleta:detail.composicion.completa,rolesFaltantes:detail.composicion.faltantes}:unit)}))}:data)}

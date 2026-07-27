@@ -714,6 +714,20 @@ assetsApi.MapGet("/", async (
     })
     .WithName("ListAssets");
 
+assetsApi.MapGet("/equipment-overview", async (
+        string? search, string? faenaCodigo, string? zona, string? tipoActivoCodigo, string? estadoOperacionalCodigo,
+        string? tipoUbicacionFisica, string? tallerCodigo, string? estadoPreventivo, string? estadoDocumental,
+        int? page, int? pageSize, ClaimsPrincipal user, IAssetService assetService, CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await assetService.ListEquipmentOverviewAsync(
+                new EquipmentOverviewQuery(search, faenaCodigo, zona, tipoActivoCodigo, estadoOperacionalCodigo, tipoUbicacionFisica, tallerCodigo, estadoPreventivo, estadoDocumental, page ?? 1, pageSize ?? 25),
+                UserAccessContext.FromClaims(user), cancellationToken));
+        }
+        catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+    })
+    .WithName("ListEquipmentOverview");
 assetsApi.MapGet("/{id}", async (
         string id,
         ClaimsPrincipal user,

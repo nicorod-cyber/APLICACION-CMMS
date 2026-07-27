@@ -12,7 +12,60 @@ public sealed record AssetListQuery(
     int Page = 1,
     int PageSize = 25);
 
-public sealed record AssetCatalogItem(string Codigo, string Nombre, string? TipoActivoCodigo = null, string? FaenaCodigo = null);
+public sealed record EquipmentOverviewQuery(
+    string? Search = null,
+    string? FaenaCodigo = null,
+    string? Zona = null,
+    string? TipoActivoCodigo = null,
+    string? EstadoOperacionalCodigo = null,
+    string? TipoUbicacionFisica = null,
+    string? TallerCodigo = null,
+    string? EstadoPreventivo = null,
+    string? EstadoDocumental = null,
+    int Page = 1,
+    int PageSize = 25);
+
+public sealed record EquipmentDocumentRequirementStatus(
+    string Code,
+    string? Status,
+    DateOnly? ExpirationDate,
+    int? DaysUntilExpiration,
+    bool? Applies);
+
+public sealed record EquipmentOverviewRow(
+    string RowId,
+    string RowType,
+    string? AssetId,
+    string? OperationalUnitId,
+    string Code,
+    string Name,
+    string? Zone,
+    string? SiteId,
+    string? SiteCode,
+    string? SiteName,
+    string OperationalStateCode,
+    string OperationalStateName,
+    string? PhysicalLocationType,
+    string? PhysicalLocationId,
+    string? PhysicalLocationName,
+    string? PhysicalLocationCommune,
+    DateTimeOffset? PhysicalLocationSinceUtc,
+    string? EquipmentTypeCode,
+    string EquipmentTypeName,
+    string? Brand,
+    short? ManufacturingYear,
+    string? UsageMeasurementType,
+    decimal? LastReading,
+    string? UsageUnit,
+    string? LastPreventiveType,
+    decimal? UsageSinceLastPreventive,
+    DateOnly? ApproximateNextMaintenanceDate,
+    string? NotCalculableReason,
+    EquipmentDocumentRequirementStatus? TechnicalReview,
+    EquipmentDocumentRequirementStatus? Sernageomin,
+    EquipmentDocumentRequirementStatus? Dgmn,
+    EquipmentDocumentRequirementStatus? FireSuppression,
+    IReadOnlyCollection<string>? Components = null);public sealed record AssetCatalogItem(string Codigo, string Nombre, string? TipoActivoCodigo = null, string? FaenaCodigo = null);
 public sealed record AssetCatalogResponse(IReadOnlyCollection<AssetCatalogItem> TiposActivo, IReadOnlyCollection<AssetCatalogItem> FamiliasEquipo, IReadOnlyCollection<AssetCatalogItem> EstadosOperacionales, IReadOnlyCollection<AssetCatalogItem> UbicacionesTecnicas, IReadOnlyCollection<AssetCatalogItem> Criticidades);
 public sealed record AssetAttributeValueInput(
     string DefinicionCodigo,
@@ -99,7 +152,8 @@ public sealed record AssetSummary(
     string? FamiliaEquipoCodigo, string? FamiliaEquipoNombre, string? FaenaCodigo,
     string? UbicacionTecnicaCodigo, string EstadoOperacionalCodigo, string? Criticidad,
     string? TipoMedicionUso, decimal? UltimaLectura, string? UnidadLectura,
-    AssetCompleteness CompletitudTecnica, string EstadoDocumental, bool DisponibleDocumentalmente);
+    AssetCompleteness CompletitudTecnica, string EstadoDocumental, bool DisponibleDocumentalmente,
+    string? FaenaNombre = null, string? Zona = null, string? EstadoOperacionalNombre = null);
 
 public sealed record AssetDetail(
     AssetSummary Resumen, string? Marca, string? Modelo, string? NumeroSerie, string? Propiedad,

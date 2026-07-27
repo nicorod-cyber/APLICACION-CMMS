@@ -41,6 +41,20 @@ public sealed class AssetServiceTests
         Assert.NotEqual(first.Resumen.Codigo, second.Resumen.Codigo);
     }
     [Fact]
+    public async Task AssetDetail_IncludesDescriptiveSiteZoneAndOperationalState()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var created = await fixture.Service.CreateAsync(CompleteCreateRequest("DETAIL-DESCRIPTIVE"), Admin, CancellationToken.None);
+        var detail = await fixture.Service.GetByIdAsync(created.Resumen.Codigo, Admin, CancellationToken.None);
+
+        Assert.NotNull(detail);
+        Assert.Equal("F001", detail!.Resumen.FaenaCodigo);
+        Assert.Equal("Faena Norte", detail.Resumen.FaenaNombre);
+        Assert.Null(detail.Resumen.Zona);
+        Assert.Equal("OPERATIVO_FAENA", detail.Resumen.EstadoOperacionalCodigo);
+        Assert.Equal("Operativo en Faena", detail.Resumen.EstadoOperacionalNombre);
+    }
+    [Fact]
     public async Task StateAndReadings_UseOperationalStateAndImmutableCorrection()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -198,6 +212,70 @@ public sealed class AssetServiceTests
 
         Assert.Equal(8, commandsFor25);
         Assert.Equal(commandsFor25, commandsFor50);
+    }
+    [Fact]
+    public async Task EquipmentOverview_UsesUnifiedRepresentationWithoutMountedDuplicatesAndWithBoundedQueries()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var db = fixture.DbContext;
+        var assetType = await db.AssetTypes.SingleAsync(x => x.Code == "CAMION");
+        var family = await db.EquipmentFamilies.SingleAsync(x => x.Code == "CAMIONES");
+        var faena = await db.Faenas.SingleAsync(x => x.Code == "F001");
+        var state = await db.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO_FAENA");
+        var unitType = new OperationalUnitTypeEntity { Code = "CAMION_FABRICA", Name = "Camión fábrica", IsActive = true };
+        var role = new OperationalUnitComponentRoleEntity { Code = "CHASIS", Name = "Chasis", IsActive = true };
+        db.AddRange(unitType, role);
+        await db.SaveChangesAsync();
+
+        var independent = new AssetEntity { Code = "OVERVIEW-INDEPENDIENTE", Name = "Activo independiente", AssetTypeId = assetType.Id, FamilyId = family.Id, FaenaId = faena.Id, OperationalStateId = state.Id };
+        var mounted = new AssetEntity { Code = "OVERVIEW-MONTADO", Name = "Chasis montado", AssetTypeId = assetType.Id, FamilyId = family.Id, FaenaId = faena.Id, OperationalStateId = state.Id };
+        var loose = new AssetEntity { Code = "OVERVIEW-SUELTO", Name = "Chasis suelto", AssetTypeId = assetType.Id, FamilyId = family.Id, FaenaId = faena.Id, OperationalStateId = state.Id };
+        var unit = new OperationalUnitEntity { Code = "OVERVIEW-UNIDAD", Name = "Camión fábrica", OperationalUnitTypeId = unitType.Id, FaenaId = faena.Id, OperationalStateId = state.Id };
+        db.AddRange(independent, mounted, loose, unit);
+        for (var index = 1; index <= 30; index++) db.Assets.Add(new AssetEntity { Code = $"OVERVIEW-{index:D3}", Name = $"Activo overview {index:D3}", AssetTypeId = assetType.Id, FamilyId = family.Id, FaenaId = faena.Id, OperationalStateId = state.Id });
+        await db.SaveChangesAsync();
+        db.OperationalUnitComponents.AddRange(
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = mounted.Id, ComponentRoleId = role.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" },
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = loose.Id, ComponentRoleId = role.Id, InstalledAtUtc = DateTimeOffset.UtcNow.AddDays(-2), RemovedAtUtc = DateTimeOffset.UtcNow.AddDays(-1), InstalledByUserId = "admin", RemovedByUserId = "admin" });
+        await db.SaveChangesAsync();
+
+        var before = await db.Assets.CountAsync();
+        var first = await fixture.Service.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "OVERVIEW", Page: 1, PageSize: 25), Admin, CancellationToken.None);
+        var second = await fixture.Service.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "OVERVIEW", Page: 2, PageSize: 25), Admin, CancellationToken.None);
+        var restricted = new UserAccessContext("viewer-f002", [AuthRoles.FaenaViewer], [], ["F002"]);
+        var deniedByTerritory = await fixture.Service.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "OVERVIEW"), restricted, CancellationToken.None);
+
+        Assert.Equal(33, first.TotalCount);
+        Assert.Contains(first.Items, x => x.Code == independent.Code && x.RowType == "ASSET");
+        Assert.Contains(first.Items.Concat(second.Items), x => x.Code == loose.Code && x.RowType == "LOOSE_COMPONENT");
+        Assert.Contains(first.Items.Concat(second.Items), x => x.Code == unit.Code && x.RowType == "COMPOSITE_UNIT");
+        Assert.DoesNotContain(first.Items.Concat(second.Items), x => x.Code == mounted.Code);
+        Assert.Empty(first.Items.Select(x => x.RowId).Intersect(second.Items.Select(x => x.RowId)));
+        Assert.Empty(deniedByTerritory.Items);
+        Assert.All(first.Items.Concat(second.Items), x =>
+        {
+            Assert.Null(x.LastPreventiveType);
+            Assert.Null(x.UsageSinceLastPreventive);
+            Assert.Null(x.ApproximateNextMaintenanceDate);
+        });
+        Assert.Equal(before, await db.Assets.CountAsync());
+
+        var counter = new DbCommandCounter();
+        var options = new DbContextOptionsBuilder<CmmsDbContext>()
+            .UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
+            .AddInterceptors(counter)
+            .Options;
+        await using var measuredDb = new CmmsDbContext(options);
+        var measuredService = new AssetService(measuredDb, new PostgreSqlAuditService(measuredDb, new AuditContextAccessor()), new AuthorizationPolicyService());
+
+        counter.Reset();
+        await measuredService.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "OVERVIEW", Page: 1, PageSize: 25), Admin, CancellationToken.None);
+        var commandsFor25 = counter.Count;
+        counter.Reset();
+        await measuredService.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "OVERVIEW", Page: 1, PageSize: 50), Admin, CancellationToken.None);
+        var commandsFor50 = counter.Count;
+        Assert.InRange(commandsFor25, 1, 5);
+        Assert.InRange(commandsFor50, 1, 5);
     }
     private static async Task PlaceInWorkshopAsync(CmmsDbContext db, string assetCode)
     {

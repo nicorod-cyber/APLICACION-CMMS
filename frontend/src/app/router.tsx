@@ -4,6 +4,9 @@ import { FaenasPage } from "../features/faenas/FaenasPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { ProtectedRoute } from "../features/auth/ProtectedRoute";
 import { AssetsPage } from "../features/assets/AssetsPage";
+import { EquipmentOverviewPage } from "../features/equipment-overview/EquipmentOverviewPage";
+import { EquipmentAssetDetailPage } from "../features/equipment-overview/EquipmentAssetDetailPage";
+import { CompositeUnitDetailPage } from "../features/equipment-overview/CompositeUnitDetailPage";
 import { OperationalUnitsPage } from "../features/operational-units/OperationalUnitsPage";
 import { MaintenanceTargetsPage } from "../features/maintenance-targets/MaintenanceTargetsPage";
 import { UsersAdminPage } from "../features/admin/UsersAdminPage";
@@ -47,6 +50,9 @@ export const router = createBrowserRouter([
         path: "dashboard",
         element: <DashboardPage />
       },
+      { path: "activos", element: <AssetsPage /> },
+      { path: "equipos/activos/:code", element: <EquipmentAssetDetailPage /> },
+      { path: "equipos/unidades/:code", element: <CompositeUnitDetailPage /> },
       ...navigationItems
         .filter((item) => item.path !== "/dashboard")
         .map((item) => ({
@@ -68,9 +74,9 @@ export const router = createBrowserRouter([
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <FaenasPage />
               </ProtectedRoute>
-            ) : item.path === "/activos" ? (
+            ) : item.path === "/equipos" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
-                <AssetsPage />
+                <EquipmentOverviewPage />
               </ProtectedRoute>
             ) : item.path === "/equipos-operacionales" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
