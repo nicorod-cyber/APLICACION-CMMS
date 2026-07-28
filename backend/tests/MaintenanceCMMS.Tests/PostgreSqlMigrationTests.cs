@@ -30,11 +30,11 @@ public sealed class PostgreSqlMigrationTests
             INSERT INTO familias_equipo (id, codigo, nombre, activo, created_at_utc)
             VALUES (gen_random_uuid(), {familyCode}, {familyCode}, true, now());
             INSERT INTO estados_operacionales_activo (id, codigo, nombre, activo, created_at_utc)
-            VALUES (gen_random_uuid(), 'OPERATIVO_FAENA', 'Operativo', true, now());
+            VALUES (gen_random_uuid(), 'OPERATIVO', 'Operativo', true, now());
             INSERT INTO activos (id, codigo, nombre, faena_id, familia_equipo_id, estado_operacional_id, estado_registro, tipo_activo, ficha_validada, created_at_utc)
             SELECT gen_random_uuid(), {assetCode}, 'Activo legado', f.id, fam.id, s.id, 'vigente', 'Equipo', false, now()
             FROM faenas f CROSS JOIN familias_equipo fam CROSS JOIN estados_operacionales_activo s
-            WHERE f.codigo = {faenaCode} AND fam.codigo = {familyCode} AND s.codigo = 'OPERATIVO_FAENA';
+            WHERE f.codigo = {faenaCode} AND fam.codigo = {familyCode} AND s.codigo = 'OPERATIVO';
             """);
 
     [Fact]
@@ -129,7 +129,7 @@ public sealed class PostgreSqlMigrationTests
         var faena = new FaenaEntity { Code = "TH-FAE", Name = "Faena TH", IsActive = true };
         var technicalLocation = new TechnicalLocationEntity { Code = "TH-UT", Name = "Ubicacion TH", Faena = faena, IsObsolete = false };
         var family = new EquipmentFamilyEntity { Code = "TH-FAM", Name = "Familia TH", AssetTypeId = type.Id, IsActive = true };
-        var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
+        var state = new AssetOperationalStateEntity { Code = "OPERATIVO", Name = "Operativo", IsActive = true };
         faena.TechnicalLocation = technicalLocation;
         database.Context.AddRange(faena, technicalLocation, family, state, new AssetEntity { Code = "TH-ACT", Name = "Activo TH", AssetTypeId = type.Id, Faena = faena, Family = family, OperationalState = state });
         await database.Context.SaveChangesAsync();

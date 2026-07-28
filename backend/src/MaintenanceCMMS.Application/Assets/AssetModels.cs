@@ -66,6 +66,7 @@ public sealed record EquipmentOverviewRow(
     EquipmentDocumentRequirementStatus? Dgmn,
     EquipmentDocumentRequirementStatus? FireSuppression,
     IReadOnlyCollection<string>? Components = null);public sealed record AssetCatalogItem(string Codigo, string Nombre, string? TipoActivoCodigo = null, string? FaenaCodigo = null);
+public sealed record AssetOperationalStateOption(string Codigo, string Nombre, int Severidad, bool Disponible, bool ExcluidoDelUniversoOperacional);
 public sealed record AssetCatalogResponse(IReadOnlyCollection<AssetCatalogItem> TiposActivo, IReadOnlyCollection<AssetCatalogItem> FamiliasEquipo, IReadOnlyCollection<AssetCatalogItem> EstadosOperacionales, IReadOnlyCollection<AssetCatalogItem> UbicacionesTecnicas, IReadOnlyCollection<AssetCatalogItem> Criticidades);
 public sealed record AssetAttributeValueInput(
     string DefinicionCodigo,
@@ -121,9 +122,10 @@ public sealed record TransferAssetRequest(
     DateTimeOffset FechaEfectivaUtc,
     string Motivo,
     string? Observaciones = null,
-    bool TrasladarUnidadCompleta = false);
+    bool TrasladarUnidadCompleta = false,
+    string? EstadoOperacionalDestinoCodigo = null);
 
-public sealed record RegisterWorkshopEntryRequest(string TallerCodigo, DateTimeOffset FechaEfectivaUtc, string? OrdenTrabajoId = null, string? Motivo = null, string? Observaciones = null);
+public sealed record RegisterWorkshopEntryRequest(string TallerCodigo, DateTimeOffset FechaEfectivaUtc, string EstadoOperacionalDestinoCodigo, string? OrdenTrabajoId = null, string? Motivo = null, string? Observaciones = null);
 public sealed record RegisterReturnToSiteRequest(DateTimeOffset FechaEfectivaUtc, string? EstadoOperacionalDestinoCodigo = null, string? OrdenTrabajoId = null, string? Motivo = null, string? Observaciones = null);
 public sealed record AssetPhysicalLocationResponse(string ActivoCodigo, string TipoUbicacion, string NombreUbicacion, string? Comuna, DateTimeOffset VigenciaDesdeUtc, DateTimeOffset? VigenciaHastaUtc, string UsuarioId, string? OrdenTrabajoNumero, string? Motivo, string? Observaciones, string? UnidadOperativaCodigo, IReadOnlyCollection<string>? ActivosAfectados = null);
 public sealed record CreateAssetReadingRequest(

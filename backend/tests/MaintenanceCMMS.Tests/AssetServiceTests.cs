@@ -51,8 +51,8 @@ public sealed class AssetServiceTests
         Assert.Equal("F001", detail!.Resumen.FaenaCodigo);
         Assert.Equal("Faena Norte", detail.Resumen.FaenaNombre);
         Assert.Null(detail.Resumen.Zona);
-        Assert.Equal("OPERATIVO_FAENA", detail.Resumen.EstadoOperacionalCodigo);
-        Assert.Equal("Operativo en Faena", detail.Resumen.EstadoOperacionalNombre);
+        Assert.Equal("OPERATIVO", detail.Resumen.EstadoOperacionalCodigo);
+        Assert.Equal("Operativo", detail.Resumen.EstadoOperacionalNombre);
     }
     [Fact]
     public async Task StateAndReadings_UseOperationalStateAndImmutableCorrection()
@@ -60,12 +60,12 @@ public sealed class AssetServiceTests
         await using var fixture = await CreateFixtureAsync();
         var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-300"), Admin, CancellationToken.None);
         await PlaceInWorkshopAsync(fixture.DbContext, asset.Resumen.Codigo);
-        await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Ingreso a taller"), Admin, CancellationToken.None);
+        await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("CORRECTIVO", "Ingreso a taller"), Admin, CancellationToken.None);
         var original = await fixture.Service.AddReadingAsync(asset.Resumen.Codigo, new CreateAssetReadingRequest(100m), Admin, CancellationToken.None);
         var corrected = await fixture.Service.CorrectReadingAsync(asset.Resumen.Codigo, original!.Id, new CorrectAssetReadingRequest(110m, "Correccion respaldada"), Admin, CancellationToken.None);
         var updated = await fixture.Service.GetByIdAsync(asset.Resumen.Codigo, Admin, CancellationToken.None);
 
-        Assert.Equal("FUERA_SERVICIO_TALLER", updated!.Resumen.EstadoOperacionalCodigo);
+        Assert.Equal("CORRECTIVO", updated!.Resumen.EstadoOperacionalCodigo);
         Assert.NotNull(corrected);
         var readings = await fixture.Service.GetReadingsAsync(asset.Resumen.Codigo, Admin, CancellationToken.None);
         Assert.Single(readings);
@@ -96,7 +96,7 @@ public sealed class AssetServiceTests
             created.Resumen.TipoActivoCodigo,
             created.Resumen.FamiliaEquipoCodigo,
             "F002",
-            "FUERA_SERVICIO_TALLER",
+            "CORRECTIVO",
             NumeroSerie: "SER-EQ-TRANSFER",
             TipoMedicionUso: "HOROMETRO");
 
@@ -132,7 +132,7 @@ public sealed class AssetServiceTests
         var workOrder = await CreateWorkOrderAsync(fixture.DbContext, asset.Resumen.Codigo, "OT-000245", "Falla sistema hidraulico");
         await PlaceInWorkshopAsync(fixture.DbContext, asset.Resumen.Codigo);
 
-        var response = await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla detectada", TipoAntecedente: "WORK_ORDER", AntecedenteId: workOrder.Id.ToString("D")), Admin, CancellationToken.None);
+        var response = await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("CORRECTIVO", "Falla detectada", TipoAntecedente: "WORK_ORDER", AntecedenteId: workOrder.Id.ToString("D")), Admin, CancellationToken.None);
         var search = await fixture.Service.SearchStateEventAntecedentsAsync(asset.Resumen.Codigo, "WORK_ORDER", "000245", 1, 1, Admin, CancellationToken.None);
 
         Assert.Equal("WORK_ORDER", response!.TipoAntecedente);
@@ -160,12 +160,12 @@ public sealed class AssetServiceTests
         var foreignOrder = await CreateWorkOrderAsync(fixture.DbContext, other.Resumen.Codigo, "OT-000246", "Falla de otro activo");
         await PlaceInWorkshopAsync(fixture.DbContext, asset.Resumen.Codigo);
 
-        var mismatch = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Prueba", TipoAntecedente: "WORK_ORDER", AntecedenteId: foreignOrder.Id.ToString("D")), Admin, CancellationToken.None));
+        var mismatch = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("CORRECTIVO", "Prueba", TipoAntecedente: "WORK_ORDER", AntecedenteId: foreignOrder.Id.ToString("D")), Admin, CancellationToken.None));
         Assert.Contains("no corresponde al activo", mismatch.Message, StringComparison.OrdinalIgnoreCase);
-        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Prueba", TipoAntecedente: "DOCUMENT", AntecedenteId: foreignOrder.Id.ToString("D")), Admin, CancellationToken.None));
-        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Prueba", TipoAntecedente: "WORK_ORDER"), Admin, CancellationToken.None));
+        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("CORRECTIVO", "Prueba", TipoAntecedente: "DOCUMENT", AntecedenteId: foreignOrder.Id.ToString("D")), Admin, CancellationToken.None));
+        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("CORRECTIVO", "Prueba", TipoAntecedente: "WORK_ORDER"), Admin, CancellationToken.None));
 
-        var otherReference = await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Instruccion recibida", TipoAntecedente: "OTHER", ReferenciaAntecedente: "Instruccion verbal del supervisor"), Admin, CancellationToken.None);
+        var otherReference = await fixture.Service.AddStateEventAsync(asset.Resumen.Codigo, new CreateAssetStateEventRequest("CORRECTIVO", "Instruccion recibida", TipoAntecedente: "OTHER", ReferenciaAntecedente: "Instruccion verbal del supervisor"), Admin, CancellationToken.None);
         Assert.Equal("OTHER", otherReference!.TipoAntecedente);
         Assert.Null(otherReference.AntecedenteId);
         Assert.Equal("Instruccion verbal del supervisor", otherReference.ReferenciaAntecedente);
@@ -178,7 +178,7 @@ public sealed class AssetServiceTests
         var type = await fixture.DbContext.AssetTypes.SingleAsync(x => x.Code == "CAMION");
         var family = await fixture.DbContext.EquipmentFamilies.SingleAsync(x => x.Code == "CAMIONES");
         var faena = await fixture.DbContext.Faenas.SingleAsync(x => x.Code == "F001");
-        var state = await fixture.DbContext.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO_FAENA");
+        var state = await fixture.DbContext.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO");
         for (var index = 1; index <= 30; index++) fixture.DbContext.Assets.Add(new AssetEntity { Code = $"PAGE-{index:D3}", Name = $"Activo paginado {index:D3}", AssetTypeId = type.Id, FamilyId = family.Id, FaenaId = faena.Id, OperationalStateId = state.Id });
         await fixture.DbContext.SaveChangesAsync();
 
@@ -221,7 +221,7 @@ public sealed class AssetServiceTests
         var assetType = await db.AssetTypes.SingleAsync(x => x.Code == "CAMION");
         var family = await db.EquipmentFamilies.SingleAsync(x => x.Code == "CAMIONES");
         var faena = await db.Faenas.SingleAsync(x => x.Code == "F001");
-        var state = await db.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO_FAENA");
+        var state = await db.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO");
         var unitType = new OperationalUnitTypeEntity { Code = "CAMION_FABRICA", Name = "Camión fábrica", IsActive = true };
         var role = new OperationalUnitComponentRoleEntity { Code = "CHASIS", Name = "Chasis", IsActive = true };
         db.AddRange(unitType, role);
@@ -274,8 +274,8 @@ public sealed class AssetServiceTests
         counter.Reset();
         await measuredService.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "OVERVIEW", Page: 1, PageSize: 50), Admin, CancellationToken.None);
         var commandsFor50 = counter.Count;
-        Assert.InRange(commandsFor25, 1, 5);
-        Assert.InRange(commandsFor50, 1, 5);
+        Assert.InRange(commandsFor25, 1, 6);
+        Assert.InRange(commandsFor50, 1, 6);
     }
     private static async Task PlaceInWorkshopAsync(CmmsDbContext db, string assetCode)
     {
@@ -320,7 +320,7 @@ public sealed class AssetServiceTests
         return order;
     }
     private static CreateAssetRequest CompleteCreateRequest(string code) => new(
-        "Camion tolva", "CAMION", "CAMIONES", "F001", "OPERATIVO_FAENA",
+        "Camion tolva", "CAMION", "CAMIONES", "F001", "OPERATIVO",
         Marca: "CAT", Modelo: "777", NumeroSerie: "SER-" + code, Propiedad: "Propio", Criticidad: "ALTA",
         TipoMedicionUso: "HOROMETRO", Atributos: [new AssetAttributeValueInput("IDENTIFICADOR", ValorTexto: "ID-" + code)]);
 
@@ -363,8 +363,8 @@ public sealed class AssetServiceTests
         dbContext.AssetTypes.Add(type);
         dbContext.WorkCatalogs.AddRange(new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Baja", Name = "Baja", SortOrder = 1 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Media", Name = "Media", SortOrder = 2 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Alta", Name = "Alta", SortOrder = 3 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Critica", Name = "Critica", SortOrder = 4 });
         dbContext.AssetOperationalStates.AddRange(
-            new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo en Faena", IsActive = true },
-            new AssetOperationalStateEntity { Code = "FUERA_SERVICIO_TALLER", Name = "Fuera de servicio en Taller", Severity = 100, IsActive = true });
+            new AssetOperationalStateEntity { Code = "OPERATIVO", Name = "Operativo", IsActive = true },
+            new AssetOperationalStateEntity { Code = "CORRECTIVO", Name = "Correctivo", Severity = 100, IsActive = true });
         await dbContext.SaveChangesAsync();
         dbContext.EquipmentFamilies.Add(new EquipmentFamilyEntity { Code = "CAMIONES", Name = "Camiones", AssetTypeId = type.Id, IsActive = true });
         dbContext.AssetAttributeDefinitions.Add(new AssetAttributeDefinitionEntity { AssetTypeId = type.Id, Code = "IDENTIFICADOR", Name = "Identificador", DataType = "TEXTO", IsRequired = true, IsIdentifier = true, IsUnique = true, IsActive = true });

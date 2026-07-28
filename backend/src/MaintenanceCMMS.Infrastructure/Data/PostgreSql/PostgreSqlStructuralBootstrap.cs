@@ -5,6 +5,7 @@ using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Assets;
 using MaintenanceCMMS.Infrastructure.Options;
 using MaintenanceCMMS.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
@@ -126,17 +127,49 @@ public sealed class PostgreSqlStructuralBootstrap : IPostgreSqlStructuralBootstr
 
     private async Task EnsureStatesAsync(CancellationToken ct)
     {
-        var definitions = new[]
+        var states = await _db.AssetOperationalStates.ToListAsync(ct);
+        foreach (var legacyCode in new[] { "OPERATIVO_FAENA", "ALERTA_FAENA", "FUERA_SERVICIO_FAENA", "FUERA_SERVICIO_TALLER", "EN_PREPARACION" })
         {
-            ("OPERATIVO_FAENA", "Operativo en Faena"), ("ALERTA_FAENA", "Con alerta en Faena"),
-            ("FUERA_SERVICIO_FAENA", "Fuera de servicio en Faena"), ("FUERA_SERVICIO_TALLER", "Fuera de servicio en Taller")
-        };
-        var codes = definitions.Select(item => item.Item1).ToArray();
-        var existing = await _db.AssetOperationalStates.Where(item => codes.Contains(item.Code)).Select(item => item.Code).ToListAsync(ct);
-        foreach (var definition in definitions.Where(item => !existing.Contains(item.Item1, StringComparer.OrdinalIgnoreCase)))
-            _db.AssetOperationalStates.Add(new AssetOperationalStateEntity { Code = definition.Item1, Name = definition.Item2, IsActive = true });
-    }
+            var legacy = states.SingleOrDefault(item => string.Equals(item.Code, legacyCode, StringComparison.OrdinalIgnoreCase));
+            if (legacy is null) continue;
+            var canonicalCode = AssetOperationalPolicy.NormalizeLegacyCode(legacyCode);
+            var canonical = states.SingleOrDefault(item => string.Equals(item.Code, canonicalCode, StringComparison.OrdinalIgnoreCase));
+            if (canonical is null)
+            {
+                legacy.Code = canonicalCode;
+                canonical = legacy;
+            }
+            else if (canonical.Id != legacy.Id)
+            {
+                await _db.Assets.Where(item => item.OperationalStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.OperationalStateId, canonical.Id), ct);
+                await _db.AssetStateEvents.Where(item => item.PreviousStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.PreviousStateId, canonical.Id), ct);
+                await _db.AssetStateEvents.Where(item => item.NewStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.NewStateId, canonical.Id), ct);
+                await _db.OperationalUnits.Where(item => item.OperationalStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.OperationalStateId, canonical.Id), ct);
+                await _db.OperationalUnits.Where(item => item.BaselineOperationalStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.BaselineOperationalStateId, canonical.Id), ct);
+                _db.AssetOperationalStates.Remove(legacy);
+                states.Remove(legacy);
+            }
+        }
 
+        foreach (var definition in AssetOperationalPolicy.Definitions)
+        {
+            var entity = states.SingleOrDefault(item => string.Equals(item.Code, definition.Code, StringComparison.OrdinalIgnoreCase));
+            if (entity is null)
+            {
+                entity = new AssetOperationalStateEntity { Code = definition.Code, Name = definition.Name, Severity = definition.Severity, IsActive = true };
+                _db.AssetOperationalStates.Add(entity);
+                states.Add(entity);
+            }
+            else
+            {
+                entity.Code = definition.Code;
+                entity.Name = definition.Name;
+                entity.Severity = definition.Severity;
+                entity.IsActive = true;
+                entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            }
+        }
+    }
     private async Task EnsureWorkCatalogsAsync(CancellationToken ct)
     {
         var definitions = new List<(string Category, string Code, int SortOrder)>();

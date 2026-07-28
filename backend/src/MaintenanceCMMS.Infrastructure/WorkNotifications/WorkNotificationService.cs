@@ -11,6 +11,7 @@ using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
+using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -67,6 +68,7 @@ public sealed class WorkNotificationService : IWorkNotificationService
         var target = reference is null
             ? null
             : await _maintenanceTargetService.ResolveAsync(reference, user, cancellationToken);
+        if (target is not null && !AssetOperationalPolicy.AllowsNotices(target.EstadoOperacionalCodigo)) throw new DomainException("El objetivo seleccionado está dado de baja y no admite nuevos avisos operacionales.");
         if (target is not null && !string.IsNullOrWhiteSpace(request.FaenaCodigo) && !Same(target.FaenaCodigo, request.FaenaCodigo))
         {
             throw new DomainException("El objetivo de mantenimiento no pertenece a la faena indicada.");

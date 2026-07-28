@@ -105,7 +105,7 @@ public sealed class WorkNotificationServiceTests
     private static async Task SeedOperationalUnitAsync(CmmsDbContext db)
     {
         var faena = await db.Faenas.SingleAsync(item => item.Code == "FAE-1");
-        var state = await db.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO_FAENA");
+        var state = await db.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO");
         var type = new OperationalUnitTypeEntity { Code = "CFA", Name = "Conjunto funcional", IsActive = true };
         db.OperationalUnits.Add(new OperationalUnitEntity { Code = "CFA-1000", Name = "Conjunto CFA 1000", OperationalUnitType = type, Faena = faena, OperationalState = state });
         await db.SaveChangesAsync();

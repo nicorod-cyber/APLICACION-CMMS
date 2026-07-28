@@ -139,7 +139,7 @@ public sealed class TechnicalHierarchyServiceTests
             var loc1=new TechnicalLocationEntity{Code="UT-FAE-1",Name="Ubicacion FAE-1",FaenaId=fae1.Id,Faena=fae1};
             var loc2=new TechnicalLocationEntity{Code="UT-FAE-2",Name="Ubicacion FAE-2",FaenaId=fae2.Id,Faena=fae2};
             fae1.TechnicalLocation=loc1;fae2.TechnicalLocation=loc2;
-            var type=new AssetTypeEntity{Code="EQUIPO",Name="Equipo",IsActive=true};var fam1=new EquipmentFamilyEntity{Code="FAM-1",Name="Familia Uno",AssetTypeId=type.Id,IsActive=true};var fam2=new EquipmentFamilyEntity{Code="FAM-2",Name="Familia Dos",AssetTypeId=type.Id,IsActive=true};var state=new AssetOperationalStateEntity{Code="OPERATIVO_FAENA",Name="Operativo",IsActive=true};
+            var type=new AssetTypeEntity{Code="EQUIPO",Name="Equipo",IsActive=true};var fam1=new EquipmentFamilyEntity{Code="FAM-1",Name="Familia Uno",AssetTypeId=type.Id,IsActive=true};var fam2=new EquipmentFamilyEntity{Code="FAM-2",Name="Familia Dos",AssetTypeId=type.Id,IsActive=true};var state=new AssetOperationalStateEntity{Code="OPERATIVO",Name="Operativo",IsActive=true};
             db.AddRange(fae1,fae2,loc1,loc2,type,fam1,fam2,state);db.Assets.AddRange(new AssetEntity{Code="ACT-1",Name="Activo Uno",Faena=fae1,Family=fam1,OperationalState=state,AssetTypeId=type.Id},new AssetEntity{Code="ACT-2",Name="Activo Dos",Faena=fae1,Family=fam2,OperationalState=state,AssetTypeId=type.Id},new AssetEntity{Code="ACT-3",Name="Activo Tres",Faena=fae2,Family=fam2,OperationalState=state,AssetTypeId=type.Id});await db.SaveChangesAsync();
         }
         public async ValueTask DisposeAsync(){await Db.DisposeAsync();await PostgreSqlWorkTestFixture.DropDatabaseAsync(Name,AdminConnectionString);}

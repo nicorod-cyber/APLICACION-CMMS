@@ -5,6 +5,7 @@ using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Availability;
@@ -57,6 +58,7 @@ public sealed class AvailabilityService : IAvailabilityService
         var target = await _maintenanceTargets.ResolveAsync(request.Objetivo, user, ct);
         if (target.FaenaId != contract.FaenaId) throw new DomainException("El objetivo debe pertenecer a la faena del contrato.");
         if (!target.ParticipaEnDisponibilidad) throw new DomainException("El objetivo seleccionado no participa en disponibilidad.");
+        if (AssetOperationalPolicy.IsExcludedFromOperationalUniverse(target.EstadoOperacionalCodigo)) throw new DomainException("Un activo dado de baja queda fuera del universo de disponibilidad.");
 
         var currentAssignments = await _db.AvailabilityContractAssignments
             .Where(item => item.ContractId == contract.Id && item.IsActive)
@@ -139,6 +141,7 @@ public sealed class AvailabilityService : IAvailabilityService
         var target = await _maintenanceTargets.ResolveAsync(reference!, user, ct);
         if (target.FaenaId != contract.FaenaId) throw new DomainException("El objetivo debe pertenecer a la faena del contrato.");
         if (!target.ParticipaEnDisponibilidad) throw new DomainException("El objetivo seleccionado no participa en disponibilidad.");
+        if (AssetOperationalPolicy.IsExcludedFromOperationalUniverse(target.EstadoOperacionalCodigo)) throw new DomainException("Un activo dado de baja queda fuera del universo de disponibilidad.");
         var assignment = await _db.AvailabilityContractAssignments.SingleOrDefaultAsync(x => x.ContractId == contract.Id && x.IsActive &&
             (target.AssetId.HasValue ? x.AssetId == target.AssetId : x.OperationalUnitId == target.OperationalUnitId), ct)
             ?? throw new DomainException("El objetivo no esta asignado al contrato.");
@@ -172,7 +175,7 @@ public sealed class AvailabilityService : IAvailabilityService
         return new(kpi, summaries, byFaena, causes, unavailableAssets, trends, allEvents);
     }
 
-    private IQueryable<AvailabilityContractEntity> ContractQuery() => _db.AvailabilityContracts.Include(x => x.Faena).Include(x => x.Assignments).ThenInclude(x => x.Asset).Include(x => x.Assignments).ThenInclude(x => x.OperationalUnit);
+    private IQueryable<AvailabilityContractEntity> ContractQuery() => _db.AvailabilityContracts.Include(x => x.Faena).Include(x => x.Assignments).ThenInclude(x => x.Asset).ThenInclude(x => x!.OperationalState).Include(x => x.Assignments).ThenInclude(x => x.OperationalUnit).ThenInclude(x => x!.OperationalState);
     private IQueryable<AvailabilityEventEntity> EventQuery() => _db.AvailabilityEvents.Include(x => x.Contract).ThenInclude(x => x.Faena).Include(x => x.Asset).Include(x => x.OperationalUnit).Include(x => x.WorkOrder);
     private static AvailabilityContractResponse ToContract(AvailabilityContractEntity x) => new(x.Code, x.Name, x.Client, x.Faena.Code, x.CommittedHoursPerDay, x.TargetAvailability, x.StartsAtUtc, x.EndsAtUtc, x.ClientRules, x.IsActive, x.Assignments.Select(ToAssignment).ToArray());
     private static AvailabilityContractAssetResponse ToAssignment(AvailabilityContractAssignmentEntity x) => new(x.Id.ToString("N"), x.Contract.Code, x.Asset?.Code ?? x.OperationalUnit?.Code ?? string.Empty, x.Asset?.Name ?? x.OperationalUnit?.Name, x.Contract.Faena.Code, (ContractAssetRole)x.Role, x.StartsAtUtc, x.EndsAtUtc, x.IsActive, ToTargetReference(x.AssetId, x.Asset?.Code, x.OperationalUnitId, x.OperationalUnit?.Code));
@@ -193,7 +196,7 @@ public sealed class AvailabilityService : IAvailabilityService
             : assetId.HasValue && !string.IsNullOrWhiteSpace(assetCode)
                 ? new MaintenanceTargetReference(MaintenanceTargetType.Asset, assetCode)
                 : null;
-    private static AvailabilityContractSummary Summarize(AvailabilityContractEntity c, IEnumerable<AvailabilityEventEntity> events, DateTimeOffset from, DateTimeOffset to) { var assignments = c.Assignments.Where(x => x.IsActive && x.Role == (int)ContractAssetRole.Comprometido).ToArray(); var unavailable = events.Where(x => !x.CanBeUsed && x.IsMaintenanceAttributable).Select(TargetKey).ToHashSet(StringComparer.Ordinal); var covered = assignments.Count(x => !unavailable.Contains(TargetKey(x))); var committed = assignments.Length * c.CommittedHoursPerDay * (decimal)(to - from).TotalDays; var down = events.Where(x => !x.CanBeUsed && x.IsMaintenanceAttributable).Sum(x => OverlapHours(x.StartsAtUtc, x.EndsAtUtc, from, to)); var available = Math.Max(0, committed - down); return new(c.Code, c.Name, c.Client, c.Faena.Code, assignments.Length, covered, committed, available, assignments.Length == 0 ? 1 : (decimal)covered / assignments.Length, committed == 0 ? 1 : available / committed, c.TargetAvailability, (committed == 0 ? 1 : available / committed) >= c.TargetAvailability); }
+    private static AvailabilityContractSummary Summarize(AvailabilityContractEntity c, IEnumerable<AvailabilityEventEntity> events, DateTimeOffset from, DateTimeOffset to) { var assignments = c.Assignments.Where(x => x.IsActive && x.Role == (int)ContractAssetRole.Comprometido && !AssetOperationalPolicy.IsExcludedFromOperationalUniverse(x.Asset?.OperationalState?.Code ?? x.OperationalUnit?.OperationalState?.Code)).ToArray(); var unavailable = events.Where(x => !x.CanBeUsed && x.IsMaintenanceAttributable).Select(TargetKey).ToHashSet(StringComparer.Ordinal); var covered = assignments.Count(x => !unavailable.Contains(TargetKey(x))); var committed = assignments.Length * c.CommittedHoursPerDay * (decimal)(to - from).TotalDays; var down = events.Where(x => !x.CanBeUsed && x.IsMaintenanceAttributable).Sum(x => OverlapHours(x.StartsAtUtc, x.EndsAtUtc, from, to)); var available = Math.Max(0, committed - down); return new(c.Code, c.Name, c.Client, c.Faena.Code, assignments.Length, covered, committed, available, assignments.Length == 0 ? 1 : (decimal)covered / assignments.Length, committed == 0 ? 1 : available / committed, c.TargetAvailability, (committed == 0 ? 1 : available / committed) >= c.TargetAvailability); }
     private static string TargetKey(AvailabilityContractAssignmentEntity assignment) => assignment.OperationalUnitId is Guid unitId ? $"OperationalUnit:{unitId:D}" : $"Asset:{assignment.AssetId:D}";
     private static string TargetKey(AvailabilityEventEntity item) => item.OperationalUnitId is Guid unitId ? $"OperationalUnit:{unitId:D}" : $"Asset:{item.AssetId:D}";
     private static decimal OverlapHours(DateTimeOffset start, DateTimeOffset? end, DateTimeOffset from, DateTimeOffset to) { var s = start < from ? from : start; var e = (end ?? to) > to ? to : (end ?? to); return e <= s ? 0 : (decimal)(e-s).TotalHours; }

@@ -4,6 +4,7 @@ using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Imports;
@@ -491,7 +492,8 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             if (code.Length == 0) errors.Add(Error(row, "Codigo", "El codigo es obligatorio."));
             if (Value(row.Values, "Nombre").Length == 0) errors.Add(Error(row, "Nombre", "El nombre es obligatorio."));
             if (!typeCodes.Contains(Code(row.Values, "TipoActivoCodigo"))) errors.Add(Error(row, "TipoActivoCodigo", "El tipo de activo no existe."));
-            if (!stateCodes.Contains(Code(row.Values, "EstadoOperacionalCodigo"))) errors.Add(Error(row, "EstadoOperacionalCodigo", "El estado operacional no existe."));
+            var requestedStateCode = AssetOperationalPolicy.NormalizeLegacyCode(Code(row.Values, "EstadoOperacionalCodigo"));
+            if (!stateCodes.Contains(requestedStateCode)) errors.Add(Error(row, "EstadoOperacionalCodigo", "El estado operacional no existe."));
             var criticality = Empty(Value(row.Values, "Criticidad"));
             if (criticality is not null && !criticalities.Any(item => string.Equals(item.Code, criticality, StringComparison.OrdinalIgnoreCase) || string.Equals(item.Name, criticality, StringComparison.OrdinalIgnoreCase))) errors.Add(Error(row, "Criticidad", $"La criticidad '{criticality}' no existe en el catalogo WorkNotificationCriticality."));
             var faenaCode = Code(row.Values, "FaenaCodigo");
@@ -499,6 +501,7 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             {
                 if (!faenasByCode.TryGetValue(faenaCode, out var faena)) errors.Add(Error(row, "FaenaCodigo", "La faena no existe."));
                 else if (faena.TechnicalLocation is null) errors.Add(Error(row, "FaenaCodigo", "La faena no tiene ubicacion tecnica configurada."));
+                else if (!AssetOperationalPolicy.IsCompatibleWithLocation("FAENA", requestedStateCode)) errors.Add(Error(row, "EstadoOperacionalCodigo", $"Fila {row.RowNumber}: el estado operacional no es compatible con la ubicación FAENA."));
             }
 
             return new PostgreSqlImportRowResult(row.RowNumber, errors.Count > 0 ? "Error" : existingCodes.Contains(code) ? "Actualizado" : "Nuevo", errors);
@@ -530,10 +533,12 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             if (faenaCode.Length > 0)
             {
                 if (!faenas.TryGetValue(faenaCode, out faena) || faena.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene ubicacion tecnica configurada.");
+                if (!AssetOperationalPolicy.IsCompatibleWithLocation("FAENA", AssetOperationalPolicy.NormalizeLegacyCode(Code(row.Values, "EstadoOperacionalCodigo")))) throw new DomainException($"Fila {row.RowNumber}: el estado operacional no es compatible con la ubicación FAENA.");
             }
 
             var requestedTypeId = types[Code(row.Values, "TipoActivoCodigo")].Id;
-            var requestedStateId = states[Code(row.Values, "EstadoOperacionalCodigo")].Id;
+            var requestedStateCode = AssetOperationalPolicy.NormalizeLegacyCode(Code(row.Values, "EstadoOperacionalCodigo"));
+            var requestedStateId = states[requestedStateCode].Id;
             if (!isNew && entity!.OperationalStateId != requestedStateId) throw new DomainException($"Fila {row.RowNumber}: el estado operacional no se actualiza por importacion; use un evento de transicion.");
             if (!isNew && entity!.FaenaId != faena?.Id) throw new DomainException($"Fila {row.RowNumber}: la faena no se actualiza por importacion; use el flujo de traslado.");
             entity!.Name = Value(row.Values, "Nombre");

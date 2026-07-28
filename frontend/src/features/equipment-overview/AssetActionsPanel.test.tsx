@@ -23,6 +23,27 @@ describe("AssetActionsPanel", () => {
     await waitFor(() => expect(request).toHaveBeenCalledWith("/api/assets/AC-1/readings/read-1/corrections", expect.objectContaining({ method: "POST" })));
   });
 
+  it("filters the manual state selector by the current physical location and shows visible names", async () => {
+    vi.spyOn(auth, "apiFetch").mockImplementation((path: string) => {
+      if (path.includes("operational-states")) return Promise.resolve([
+        { codigo: "OPERATIVO", nombre: "Operativo" },
+        { codigo: "CON_ALERTA", nombre: "Con alerta" },
+        { codigo: "FUERA_SERVICIO", nombre: "F/S" },
+        { codigo: "PREPARACION", nombre: "Preparación" },
+        { codigo: "DADO_DE_BAJA", nombre: "Dado de baja" }
+      ]) as never;
+      return Promise.resolve([]) as never;
+    });
+    renderUi();
+    fireEvent.click(screen.getByRole("button", { name: /^Registrar estado/ }));
+    const selector = await screen.findByLabelText("Nuevo estado");
+    await waitFor(() => {
+      expect(selector).toHaveTextContent("Con alerta");
+      expect(selector).toHaveTextContent("F/S");
+      expect(selector).toHaveTextContent("Preparación");
+      expect(selector).not.toHaveTextContent("OPERATIVO");
+    });
+  });
   it("keeps the correction dialog and values visible after a forbidden response", async () => {
     vi.spyOn(auth, "apiFetch").mockImplementation((path: string) => path === "/api/assets/catalog" ? Promise.resolve({ estadosOperacionales: [] }) : path.includes("/corrections") ? Promise.reject(new Error("403 Sin permiso")) : Promise.resolve([]) as never);
     renderUi();

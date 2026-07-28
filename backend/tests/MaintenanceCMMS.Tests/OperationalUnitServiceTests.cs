@@ -29,7 +29,7 @@ public sealed class OperationalUnitServiceTests
         var permitted = new[] { new AllowedComponentRequest("MONTABLE") };
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "CHASIS", 1, 1, true, permitted), Admin, CancellationToken.None);
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 1, 1, true, permitted), Admin, CancellationToken.None);
-        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-1000", "CFA 1000", "CFA", "F001", "OPERATIVO_FAENA"), Admin, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-1000", "CFA 1000", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
 
         await fixture.Service.MountAsync("CFA-1000", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje inicial"), Admin, CancellationToken.None);
         var initial = await fixture.Service.MountAsync("CFA-1000", new MountOperationalUnitComponentRequest("AUGER-1000", "FABRICA", Motivo: "Montaje inicial"), Admin, CancellationToken.None);
@@ -47,7 +47,7 @@ public sealed class OperationalUnitServiceTests
     {
         await using var fixture = await Fixture.CreateAsync();
         await fixture.Service.CreateTypeAsync(new OperationalUnitTypeRequest("CFA", "CFA"), Admin, CancellationToken.None);
-        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-2000", "CFA 2000", "CFA", "F001", "OPERATIVO_FAENA"), Admin, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-2000", "CFA 2000", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
         var viewer = new UserAccessContext("viewer", [AuthRoles.FaenaViewer], [AuthPermissions.ViewOperationalUnits], ["F001"]);
         var otherFaenaViewer = new UserAccessContext("viewer-2", [AuthRoles.FaenaViewer], [AuthPermissions.ViewOperationalUnits], ["F002"]);
 
@@ -62,16 +62,16 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.CreateTypeAsync(new OperationalUnitTypeRequest("CFA", "CFA"), Admin, CancellationToken.None);
         await fixture.Service.CreateRoleAsync(new OperationalUnitRoleRequest("CHASIS", "Chasis"), Admin, CancellationToken.None);
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "CHASIS", 1, 1, true, [new AllowedComponentRequest("MONTABLE")]), Admin, CancellationToken.None);
-        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-STATE", "CFA state", "CFA", "F001", "OPERATIVO_FAENA"), Admin, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-STATE", "CFA state", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
         await fixture.Service.MountAsync("CFA-STATE", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje controlado"), Admin, CancellationToken.None);
 
         var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
-        await assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla critica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-TEST"), Admin, CancellationToken.None);
+        await assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("CORRECTIVO", "Falla critica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-TEST"), Admin, CancellationToken.None);
         var unit = await fixture.Service.GetAsync("CFA-STATE", Admin, CancellationToken.None);
 
         Assert.NotNull(unit);
-        Assert.Equal("FUERA_SERVICIO_TALLER", unit!.EstadoOperacionalCodigo);
-        Assert.Equal("FUERA_SERVICIO_TALLER", unit.EstadoDerivado!.EstadoCodigo);
+        Assert.Equal("CORRECTIVO", unit!.EstadoOperacionalCodigo);
+        Assert.Equal("CORRECTIVO", unit.EstadoDerivado!.EstadoCodigo);
         Assert.Equal("CHF-TWCK41", unit.EstadoDerivado.ActivoRestrictivoCodigo);
         Assert.Equal("CHASIS", unit.EstadoDerivado.RolRestrictivoCodigo);
     }
@@ -88,12 +88,12 @@ public sealed class OperationalUnitServiceTests
         await Assert.ThrowsAsync<DomainException>(() => fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 1, 2, true, permitted), Admin, CancellationToken.None));
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "CHASIS", 1, 1, true, permitted), Admin, CancellationToken.None);
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 1, 1, true, permitted), Admin, CancellationToken.None);
-        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-A", "CFA A", "CFA", "F001", "OPERATIVO_FAENA"), Admin, CancellationToken.None);
-        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-B", "CFA B", "CFA", "F001", "OPERATIVO_FAENA"), Admin, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-A", "CFA A", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-B", "CFA B", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
 
         var type = await fixture.Db.AssetTypes.SingleAsync(assetType => assetType.Code == "MONTABLE");
         var faena = await fixture.Db.Faenas.SingleAsync(site => site.Code == "F001");
-        var state = await fixture.Db.AssetOperationalStates.SingleAsync(operationalState => operationalState.Code == "OPERATIVO_FAENA");
+        var state = await fixture.Db.AssetOperationalStates.SingleAsync(operationalState => operationalState.Code == "OPERATIVO");
         fixture.Db.Assets.Add(new AssetEntity { Code = "CHASSIS-2", Name = "Chasis 2", AssetTypeId = type.Id, FaenaId = faena.Id, OperationalStateId = state.Id });
         await fixture.Db.SaveChangesAsync();
 
@@ -111,7 +111,7 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.CreateTypeAsync(new OperationalUnitTypeRequest("CFA", "CFA"), Admin, CancellationToken.None);
         await fixture.Service.CreateRoleAsync(new OperationalUnitRoleRequest("FABRICA", "Fabrica"), Admin, CancellationToken.None);
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 1, 1, true, [new AllowedComponentRequest("MONTABLE")]), Admin, CancellationToken.None);
-        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-TRANSFER", "CFA transfer", "CFA", "F001", "OPERATIVO_FAENA"), Admin, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-TRANSFER", "CFA transfer", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
         await fixture.Service.MountAsync("CFA-TRANSFER", new MountOperationalUnitComponentRequest("AUGER-1000", "FABRICA", Motivo: "Montaje controlado"), Admin, CancellationToken.None);
 
         var destination = new FaenaEntity { Code = "F002", Name = "Faena destino", IsActive = true };
@@ -120,14 +120,14 @@ public sealed class OperationalUnitServiceTests
         var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
 
         await Assert.ThrowsAsync<DomainException>(() => assetService.TransferAsync("AUGER-1000", new TransferAssetRequest("F002", DateTimeOffset.UtcNow.AddMinutes(1), "Traslado aislado"), Admin, CancellationToken.None));
-        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("FUERA_SERVICIO_TALLER", "Falla de fabrica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None);
+        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("CORRECTIVO", "Falla de fabrica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None);
         var restricted = await fixture.Service.GetAsync("CFA-TRANSFER", Admin, CancellationToken.None);
-        Assert.Equal("FUERA_SERVICIO_TALLER", restricted!.EstadoOperacionalCodigo);
+        Assert.Equal("CORRECTIVO", restricted!.EstadoOperacionalCodigo);
         Assert.Equal("FABRICA", restricted.EstadoDerivado!.RolRestrictivoCodigo);
 
-        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("OPERATIVO_FAENA", "Reparacion terminada", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None);
+        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("OPERATIVO", "Reparacion terminada", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None);
         var recovered = await fixture.Service.GetAsync("CFA-TRANSFER", Admin, CancellationToken.None);
-        Assert.Equal("OPERATIVO_FAENA", recovered!.EstadoOperacionalCodigo);
+        Assert.Equal("OPERATIVO", recovered!.EstadoOperacionalCodigo);
     }
 
     [Fact]
@@ -137,8 +137,8 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.CreateTypeAsync(new OperationalUnitTypeRequest("CFA", "CFA"), Admin, CancellationToken.None);
         await fixture.Service.CreateRoleAsync(new OperationalUnitRoleRequest("FABRICA", "Fabrica"), Admin, CancellationToken.None);
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 0, 1, false, [new AllowedComponentRequest("MONTABLE")]), Admin, CancellationToken.None);
-        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-CON-A", "CFA concurrente A", "CFA", "F001", "OPERATIVO_FAENA"), Admin, CancellationToken.None);
-        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-CON-B", "CFA concurrente B", "CFA", "F001", "OPERATIVO_FAENA"), Admin, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-CON-A", "CFA concurrente A", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-CON-B", "CFA concurrente B", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
 
         var connectionString = PostgreSqlWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName);
         await using var firstDb = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(connectionString).Options);
@@ -174,7 +174,7 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("PAGE", "CHASIS", 1, 1, true), Admin, CancellationToken.None);
         var type = await fixture.Db.OperationalUnitTypes.SingleAsync(x => x.Code == "PAGE");
         var faena = await fixture.Db.Faenas.SingleAsync(x => x.Code == "F001");
-        var state = await fixture.Db.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO_FAENA");
+        var state = await fixture.Db.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO");
         for (var index = 1; index <= 30; index++) fixture.Db.OperationalUnits.Add(new OperationalUnitEntity { Code = $"PAGE-{index:D3}", Name = $"Unidad paginada {index:D3}", OperationalUnitTypeId = type.Id, FaenaId = faena.Id, OperationalStateId = state.Id, BaselineOperationalStateId = state.Id });
         await fixture.Db.SaveChangesAsync();
 
@@ -218,7 +218,7 @@ public sealed class OperationalUnitServiceTests
             await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name, adminConnectionString);
             var db = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, name)).Options);
             await db.Database.MigrateAsync();
-            var faena = new FaenaEntity { Code = "F001", Name = "Faena", IsActive = true }; var type = new AssetTypeEntity { Code = "MONTABLE", Name = "Montable", IsMountable = true, IsActive = true }; var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", Severity = 0, IsActive = true }; var outOfService = new AssetOperationalStateEntity { Code = "FUERA_SERVICIO_TALLER", Name = "Fuera de servicio", Severity = 100, IsActive = true };
+            var faena = new FaenaEntity { Code = "F001", Name = "Faena", IsActive = true }; var type = new AssetTypeEntity { Code = "MONTABLE", Name = "Montable", IsMountable = true, IsActive = true }; var state = new AssetOperationalStateEntity { Code = "OPERATIVO", Name = "Operativo", Severity = 0, IsActive = true }; var outOfService = new AssetOperationalStateEntity { Code = "CORRECTIVO", Name = "Fuera de servicio", Severity = 100, IsActive = true };
             db.AddRange(
                 faena,
                 type,

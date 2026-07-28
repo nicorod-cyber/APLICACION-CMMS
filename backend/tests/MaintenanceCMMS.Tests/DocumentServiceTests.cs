@@ -306,7 +306,7 @@ public sealed class DocumentServiceTests
         var faena = new FaenaEntity { Code = "F001", Name = "Faena Norte", IsActive = true };
         var type = new AssetTypeEntity { Code = "CAMION", Name = "Camiï¿½n", IsActive = true };
         var family = new EquipmentFamilyEntity { Code = "CAMIONES", Name = "Camiones", AssetTypeId = type.Id, IsActive = true };
-        var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo en Faena", IsActive = true };
+        var state = new AssetOperationalStateEntity { Code = "OPERATIVO", Name = "Operativo", IsActive = true };
         dbContext.Faenas.Add(faena);
         dbContext.AssetTypes.Add(type);
         dbContext.EquipmentFamilies.Add(family);

@@ -29,7 +29,7 @@ public sealed class AssetService : IAssetService
             .Select(x => new AssetCatalogItem(x.Code, x.Name, null, null)).ToArrayAsync(ct);
         var families = await _db.EquipmentFamilies.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Code)
             .Select(x => new AssetCatalogItem(x.Code, x.Name, x.AssetType.Code, null)).ToArrayAsync(ct);
-        var states = await _db.AssetOperationalStates.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Code)
+        var states = await _db.AssetOperationalStates.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Severity).ThenBy(x => x.Code)
             .Select(x => new AssetCatalogItem(x.Code, x.Name, null, null)).ToArrayAsync(ct);
         var locations = (await _db.TechnicalLocations.AsNoTracking().Include(x => x.Faena).Where(x => !x.IsObsolete).OrderBy(x => x.Code).ToListAsync(ct))
             .Where(x => x.Faena is null || _authorization.CanViewFaena(user, x.Faena.Code))
@@ -41,6 +41,21 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         return new AssetCatalogResponse(types, families, states, locations, criticalities);
     }
 
+    public async Task<IReadOnlyCollection<AssetOperationalStateOption>> GetOperationalStatesAsync(string? tipoUbicacion, bool incluirTerminales, UserAccessContext user, CancellationToken ct)
+    {
+        var locationType = Code(tipoUbicacion);
+        if (!string.IsNullOrWhiteSpace(locationType) && locationType is not "FAENA" and not "TALLER")
+            throw new DomainException("El tipo de ubicación debe ser FAENA o TALLER.");
+        var allowed = string.IsNullOrWhiteSpace(locationType)
+            ? AssetOperationalPolicy.Definitions.Select(item => item.Code).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : AssetOperationalPolicy.SelectableStateCodes(locationType, incluirTerminales).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(locationType) && !incluirTerminales) allowed.Remove(AssetOperationalPolicy.DecommissionedStateCode);
+        return await _db.AssetOperationalStates.AsNoTracking()
+            .Where(item => item.IsActive && allowed.Contains(item.Code))
+            .OrderBy(item => item.Severity).ThenBy(item => item.Code)
+            .Select(item => new AssetOperationalStateOption(item.Code, item.Name, item.Severity, AssetOperationalPolicy.IsAvailable(item.Code), AssetOperationalPolicy.IsExcludedFromOperationalUniverse(item.Code)))
+            .ToArrayAsync(ct);
+    }
     public async Task<IReadOnlyCollection<AssetAttributeDefinitionResponse>> GetApplicableDefinitionsAsync(string typeCode, string? familyCode, UserAccessContext user, CancellationToken ct)
     {
         var type = await _db.AssetTypes.AsNoTracking().SingleOrDefaultAsync(x => x.Code == Code(typeCode) && x.IsActive, ct) ?? throw new DomainException("Tipo de activo inexistente.");
@@ -372,7 +387,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         var state = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalCodigo) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente.");
         AssetOperationalPolicy.EnsureTransitionAllowed(asset.OperationalState.Code, state.Code);
         var physicalLocation = await _db.AssetPhysicalLocationPeriods.AsNoTracking().SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct);
-        AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(physicalLocation?.LocationType, state.Code);
+        AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, physicalLocation?.LocationType, state.Code, state.Name);
         var previous = asset.OperationalState; var occurred = r.FechaEventoUtc ?? DateTimeOffset.UtcNow;
         var antecedent = await ValidateStateEventAntecedentAsync(asset, r, u, ct);
         asset.OperationalStateId = state.Id; asset.OperationalState = state; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
@@ -394,30 +409,33 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         if (_db.Database.IsNpgsql()) await _db.Database.ExecuteSqlRawAsync("LOCK TABLE vigencias_ubicacion_activo IN SHARE ROW EXCLUSIVE MODE", ct);
         var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset);
-        AssetOperationalPolicy.EnsureCanStartOperation(asset, "traslados");
         var destination = await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(r.FaenaDestinoCodigo) && x.IsActive, ct) ?? throw new DomainException("Faena destino inexistente.");
         if (!_authorization.CanViewFaena(u, destination.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena destino.");
-        if (destination.TechnicalLocation is null) throw new DomainException("La faena destino no tiene ubicacion tecnica configurada.");
+        if (destination.TechnicalLocation is null) throw new DomainException("La faena destino no tiene ubicación técnica configurada.");
         if (asset.FaenaId == destination.Id) throw new DomainException("El activo ya pertenece a la faena destino.");
+        AssetOperationalStateEntity? destinationState = null;
+        if (!string.IsNullOrWhiteSpace(r.EstadoOperacionalDestinoCodigo))
+        {
+            destinationState = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalDestinoCodigo) && x.IsActive, ct) ?? throw new DomainException("El estado operacional destino no existe o está inactivo.");
+            AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, "FAENA", destinationState.Code, destinationState.Name);
+        }
         var activeComponent = await _db.OperationalUnitComponents.Include(x => x.OperationalUnit).SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.RemovedAtUtc == null, ct);
         var assets = new List<AssetEntity> { asset }; OperationalUnitEntity? unit = null;
         if (activeComponent is not null)
         {
-            if (!r.TrasladarUnidadCompleta) throw new DomainException("El activo esta montado. Traslade la unidad completa o desmonte previamente el componente.");
+            if (!r.TrasladarUnidadCompleta) throw new DomainException("El activo está montado. Traslade la unidad completa o desmonte previamente el componente.");
             unit = activeComponent.OperationalUnit;
             assets = await _db.OperationalUnitComponents.Include(x => x.Asset).ThenInclude(x => x.Faena).Where(x => x.OperationalUnitId == unit.Id && x.RemovedAtUtc == null).Select(x => x.Asset).ToListAsync(ct);
-            if (assets.Any(x => x.FaenaId != asset.FaenaId)) throw new DomainException("La unidad contiene componentes con inconsistencia territorial; corrija la composicion antes del traslado.");
+            if (assets.Any(x => x.FaenaId != asset.FaenaId)) throw new DomainException("La unidad contiene componentes con inconsistencia territorial; corrija la composición antes del traslado.");
             unit.FaenaId = destination.Id;
         }
         var results = new List<AssetTransferResponse>();
-        var auditPrevious = new Dictionary<Guid, object>();
-        foreach (var item in assets.DistinctBy(x => x.Id)) results.Add(await TransferCoreAsync(item, destination, unit, r, u, ct));
+        foreach (var item in assets.DistinctBy(x => x.Id)) results.Add(await TransferCoreAsync(item, destination, unit, destinationState, r, u, ct));
         await _db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('cmms.asset_transfer_ids', {string.Join(",", results.Select(x => x.TrasladoId))}, true)", ct);
         await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
-        foreach (var item in assets) await AuditAsync(u, "asset.transferred", item, new { Faena = results.Single(x => x.ActivoCodigo == item.Code).FaenaOrigenCodigo }, new { Faena = destination.Code, r.FechaEfectivaUtc, r.Motivo, Unidad = unit?.Code }, ct);
+        foreach (var item in assets) await AuditAsync(u, "asset.transferred", item, new { Faena = results.Single(x => x.ActivoCodigo == item.Code).FaenaOrigenCodigo }, new { Faena = destination.Code, Estado = destinationState?.Code ?? item.OperationalState.Code, r.FechaEfectivaUtc, r.Motivo, Unidad = unit?.Code }, ct);
         return results;
     }
-
     public async Task<AssetStateEventAntecedentSearchResponse> SearchStateEventAntecedentsAsync(string codigo, string origen, string? texto, int pagina, int tamanoPagina, UserAccessContext u, CancellationToken ct)
     {
         Maintain(u);
@@ -536,33 +554,34 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
             "INSPECTION" or "INSPECCION" => throw new DomainException("No existe un módulo de inspecciones disponible para usar como antecedente."), _ => throw new DomainException("El origen de cambio seleccionado no es válido.")
         };
     }
-    private async Task<AssetTransferResponse> TransferCoreAsync(AssetEntity asset, FaenaEntity destination, OperationalUnitEntity? unit, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
+    private async Task<AssetTransferResponse> TransferCoreAsync(AssetEntity asset, FaenaEntity destination, OperationalUnitEntity? unit, AssetOperationalStateEntity? destinationState, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
     {
         var current = await _db.AssetLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct);
-        if (current is not null && r.FechaEfectivaUtc <= current.ValidFromUtc) throw new DomainException($"La fecha efectiva del traslado de {asset.Code} debe ser posterior al inicio de su ubicacion vigente.");
+        if (current is not null && r.FechaEfectivaUtc <= current.ValidFromUtc) throw new DomainException($"La fecha efectiva del traslado de {asset.Code} debe ser posterior al inicio de su ubicación vigente.");
         if (await _db.AssetTransfers.AnyAsync(x => x.AssetId == asset.Id && x.EffectiveAtUtc >= r.FechaEfectivaUtc, ct)) throw new DomainException($"El traslado de {asset.Code} se superpone con historia posterior.");
+        var physical = await _db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct) ?? throw new DomainException($"El activo '{asset.Code}' no tiene ubicación física vigente.");
+        if (!Same(physical.LocationType, "FAENA")) throw new DomainException($"El activo '{asset.Code}' está en taller; utilice el flujo de retorno a faena.");
+        var state = destinationState ?? asset.OperationalState;
+        AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, "FAENA", state.Code, state.Name);
+        if (AssetOperationalPolicy.IsExcludedFromOperationalUniverse(asset.OperationalState.Code) && !Same(asset.OperationalState.Code, state.Code))
+            throw new DomainException($"El activo '{asset.Code}' está dado de baja y debe conservar ese estado durante el traslado físico.");
         var transfer = new AssetTransferEntity { AssetId = asset.Id, OriginFaenaId = asset.FaenaId, DestinationFaenaId = destination.Id, OperationalUnitId = unit?.Id, EffectiveAtUtc = r.FechaEfectivaUtc, Reason = r.Motivo.Trim(), UserId = u.UserId, RegisteredAtUtc = DateTimeOffset.UtcNow, Observations = Empty(r.Observaciones) };
         _db.AssetTransfers.Add(transfer);
         if (current is not null) current.ValidToUtc = r.FechaEfectivaUtc;
         _db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = asset.Id, FaenaId = destination.Id, ValidFromUtc = r.FechaEfectivaUtc, TransferId = transfer.Id });
-        var physical = await _db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct); if (physical?.LocationType == "FAENA") { physical.ValidToUtc = r.FechaEfectivaUtc; _db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, LocationType = "FAENA", FaenaId = destination.Id, ValidFromUtc = r.FechaEfectivaUtc, RegisteredByUserId = u.UserId, Reason = r.Motivo, OperationalUnitId = unit?.Id, Observations = Empty(r.Observaciones) }); }
+        physical.ValidToUtc = r.FechaEfectivaUtc;
+        _db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, LocationType = "FAENA", FaenaId = destination.Id, ValidFromUtc = r.FechaEfectivaUtc, RegisteredByUserId = u.UserId, Reason = r.Motivo, OperationalUnitId = unit?.Id, Observations = Empty(r.Observaciones) });
         var origin = asset.Faena?.Code; asset.FaenaId = destination.Id; asset.Faena = destination; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
-        if (Same(destination.Code, "FAE_EDB"))
+        var previous = asset.OperationalState;
+        if (!Same(previous.Code, state.Code))
         {
-            var decommissioned = await _db.AssetOperationalStates.SingleAsync(x => x.Code == AssetOperationalPolicy.DecommissionedStateCode && x.IsActive, ct);
-            var previous = asset.OperationalState;
-            if (!Same(previous.Code, decommissioned.Code))
-            {
-                asset.OperationalStateId = decommissioned.Id; asset.OperationalState = decommissioned;
-                asset.DecommissioningDate ??= DateOnly.FromDateTime(r.FechaEfectivaUtc.UtcDateTime);
-                var reason = $"Baja automática por traslado a {destination.Code}: {transfer.Reason}";
-                _db.AssetStateEvents.Add(new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = decommissioned.Id, OccurredAtUtc = r.FechaEfectivaUtc, UserId = u.UserId, Reason = reason, ReferenceType = "TRANSFER", ReferenceId = transfer.Id.ToString("D"), ReferenceText = null });
-                await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, asset.Id, reason, ct);
-            }
+            AssetOperationalPolicy.EnsureTransitionAllowed(previous.Code, state.Code);
+            asset.OperationalStateId = state.Id; asset.OperationalState = state;
+            _db.AssetStateEvents.Add(new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = r.FechaEfectivaUtc, UserId = u.UserId, Reason = r.Motivo.Trim(), ReferenceType = "TRANSFER", ReferenceId = transfer.Id.ToString("D"), ReferenceText = null });
         }
+        await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, asset.Id, $"TRANSFER:{transfer.Id:D} {r.Motivo}", ct);
         return new(transfer.Id.ToString("D"), asset.Code, origin, destination.Code, transfer.EffectiveAtUtc, transfer.Reason, transfer.UserId, transfer.RegisteredAtUtc, transfer.Observations, unit?.Code);
     }
-
     public async Task<IReadOnlyCollection<AssetReadingResponse>> GetReadingsAsync(string codigo, UserAccessContext u, CancellationToken ct)
     {
         var asset = await FindAsync(codigo, false, ct); if (asset is null) return []; View(u, asset); return MapReadings(await ValidReadingsAsync(asset.Id, ct), asset.UsageMeasurementType).OrderByDescending(x => x.FechaLecturaUtc).ToArray();
@@ -595,7 +614,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         return (await PhysicalLocationQuery().Where(x => x.AssetId == asset.Id).OrderByDescending(x => x.ValidFromUtc).ToListAsync(ct)).Select(x => ToPhysicalLocation(x, [asset.Code])).ToArray();
     }
 
-    public Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterWorkshopEntryAsync(string codigo, RegisterWorkshopEntryRequest r, UserAccessContext u, CancellationToken ct) => MovePhysicalLocationAsync(codigo, "TALLER", r.TallerCodigo, r.FechaEfectivaUtc, null, r.OrdenTrabajoId, r.Motivo, r.Observaciones, u, ct);
+    public Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterWorkshopEntryAsync(string codigo, RegisterWorkshopEntryRequest r, UserAccessContext u, CancellationToken ct) => MovePhysicalLocationAsync(codigo, "TALLER", r.TallerCodigo, r.FechaEfectivaUtc, r.EstadoOperacionalDestinoCodigo, r.OrdenTrabajoId, r.Motivo, r.Observaciones, u, ct);
     public Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterReturnToSiteAsync(string codigo, RegisterReturnToSiteRequest r, UserAccessContext u, CancellationToken ct) => MovePhysicalLocationAsync(codigo, "FAENA", null, r.FechaEfectivaUtc, r.EstadoOperacionalDestinoCodigo, r.OrdenTrabajoId, r.Motivo, r.Observaciones, u, ct);
 
     private async Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> MovePhysicalLocationAsync(string codigo, string targetType, string? workshopCode, DateTimeOffset effectiveAt, string? destinationStateCode, string? workOrderNumber, string? reason, string? observations, UserAccessContext u, CancellationToken ct)
@@ -603,31 +622,65 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         Maintain(u); if (effectiveAt == default) throw new DomainException("La fecha efectiva es obligatoria.");
         await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         if (_db.Database.IsNpgsql()) await _db.Database.ExecuteSqlRawAsync("LOCK TABLE vigencias_ubicacion_fisica_activo IN SHARE ROW EXCLUSIVE MODE", ct);
-        var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); AssetOperationalPolicy.EnsureCanStartOperation(asset, "movimientos de ubicacion fisica");
+        var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset);
         WorkshopEntity? workshop = null; FaenaEntity? faena = null;
-        if (targetType == "TALLER") { Require(workshopCode, nameof(workshopCode)); workshop = await _db.Workshops.Include(x => x.SupervisorUser).SingleOrDefaultAsync(x => x.Code == Code(workshopCode) && x.IsActive, ct) ?? throw new DomainException("El taller no existe o esta inactivo."); if (string.IsNullOrWhiteSpace(workshop.Commune) || workshop.SupervisorUser is null) throw new DomainException("El taller no esta habilitado operacionalmente: requiere comuna y supervisor."); }
-        else { faena = asset.Faena ?? throw new DomainException("El activo no tiene faena asignada."); }
-        WorkOrderEntity? order = null; if (!string.IsNullOrWhiteSpace(workOrderNumber)) { order = await _db.WorkOrders.Include(x => x.Faena).SingleOrDefaultAsync(x => x.WorkOrderNumber == Code(workOrderNumber), ct) ?? throw new DomainException("La OT asociada no existe."); if (order.AssetId != asset.Id && !order.RelatedAssets.Any(x => x.AssetId == asset.Id)) throw new DomainException("La OT asociada no corresponde al activo."); EnsureFaenaAccess(u, order.Faena.Code); }
+        if (targetType == "TALLER")
+        {
+            Require(workshopCode, nameof(workshopCode));
+            workshop = await _db.Workshops.Include(x => x.SupervisorUser).SingleOrDefaultAsync(x => x.Code == Code(workshopCode) && x.IsActive, ct) ?? throw new DomainException("El taller no existe o está inactivo.");
+            if (string.IsNullOrWhiteSpace(workshop.Commune) || workshop.SupervisorUser is null) throw new DomainException("El taller no está habilitado operacionalmente: requiere comuna y supervisor.");
+        }
+        else faena = asset.Faena ?? throw new DomainException("El activo no tiene faena asignada.");
+        WorkOrderEntity? order = null;
+        if (!string.IsNullOrWhiteSpace(workOrderNumber))
+        {
+            order = await _db.WorkOrders.Include(x => x.Faena).SingleOrDefaultAsync(x => x.WorkOrderNumber == Code(workOrderNumber), ct) ?? throw new DomainException("La OT asociada no existe.");
+            if (order.AssetId != asset.Id && !order.RelatedAssets.Any(x => x.AssetId == asset.Id)) throw new DomainException("La OT asociada no corresponde al activo.");
+            EnsureFaenaAccess(u, order.Faena.Code);
+        }
         var component = await _db.OperationalUnitComponents.Include(x => x.OperationalUnit).ThenInclude(x => x.OperationalUnitType).SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.RemovedAtUtc == null, ct);
         var unit = component?.OperationalUnit;
         var moveAsTruckFactory = unit is not null && (string.Equals(unit.OperationalUnitType.Code, "CFA", StringComparison.OrdinalIgnoreCase) || unit.OperationalUnitType.Name.Contains("fabrica", StringComparison.OrdinalIgnoreCase));
         var movementUnit = moveAsTruckFactory ? unit : null;
         var assets = movementUnit is null ? [asset] : await _db.OperationalUnitComponents.Include(x => x.Asset).ThenInclude(x => x.Faena).Where(x => x.OperationalUnitId == movementUnit.Id && x.RemovedAtUtc == null).Select(x => x.Asset).ToListAsync(ct);
-        var targetState = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(targetType == "TALLER" ? "FUERA_SERVICIO_TALLER" : (destinationStateCode ?? "OPERATIVO_FAENA")) && x.IsActive, ct) ?? throw new DomainException("El estado operacional destino no existe o esta inactivo.");
-        AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(targetType, targetState.Code);
+        AssetOperationalStateEntity targetState;
+        if (string.IsNullOrWhiteSpace(destinationStateCode))
+        {
+            if (!AssetOperationalPolicy.IsExcludedFromOperationalUniverse(asset.OperationalState.Code))
+                throw new DomainException(targetType == "TALLER" ? "Debe seleccionar el estado operacional de destino para ingresar al taller." : "Debe seleccionar el estado operacional de destino para retornar a faena.");
+            targetState = asset.OperationalState;
+        }
+        else
+        {
+            targetState = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(destinationStateCode) && x.IsActive, ct) ?? throw new DomainException("El estado operacional destino no existe o está inactivo.");
+        }
+        AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, targetType, targetState.Code, targetState.Name);
         var auditPrevious = new Dictionary<Guid, object>();
         foreach (var item in assets.DistinctBy(x => x.Id))
         {
-            var current = await _db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == item.Id && x.ValidToUtc == null, ct) ?? throw new DomainException($"El activo '{item.Code}' no tiene ubicacion fisica vigente.");
-            if (effectiveAt <= current.ValidFromUtc) throw new DomainException("La fecha efectiva debe ser posterior al inicio de la ubicacion vigente.");
+            var current = await _db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == item.Id && x.ValidToUtc == null, ct) ?? throw new DomainException($"El activo '{item.Code}' no tiene ubicación física vigente.");
+            if (effectiveAt <= current.ValidFromUtc) throw new DomainException("La fecha efectiva debe ser posterior al inicio de la ubicación vigente.");
+            if (AssetOperationalPolicy.IsExcludedFromOperationalUniverse(item.OperationalState.Code) && !Same(item.OperationalState.Code, targetState.Code))
+                throw new DomainException($"El activo '{item.Code}' está dado de baja y debe conservar ese estado durante el traslado físico.");
+            AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(item.Code, targetType, targetState.Code, targetState.Name);
             auditPrevious[item.Id] = new { Ubicacion = current.LocationType, Faena = current.FaenaId, Taller = current.WorkshopId, Estado = item.OperationalState.Code, VigenciaDesde = current.ValidFromUtc };
             current.ValidToUtc = effectiveAt;
             _db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = item.Id, LocationType = targetType, FaenaId = faena?.Id, WorkshopId = workshop?.Id, ValidFromUtc = effectiveAt, Reason = Empty(reason), RegisteredByUserId = u.UserId, WorkOrderId = order?.Id, OperationalUnitId = movementUnit?.Id, Observations = Empty(observations) });
-            var previous = item.OperationalState; if (previous.Id != targetState.Id) { AssetOperationalPolicy.EnsureTransitionAllowed(previous.Code, targetState.Code); item.OperationalStateId = targetState.Id; item.OperationalState = targetState; _db.AssetStateEvents.Add(new AssetStateEventEntity { AssetId = item.Id, PreviousStateId = previous.Id, NewStateId = targetState.Id, OccurredAtUtc = effectiveAt, UserId = u.UserId, Reason = Empty(reason) ?? (targetType == "TALLER" ? "Ingreso efectivo a taller" : "Retorno efectivo a faena"), ReferenceType = "UBICACION_FISICA", ReferenceId = item.Id.ToString("D"), ReferenceText = order?.WorkOrderNumber }); }
+            var previous = item.OperationalState;
+            if (previous.Id != targetState.Id)
+            {
+                AssetOperationalPolicy.EnsureTransitionAllowed(previous.Code, targetState.Code);
+                item.OperationalStateId = targetState.Id; item.OperationalState = targetState;
+                _db.AssetStateEvents.Add(new AssetStateEventEntity { AssetId = item.Id, PreviousStateId = previous.Id, NewStateId = targetState.Id, OccurredAtUtc = effectiveAt, UserId = u.UserId, Reason = Empty(reason) ?? (targetType == "TALLER" ? "Ingreso efectivo a taller" : "Retorno efectivo a faena"), ReferenceType = "UBICACION_FISICA", ReferenceId = item.Id.ToString("D"), ReferenceText = order?.WorkOrderNumber });
+            }
             item.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, item.Id, $"UBICACION_FISICA:{targetType} {reason}".Trim(), ct);
         }
         await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
-        var affected = assets.Select(x => x.Code).Distinct().ToArray(); var movements = await PhysicalLocationQuery().Where(x => affected.Contains(x.Asset.Code) && x.ValidToUtc == null).ToListAsync(ct); foreach (var item in assets) await AuditAsync(u, "asset.physical_location.changed", item, auditPrevious[item.Id], new { Ubicacion = targetType, Taller = workshop?.Code, Faena = faena?.Code, Estado = targetState.Code, FechaEfectiva = effectiveAt, FechaRegistro = DateTimeOffset.UtcNow, Usuario = u.UserId, UnidadOperativa = movementUnit?.Code, OT = order?.WorkOrderNumber, Motivo = Empty(reason), Observaciones = Empty(observations) }, ct); return movements.Select(x => ToPhysicalLocation(x, affected)).ToArray();
+        var affected = assets.Select(x => x.Code).Distinct().ToArray();
+        var movements = await PhysicalLocationQuery().Where(x => affected.Contains(x.Asset.Code) && x.ValidToUtc == null).ToListAsync(ct);
+        foreach (var item in assets) await AuditAsync(u, "asset.physical_location.changed", item, auditPrevious[item.Id], new { Ubicacion = targetType, Taller = workshop?.Code, Faena = faena?.Code, Estado = targetState.Code, FechaEfectiva = effectiveAt, FechaRegistro = DateTimeOffset.UtcNow, Usuario = u.UserId, UnidadOperativa = movementUnit?.Code, OT = order?.WorkOrderNumber, Motivo = Empty(reason), Observaciones = Empty(observations) }, ct);
+        return movements.Select(x => ToPhysicalLocation(x, affected)).ToArray();
     }
     public async Task<IReadOnlyCollection<AssetHistoryEntry>> GetHistoryAsync(string codigo, UserAccessContext u, CancellationToken ct)
     {
@@ -648,7 +701,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
     public async Task<AssetAvailabilityResponse?> GetAvailabilityAsync(string codigo, UserAccessContext u, CancellationToken ct)
     {
-        var asset = await FindAsync(codigo, false, ct); if (asset is null) return null; View(u, asset); var matrix = await MatrixAsync(asset, ct); var documents = matrix.Where(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER").Select(x => $"Documento {x.TipoDocumento}: {x.Estado}").ToArray(); var operational = asset.OperationalState.Code == "OPERATIVO_FAENA"; var blocks = (operational ? [] : new[] { $"Estado operacional: {asset.OperationalState.Code}" }).Concat(documents).ToArray(); return new(asset.Code, blocks.Length == 0, operational, documents.Length == 0, asset.OperationalState.Code, DocumentState(matrix), blocks, blocks.Length == 0 ? 100 : 0);
+        var asset = await FindAsync(codigo, false, ct); if (asset is null) return null; View(u, asset); var matrix = await MatrixAsync(asset, ct); var documents = matrix.Where(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER").Select(x => $"Documento {x.TipoDocumento}: {x.Estado}").ToArray(); var excluded = AssetOperationalPolicy.IsExcludedFromOperationalUniverse(asset.OperationalState.Code); var operational = AssetOperationalPolicy.IsAvailable(asset.OperationalState.Code); var blocks = (operational || excluded ? [] : new[] { $"Estado operacional: {asset.OperationalState.Name}" }).Concat(documents).ToArray(); return new(asset.Code, !excluded && blocks.Length == 0, operational, documents.Length == 0, asset.OperationalState.Code, DocumentState(matrix), blocks, !excluded && blocks.Length == 0 ? 100 : 0);
     }
 
     private IQueryable<AssetEntity> Query() => _db.Assets.Include(x => x.AssetTypeDefinition).Include(x => x.Family).Include(x => x.Faena).ThenInclude(x => x.TechnicalLocation).Include(x => x.OperationalState);
@@ -661,7 +714,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         var faenaEntity = faena is null or "" ? null : await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(faena) && x.IsActive, ct) ?? throw new DomainException("Faena inexistente."); if (faenaEntity is not null && !_authorization.CanViewFaena(u, faenaEntity.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena indicada."); if (faenaEntity is not null && faenaEntity.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene una ubicacion tecnica configurada.");
         var effectiveState = Same(faenaEntity?.Code, "FAE_EDB") ? AssetOperationalPolicy.DecommissionedStateCode : state;
         Require(effectiveState, "EstadoOperacionalCodigo");
-        var stateEntity = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(effectiveState) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente."); return (typeEntity, familyEntity, faenaEntity, stateEntity);
+        var stateEntity = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(effectiveState) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente."); if (faenaEntity is not null) AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation("nuevo activo", "FAENA", stateEntity.Code, stateEntity.Name); return (typeEntity, familyEntity, faenaEntity, stateEntity);
     }
     private static AssetAttributeDefinitionResponse ToDefinition(AssetAttributeDefinitionEntity x) => new(x.Code, x.Name, x.DataType, x.Unit, x.IsRequired, x.IsIdentifier, x.IsUnique, x.IsSearchable, x.IsFilterable, x.ShowInList, x.MinimumValue, x.MaximumValue, x.ValidationPattern, x.OptionsJson, x.DisplayGroup, x.SortOrder);
     private async Task<IReadOnlyCollection<AssetAttributeDefinitionEntity>> DefinitionsAsync(Guid typeId, Guid? familyId, CancellationToken ct) => (await _db.AssetAttributeDefinitions.Where(x => x.IsActive && x.AssetTypeId == typeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == familyId)).ToListAsync(ct)).GroupBy(x => x.Code, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderByDescending(x => x.EquipmentFamilyId.HasValue).First()).OrderBy(x => x.SortOrder).ToArray();

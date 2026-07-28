@@ -143,6 +143,7 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         var faena = string.IsNullOrWhiteSpace(r.FaenaCodigo) ? null : await db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(r.FaenaCodigo) && x.IsActive, ct) ?? throw new DomainException("Faena inexistente.");
         if (faena is not null) EnsureView(u, faena.Code);
         if (faena is not null && faena.TechnicalLocation is null) throw new DomainException("La faena indicada no tiene una ubicacion tecnica configurada.");
+        if (faena is not null) AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation("unidad operativa", "FAENA", state.Code, state.Name);
         if (r.FechaBaja is { } end && r.FechaPuestaServicio is { } start && end < start) throw new DomainException("La baja no puede preceder a la puesta en servicio.");
         var unit = new OperationalUnitEntity { Code = code, Name = r.Nombre.Trim(), OperationalUnitTypeId = type.Id, FaenaId = faena?.Id, OperationalStateId = state.Id, BaselineOperationalStateId = state.Id, Criticality = Text(r.Criticidad), CommissioningDate = r.FechaPuestaServicio, DecommissioningDate = r.FechaBaja, Observations = Text(r.Observaciones) };
         db.OperationalUnits.Add(unit); await db.SaveChangesAsync(ct);
@@ -224,7 +225,14 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         var rule = await db.OperationalUnitCompositionRules.Include(x => x.AllowedAssets).SingleOrDefaultAsync(x => x.OperationalUnitTypeId == unit.OperationalUnitTypeId && x.ComponentRoleId == role.Id && x.IsActive, ct) ?? throw new DomainException("No existe regla activa para el rol en este tipo de unidad.");
         var asset = await db.Assets.Include(x => x.AssetTypeDefinition).Include(x => x.Family).Include(x => x.OperationalState).Include(x => x.Faena).ThenInclude(x => x!.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(assetCode), ct) ?? throw new DomainException("Activo inexistente.");
         if (!asset.AssetTypeDefinition.IsMountable) throw new DomainException("El activo no es montable.");
-        AssetOperationalPolicy.EnsureCanStartOperation(asset, "montajes en unidades operativas");
+        if (!AssetOperationalPolicy.AllowsMounting(asset.OperationalState.Code)) throw new DomainException("No se puede montar un activo dado de baja en una unidad operativa.");
+        var assetLocation = await db.AssetPhysicalLocationPeriods.AsNoTracking().SingleOrDefaultAsync(item => item.AssetId == asset.Id && item.ValidToUtc == null, ct) ?? throw new DomainException("El activo no tiene ubicación física vigente.");
+        var mountedLocationTypes = await (from component in db.OperationalUnitComponents.AsNoTracking()
+                                          join location in db.AssetPhysicalLocationPeriods.AsNoTracking() on component.AssetId equals location.AssetId
+                                          where component.OperationalUnitId == unit.Id && component.RemovedAtUtc == null && location.ValidToUtc == null
+                                          select location.LocationType).Distinct().ToArrayAsync(ct);
+        if (mountedLocationTypes.Length > 1 || (mountedLocationTypes.Length == 1 && !Same(mountedLocationTypes[0], assetLocation.LocationType)))
+            throw new DomainException("Inconsistencia de ubicación física: los componentes vigentes de la unidad deben permanecer en el mismo lugar.");
         if (asset.FaenaId != unit.FaenaId) throw new DomainException("Inconsistencia territorial: activo y unidad deben pertenecer a la misma faena. Traslade la unidad completa o desmonte previamente el componente.");
         if (await db.OperationalUnitComponents.AnyAsync(x => x.AssetId == asset.Id && x.RemovedAtUtc == null, ct)) throw new DomainException("El activo ya esta montado en otra unidad.");
         var allowed = rule.AllowedAssets;

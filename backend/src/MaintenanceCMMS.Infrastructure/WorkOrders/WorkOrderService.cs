@@ -66,6 +66,7 @@ public sealed partial class WorkOrderService : IWorkOrderService
         ValidateRequired(request.TipoMantenimiento, nameof(request.TipoMantenimiento));
         var reference = MaintenanceTargetRequestNormalizer.Normalize(request.Objetivo, request.ActivoCodigo, request.UnidadOperativaCodigo);
         var target = await _maintenanceTargets.ResolveAsync(reference!, user, ct);
+        if (!AssetOperationalPolicy.AllowsWorkOrders(target.EstadoOperacionalCodigo)) throw new DomainException("El objetivo seleccionado está dado de baja y no admite nuevas órdenes de trabajo.");
         if (target.Tipo == MaintenanceTargetType.OperationalUnit && Same(request.TipoMantenimiento, "Preventive"))
         {
             throw new DomainException("Las OTs preventivas continúan siendo exclusivamente por activo.");

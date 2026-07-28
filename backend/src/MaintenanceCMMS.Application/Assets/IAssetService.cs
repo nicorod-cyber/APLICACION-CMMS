@@ -6,6 +6,7 @@ namespace MaintenanceCMMS.Application.Assets;
 public interface IAssetService
 {
     Task<AssetCatalogResponse> GetCatalogAsync(UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AssetOperationalStateOption>> GetOperationalStatesAsync(string? tipoUbicacion, bool incluirTerminales, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AssetAttributeDefinitionResponse>> GetApplicableDefinitionsAsync(string tipoActivoCodigo, string? familiaEquipoCodigo, UserAccessContext user, CancellationToken cancellationToken);    Task<IReadOnlyCollection<AssetSummary>> ListAsync(AssetListQuery query, UserAccessContext user, CancellationToken cancellationToken);
     Task<PagedResponse<AssetSummary>> ListPageAsync(AssetListQuery query, UserAccessContext user, CancellationToken cancellationToken);
     Task<PagedResponse<EquipmentOverviewRow>> ListEquipmentOverviewAsync(EquipmentOverviewQuery query, UserAccessContext user, CancellationToken cancellationToken);

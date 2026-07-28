@@ -148,7 +148,7 @@ internal sealed class PostgreSqlWorkTestFixture : IAsyncDisposable
         var technicalLocation = new TechnicalLocationEntity { Code = "UT-FAE-1", Name = "Ubicacion FAE-1", Faena = faena, IsObsolete = false };
         var type = new AssetTypeEntity { Code = "EQUIPO", Name = "Equipo", IsActive = true };
         var family = new EquipmentFamilyEntity { Code = "FAM-1", Name = "Familia", AssetTypeId = type.Id, IsActive = true };
-        var state = new AssetOperationalStateEntity { Code = "OPERATIVO_FAENA", Name = "Operativo", IsActive = true };
+        var state = new AssetOperationalStateEntity { Code = "OPERATIVO", Name = "Operativo", IsActive = true };
         faena.TechnicalLocation = technicalLocation;
         db.AddRange(admin, planner, supervisor, technicianOne, technicianTwo, plannerRole, supervisorRole, technicianRole, faena, technicalLocation, type, family);
         db.UserRoles.AddRange(new UserRoleEntity { User = planner, Role = plannerRole }, new UserRoleEntity { User = supervisor, Role = supervisorRole }, new UserRoleEntity { User = technicianOne, Role = technicianRole }, new UserRoleEntity { User = technicianTwo, Role = technicianRole });

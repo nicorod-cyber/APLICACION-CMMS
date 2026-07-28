@@ -5,6 +5,7 @@ using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql;
@@ -26,11 +27,11 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
 
     public async Task SeedReferenceCatalogsAsync(CancellationToken cancellationToken)
     {
-        await UpsertOperationalStateAsync("OPERATIVO_FAENA", "Operativo en Faena", cancellationToken);
-        await UpsertOperationalStateAsync("ALERTA_FAENA", "Con alerta en Faena", cancellationToken);
-        await UpsertOperationalStateAsync("FUERA_SERVICIO_FAENA", "Fuera de servicio en Faena", cancellationToken);
-        await UpsertOperationalStateAsync("FUERA_SERVICIO_TALLER", "Fuera de servicio en Taller", cancellationToken);
-
+        await NormalizeOperationalStatesAsync(cancellationToken);
+        foreach (var state in AssetOperationalPolicy.Definitions)
+        {
+            await UpsertOperationalStateAsync(state.Code, state.Name, state.Severity, cancellationToken);
+        }
         await UpsertAssetTypeAsync("EQUIPO", "Equipo", cancellationToken);
         // Families require the generated asset-type key on a pristine database.
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -67,21 +68,43 @@ public sealed class PostgreSqlDevelopmentSeeder : IPostgreSqlDevelopmentSeeder
 
     public Task SeedDemoDataAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private async Task UpsertOperationalStateAsync(string code, string name, CancellationToken cancellationToken)
+    private async Task NormalizeOperationalStatesAsync(CancellationToken ct)
+    {
+        var states = await _dbContext.AssetOperationalStates.ToListAsync(ct);
+        foreach (var legacyCode in new[] { "OPERATIVO_FAENA", "ALERTA_FAENA", "FUERA_SERVICIO_FAENA", "FUERA_SERVICIO_TALLER", "EN_PREPARACION" })
+        {
+            var legacy = states.SingleOrDefault(item => string.Equals(item.Code, legacyCode, StringComparison.OrdinalIgnoreCase));
+            if (legacy is null) continue;
+            var canonicalCode = AssetOperationalPolicy.NormalizeLegacyCode(legacyCode);
+            var canonical = states.SingleOrDefault(item => string.Equals(item.Code, canonicalCode, StringComparison.OrdinalIgnoreCase));
+            if (canonical is null) legacy.Code = canonicalCode;
+            else if (canonical.Id != legacy.Id)
+            {
+                await _dbContext.Assets.Where(item => item.OperationalStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.OperationalStateId, canonical.Id), ct);
+                await _dbContext.AssetStateEvents.Where(item => item.PreviousStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.PreviousStateId, canonical.Id), ct);
+                await _dbContext.AssetStateEvents.Where(item => item.NewStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.NewStateId, canonical.Id), ct);
+                await _dbContext.OperationalUnits.Where(item => item.OperationalStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.OperationalStateId, canonical.Id), ct);
+                await _dbContext.OperationalUnits.Where(item => item.BaselineOperationalStateId == legacy.Id).ExecuteUpdateAsync(setters => setters.SetProperty(item => item.BaselineOperationalStateId, canonical.Id), ct);
+                _dbContext.AssetOperationalStates.Remove(legacy);
+            }
+        }
+    }
+
+    private async Task UpsertOperationalStateAsync(string code, string name, int severity, CancellationToken cancellationToken)
     {
         var entity = await _dbContext.AssetOperationalStates.FirstOrDefaultAsync(item => item.Code == code, cancellationToken);
         if (entity is null)
         {
-            _dbContext.AssetOperationalStates.Add(new AssetOperationalStateEntity { Code = code, Name = name, IsActive = true });
+            _dbContext.AssetOperationalStates.Add(new AssetOperationalStateEntity { Code = code, Name = name, Severity = severity, IsActive = true });
         }
         else
         {
             entity.Name = name;
+            entity.Severity = severity;
             entity.IsActive = true;
             entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
         }
     }
-
     private async Task UpsertAssetTypeAsync(string code, string name, CancellationToken cancellationToken)
     {
         var entity = await _dbContext.AssetTypes.FirstOrDefaultAsync(item => item.Code == code, cancellationToken);

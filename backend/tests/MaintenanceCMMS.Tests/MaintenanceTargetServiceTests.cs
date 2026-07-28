@@ -53,7 +53,7 @@ public sealed class MaintenanceTargetServiceTests
         var db = fixture.DbContext;
         if (await db.OperationalUnits.AnyAsync()) return;
         var faena = await db.Faenas.SingleAsync(item => item.Code == "FAE-1");
-        var state = await db.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO_FAENA");
+        var state = await db.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO");
         var type = new OperationalUnitTypeEntity { Code = "CAMION", Name = "Camión fábrica", ParticipatesInAvailability = true };
         var role = new OperationalUnitComponentRoleEntity { Code = "CHASIS", Name = "Chasis" };
         var unit = new OperationalUnitEntity { Code = "UNIT-1", Name = "Camión fábrica 01", OperationalUnitType = type, Faena = faena, OperationalState = state };

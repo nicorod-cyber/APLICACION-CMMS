@@ -680,6 +680,12 @@ assetsApi.MapGet("/catalog", async (ClaimsPrincipal user, IAssetService assetSer
 })
 .WithName("GetAssetCatalog");
 
+assetsApi.MapGet("/operational-states", async (string? locationType, bool? includeTerminales, ClaimsPrincipal user, IAssetService assetService, CancellationToken cancellationToken) =>
+{
+    try { return Results.Ok(await assetService.GetOperationalStatesAsync(locationType, includeTerminales ?? true, UserAccessContext.FromClaims(user), cancellationToken)); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+})
+.WithName("GetAssetOperationalStates");
 assetsApi.MapGet("/attribute-definitions", async (string tipoActivoCodigo, string? familiaEquipoCodigo, ClaimsPrincipal user, IAssetService assetService, CancellationToken cancellationToken) =>
 {
     try { return Results.Ok(await assetService.GetApplicableDefinitionsAsync(tipoActivoCodigo, familiaEquipoCodigo, UserAccessContext.FromClaims(user), cancellationToken)); }
