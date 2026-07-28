@@ -152,7 +152,26 @@ export function WorkNotificationsPage() {
     void loadAll();
   }, [filters.status, filters.type, filters.priority, filters.faenaCodigo, filters.includeClosed, filters.supervisorInbox]);
 
-  useEffect(() => { if (targetType !== "OperationalUnit" || !targetCode) return; void apiFetch<{ codigo: string; faenaCodigo?: string | null }>("/api/operational-units/" + encodeURIComponent(targetCode)).then(unit => setForm(current => current.objetivo ? current : { ...current, unidadOperativaCodigo: unit.codigo, objetivo: { tipo: "OperationalUnit", codigo: unit.codigo }, faenaCodigo: unit.faenaCodigo ?? current.faenaCodigo })).catch(error => setError(error instanceof Error ? error.message : "No fue posible preseleccionar la unidad.")); }, [targetCode, targetType]);
+  useEffect(() => {
+    if (!targetCode || (targetType !== "Asset" && targetType !== "OperationalUnit")) return;
+    const isAsset = targetType === "Asset";
+    const endpoint = isAsset ? "/api/assets/" + encodeURIComponent(targetCode) : "/api/operational-units/" + encodeURIComponent(targetCode);
+    void apiFetch<{ codigo?: string; faenaCodigo?: string | null; criticidad?: string | null; resumen?: { codigo: string; faenaCodigo?: string | null; criticidad?: string | null } }>(endpoint)
+      .then(result => {
+        const target = result.resumen ?? result;
+        const selectedCode = target.codigo;
+        if (!selectedCode) throw new Error("El objetivo seleccionado no contiene código.");
+        setForm(current => current.objetivo ? current : {
+          ...current,
+          activoCodigo: isAsset ? selectedCode : current.activoCodigo,
+          unidadOperativaCodigo: isAsset ? current.unidadOperativaCodigo : selectedCode,
+          objetivo: { tipo: isAsset ? "Asset" : "OperationalUnit", codigo: selectedCode },
+          faenaCodigo: target.faenaCodigo ?? current.faenaCodigo,
+          criticidad: normalizePriority(target.criticidad) ?? current.criticidad
+        });
+      })
+      .catch(error => setError(error instanceof Error ? error.message : "No fue posible preseleccionar el objetivo."));
+  }, [targetCode, targetType]);
   const assetByCode = useMemo(() => new Map(assets.map((item) => [item.codigo, item])), [assets]);
   const unitByCode = useMemo(() => new Map(operationalUnits.map((item) => [item.codigo, item])), [operationalUnits]);
   const selected = useMemo(() => notifications.find((item) => item.avisoId === selectedId) ?? notifications[0] ?? null, [notifications, selectedId]);

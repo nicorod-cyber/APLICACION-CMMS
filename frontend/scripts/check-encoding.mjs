@@ -6,6 +6,8 @@ const root = fileURLToPath(new URL("../..", import.meta.url));
 const ignored = new Set([".git", "bin", "obj", "dist", "node_modules", "artifacts", ".codex-tmp", "logs"]);
 const extensions = new Set([".cs", ".ts", ".tsx", ".js", ".mjs", ".json", ".yml", ".yaml"]);
 const replacement = String.fromCodePoint(0xfffd);
+const damagedSpanish = /\b(?:f\?sico|fotograf\?a|descripci\?n|hist\?rico|composici\?n|f\?brica|medici\?n)\b/i;
+const literalPowerShellNewline = String.fromCharCode(96) + "r" + String.fromCharCode(96) + "n";
 const suspicious = [
   replacement,
   "\u00c3\u0192",
@@ -26,8 +28,10 @@ async function files(directory) {
 
 const failures = [];
 for (const path of await files(root)) {
-  const text = await readFile(path, "utf8");
-  if (suspicious.some((value) => text.includes(value))) failures.push(relative(root, path));
+  const bytes = await readFile(path);
+  const text = bytes.toString("utf8");
+  const hasBom = [".ts", ".tsx"].some((extension) => path.endsWith(extension)) && bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]));
+  if (suspicious.some((value) => text.includes(value)) || damagedSpanish.test(text) || text.includes(literalPowerShellNewline)) failures.push(relative(root, path));
 }
 
 if (failures.length) {

@@ -297,7 +297,25 @@ export function WorkOrdersPage() {
     }
   }, [selectedId]);
 
-  useEffect(() => { if (targetType !== "OperationalUnit" || !targetCode) return; void apiFetch<{ codigo: string; faenaCodigo?: string | null }>("/api/operational-units/" + encodeURIComponent(targetCode)).then(unit => setOrderForm(current => current.objetivo ? current : { ...current, unidadOperativaCodigo: unit.codigo, objetivo: { tipo: "OperationalUnit", codigo: unit.codigo }, faenaCodigo: unit.faenaCodigo ?? current.faenaCodigo })).catch(error => setError(error instanceof Error ? error.message : "No fue posible preseleccionar la unidad.")); }, [targetCode, targetType]);
+  useEffect(() => {
+    if (!targetCode || (targetType !== "Asset" && targetType !== "OperationalUnit")) return;
+    const isAsset = targetType === "Asset";
+    const endpoint = isAsset ? "/api/assets/" + encodeURIComponent(targetCode) : "/api/operational-units/" + encodeURIComponent(targetCode);
+    void apiFetch<{ codigo?: string; faenaCodigo?: string | null; resumen?: { codigo: string; faenaCodigo?: string | null } }>(endpoint)
+      .then(result => {
+        const target = result.resumen ?? result;
+        const selectedCode = target.codigo;
+        if (!selectedCode) throw new Error("El objetivo seleccionado no contiene código.");
+        setOrderForm(current => current.objetivo ? current : {
+          ...current,
+          activoCodigo: isAsset ? selectedCode : current.activoCodigo,
+          unidadOperativaCodigo: isAsset ? current.unidadOperativaCodigo : selectedCode,
+          objetivo: { tipo: isAsset ? "Asset" : "OperationalUnit", codigo: selectedCode },
+          faenaCodigo: target.faenaCodigo ?? current.faenaCodigo
+        });
+      })
+      .catch(error => setError(error instanceof Error ? error.message : "No fue posible preseleccionar el objetivo."));
+  }, [targetCode, targetType]);
   const selected = detail?.summary ?? orders.find((item) => item.numeroOT === selectedId) ?? orders[0] ?? null;
   const byStatus = useMemo(() => {
     return kanbanColumns.map((status) => ({
@@ -358,7 +376,8 @@ export function WorkOrdersPage() {
     event.preventDefault();
     await saveAction(async () => {
       const body = {
-        ...(orderForm.preventive ? { activoCodigo: orderForm.objetivo?.codigo } : { objetivo: orderForm.objetivo }),
+        objetivo: orderForm.objetivo,
+        ...(orderForm.preventive ? { activoCodigo: orderForm.objetivo?.codigo } : {}),
         activosRelacionados: orderForm.activosRelacionados.filter((code) => code !== orderForm.objetivo?.codigo).map((activoCodigo) => ({ activoCodigo, rol: "AFECTADO" })),
         faenaCodigo: emptyToNull(orderForm.faenaCodigo),
         descripcion: orderForm.descripcion,
@@ -371,7 +390,7 @@ export function WorkOrdersPage() {
         fechaProgramada: toIsoOrNull(orderForm.fechaProgramada),
         requiereFirma: orderForm.requiereFirma
       };
-      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo f?sico.");
+      if (orderForm.preventive && !orderForm.activoCodigo) throw new Error("Una OT preventiva requiere un activo físico.");
       const created = orderForm.preventive
         ? await apiFetch<WorkOrderDetail>("/api/work-orders/preventive", { method: "POST", body: JSON.stringify(body) })
         : await apiFetch<WorkOrderDetail>("/api/work-orders", { method: "POST", body: JSON.stringify(body) });
@@ -428,14 +447,14 @@ export function WorkOrdersPage() {
     event.preventDefault();
     if (!selected) return;
     await saveAction(async () => {
-      if (!evidenceForm.file) throw new Error("Seleccione una fotograf?a.");
+      if (!evidenceForm.file) throw new Error("Seleccione una fotografía.");
       const form = new FormData();
       form.set("file", evidenceForm.file);
       form.set("tipo", evidenceForm.tipoEvidencia);
       if (evidenceForm.descripcion.trim()) form.set("descripcion", evidenceForm.descripcion.trim());
       await apiFetch(`/api/work-orders/${encodeURIComponent(selected.numeroOT)}/tasks/${encodeURIComponent(evidenceForm.codigoTarea)}/evidences`, { method: "POST", body: form });
       setEvidenceForm({ ...evidenceForm, descripcion: "", file: null });
-      setMessage("Fotograf?a cargada.");
+      setMessage("Fotografía cargada.");
     });
   }
 
@@ -840,7 +859,7 @@ export function WorkOrdersPage() {
             <form className="panel-muted stack" onSubmit={addTask}>
               <h3>Tareas internas</h3>
               <div className="form-grid">
-                <label className="span-2">Descripci?n<input value={taskForm.descripcion} onChange={(event) => setTaskForm({ ...taskForm, descripcion: event.target.value })} required /></label>
+                <label className="span-2">Descripción<input value={taskForm.descripcion} onChange={(event) => setTaskForm({ ...taskForm, descripcion: event.target.value })} required /></label>
                 <label className="check-row"><input type="checkbox" checked={taskForm.requiereEvidencia} onChange={(event) => setTaskForm({ ...taskForm, requiereEvidencia: event.target.checked })} />Evidencia</label>
                 <label className="check-row"><input type="checkbox" checked={taskForm.requiereHH} onChange={(event) => setTaskForm({ ...taskForm, requiereHH: event.target.checked })} />HH</label>
                 <label className="check-row"><input type="checkbox" checked={taskForm.checklistObligatorio} onChange={(event) => setTaskForm({ ...taskForm, checklistObligatorio: event.target.checked })} />Checklist</label>
@@ -855,7 +874,7 @@ export function WorkOrdersPage() {
                 <label>Tecnico usuario ID<input value={technicianForm.tecnicoUsuarioId} onChange={(event) => setTechnicianForm({ tecnicoUsuarioId: event.target.value })} required /></label>
               </div>
               <button className="secondary-button" type="submit" disabled={isSaving || !canPlan}><UserPlus size={18} /> Asignar</button>
-              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "Hist?rico"])} />
+              <MiniTable rows={detail.technicians.map((item) => [item.usuarioId, item.nombre, item.vigente ? "Vigente" : "Histórico"])} />
             </form>
 
             <form className="panel-muted stack" onSubmit={registerLabor}>
@@ -882,10 +901,10 @@ export function WorkOrdersPage() {
               <TaskSelect tasks={detail.tasks} value={evidenceForm.codigoTarea} onChange={(value) => setEvidenceForm({ ...evidenceForm, codigoTarea: value })} />
               <div className="form-grid">
                 <label>Tipo<select value={evidenceForm.tipoEvidencia} onChange={(event) => setEvidenceForm({ ...evidenceForm, tipoEvidencia: event.target.value as EvidenceType })}><option value="FotoAntes">Foto antes</option><option value="FotoDurante">Foto durante</option><option value="FotoDespues">Foto despu?s</option><option value="FotoPrueba">Foto prueba</option></select></label>
-                <label>Fotograf?a<input type="file" accept="image/*" onChange={(event) => setEvidenceForm({ ...evidenceForm, file: event.target.files?.[0] ?? null })} required /></label>
-                <label className="span-2">Descripci?n<input value={evidenceForm.descripcion} onChange={(event) => setEvidenceForm({ ...evidenceForm, descripcion: event.target.value })} /></label>
+                <label>Fotografía<input type="file" accept="image/*" onChange={(event) => setEvidenceForm({ ...evidenceForm, file: event.target.files?.[0] ?? null })} required /></label>
+                <label className="span-2">Descripción<input value={evidenceForm.descripcion} onChange={(event) => setEvidenceForm({ ...evidenceForm, descripcion: event.target.value })} /></label>
               </div>
-              <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Cargar fotograf?a</button>
+              <button className="secondary-button" type="submit" disabled={isSaving}><FileUp size={18} /> Cargar fotografía</button>
               <MiniTable rows={detail.evidences.map((item) => [item.codigoTarea ?? "OT", item.tipoEvidencia, item.nombre, item.sharePointUrl ?? item.localPath ?? item.archivoKey ?? "-"])} />
             </form>
 

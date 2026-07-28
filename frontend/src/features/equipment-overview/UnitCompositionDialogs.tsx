@@ -10,6 +10,7 @@ export type UnitComponent = {
   fechaMontajeUtc: string;
   fechaDesmontajeUtc?: string | null;
   estadoOperacionalCodigo?: string | null;
+  estadoOperacionalNombre?: string | null;
   faenaCodigo?: string | null;
   motivoMontaje?: string | null;
   motivoDesmontaje?: string | null;

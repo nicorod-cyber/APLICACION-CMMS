@@ -1,7 +1,9 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
+  ChevronRight,
   GitMerge,
   Layers3,
   ListTree,
@@ -565,37 +567,21 @@ function TreeItem({
   onCreateChild: (level?: TechnicalHierarchyLevel, parentCode?: string) => void;
   depth?: number;
 }) {
+  const [expanded, setExpanded] = useState(depth === 0);
+  const hasChildren = item.children.length > 0;
   const nextLevel = getNextLevel(item.node.nivel);
-  return (
-    <div>
-      <div
-        className={`flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm transition hover:bg-slate-100 dark:hover:bg-slate-800 ${
-          selected === item.node.codigo ? "bg-teal-50 dark:bg-teal-950/30" : ""
-        }`}
-        style={{ marginLeft: depth * 18 }}
-      >
-        <button className="min-w-0 flex-1 text-left" onClick={() => onSelect(item.node)} type="button">
-          <span className="font-semibold text-slate-900 dark:text-slate-100">{item.node.codigo}</span>
-          <span className="ml-2 text-slate-600 dark:text-slate-300">{item.node.nombre}</span>
-          <span className="ml-2 text-xs text-slate-500 dark:text-slate-400">{item.node.nivel}</span>
-        </button>
-        {nextLevel ? (
-          <button
-            className="h-8 rounded-md border border-slate-200 px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-            onClick={() => onCreateChild(nextLevel, item.node.codigo)}
-            type="button"
-          >
-            +
-          </button>
-        ) : null}
+  const childrenId = "technical-hierarchy-" + item.node.codigo;
+  return <div>
+    <div className={`flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm transition hover:bg-slate-100 dark:hover:bg-slate-800 ${selected === item.node.codigo ? "bg-teal-50 dark:bg-teal-950/30" : ""}`} style={{ marginLeft: depth * 18 }}>
+      <div className="flex min-w-0 flex-1 items-center">
+        {hasChildren ? <button aria-controls={childrenId} aria-expanded={expanded} className="mr-1 rounded p-1 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => setExpanded(current => !current)} type="button">{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button> : <span className="mr-1 h-6 w-6" />}
+        <button className="min-w-0 flex-1 text-left" onClick={() => onSelect(item.node)} type="button"><span className="font-semibold text-slate-900 dark:text-slate-100">{item.node.codigo}</span><span className="ml-2 text-slate-600 dark:text-slate-300">{item.node.nombre}</span><span className="ml-2 text-xs text-slate-500 dark:text-slate-400">{item.node.nivel}</span></button>
       </div>
-      {item.children.map((child) => (
-        <TreeItem key={child.node.codigo} item={child} selected={selected} onSelect={onSelect} onCreateChild={onCreateChild} depth={depth + 1} />
-      ))}
+      {nextLevel ? <button className="h-8 rounded-md border border-slate-200 px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800" onClick={() => onCreateChild(nextLevel, item.node.codigo)} type="button">+</button> : null}
     </div>
-  );
+    {hasChildren && expanded ? <div id={childrenId}>{item.children.map(child => <TreeItem key={child.node.codigo} item={child} selected={selected} onSelect={onSelect} onCreateChild={onCreateChild} depth={depth + 1} />)}</div> : null}
+  </div>;
 }
-
 function HierarchyTable({
   nodes,
   selectedCode,

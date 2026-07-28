@@ -242,15 +242,15 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         var rows = await db.OperationalUnitComponents.AsNoTracking().Include(x => x.Asset).ThenInclude(x => x.OperationalState).Include(x => x.Asset).ThenInclude(x => x.Faena).ThenInclude(x => x!.TechnicalLocation).Include(x => x.ComponentRole).Include(x => x.InstallationWorkOrder).Include(x => x.RemovalWorkOrder).Where(x => x.OperationalUnitId == unit.Id).OrderBy(x => x.InstalledAtUtc).ToListAsync(ct);
         var rules = await db.OperationalUnitCompositionRules.AsNoTracking().Include(x => x.ComponentRole).Where(x => x.OperationalUnitTypeId == unit.OperationalUnitTypeId && x.IsActive).ToListAsync(ct);
         var missing = rules.Where(x => x.IsMandatory && rows.Count(c => c.RemovedAtUtc is null && c.ComponentRoleId == x.ComponentRoleId) < x.MinimumQuantity).Select(x => x.ComponentRole.Code).ToArray();
-        OperationalUnitComponentResponse Map(OperationalUnitComponentEntity x) => new(x.Asset.Code, x.Asset.Name, x.ComponentRole.Code, x.InstalledAtUtc, x.RemovedAtUtc, x.InstallationWorkOrder?.WorkOrderNumber, x.RemovalWorkOrder?.WorkOrderNumber, x.Observations, x.Asset.OperationalState.Code, x.Asset.Faena?.Code, x.Asset.Faena?.TechnicalLocation?.Code, x.InstalledByUserId, x.InstallationReason, x.RemovedByUserId, x.RemovalReason, x.RemovedAtUtc is null);
+        OperationalUnitComponentResponse Map(OperationalUnitComponentEntity x) => new(x.Asset.Code, x.Asset.Name, x.ComponentRole.Code, x.InstalledAtUtc, x.RemovedAtUtc, x.InstallationWorkOrder?.WorkOrderNumber, x.RemovalWorkOrder?.WorkOrderNumber, x.Observations, x.Asset.OperationalState.Code, x.Asset.Faena?.Code, x.Asset.Faena?.TechnicalLocation?.Code, x.InstalledByUserId, x.InstallationReason, x.RemovedByUserId, x.RemovalReason, x.RemovedAtUtc is null, x.Asset.OperationalState.Name);
         return new(missing.Length == 0, missing, rows.Where(x => x.RemovedAtUtc is null).Select(Map).ToArray(), rows.Select(Map).ToArray());
     }
 
     private async Task<OperationalUnitResponse> MapAsync(OperationalUnitEntity unit, CancellationToken ct)
     {
         var role = unit.DerivedFromAssetId is null ? null : await db.OperationalUnitComponents.AsNoTracking().Include(x => x.ComponentRole).Where(x => x.OperationalUnitId == unit.Id && x.AssetId == unit.DerivedFromAssetId && x.RemovedAtUtc == null).Select(x => x.ComponentRole.Code).FirstOrDefaultAsync(ct);
-        var derived = new OperationalUnitDerivedStateResponse(unit.OperationalState.Code, unit.DerivedFromAsset?.Code, role, unit.DerivedStateReason, unit.DerivedStateCalculatedAtUtc);
-        return new(unit.Code, unit.Name, unit.OperationalUnitType.Code, unit.Faena?.Code, unit.Faena?.TechnicalLocation?.Code, unit.OperationalState.Code, unit.Criticality, unit.CommissioningDate, unit.DecommissioningDate, unit.Observations, await CompositionAsync(unit, ct), derived);
+        var derived = new OperationalUnitDerivedStateResponse(unit.OperationalState.Code, unit.DerivedFromAsset?.Code, role, unit.DerivedStateReason, unit.DerivedStateCalculatedAtUtc, unit.OperationalState.Name);
+        return new(unit.Code, unit.Name, unit.OperationalUnitType.Code, unit.Faena?.Code, unit.Faena?.TechnicalLocation?.Code, unit.OperationalState.Code, unit.Criticality, unit.CommissioningDate, unit.DecommissioningDate, unit.Observations, await CompositionAsync(unit, ct), derived, unit.OperationalUnitType.Name, unit.Faena?.Name, unit.Faena?.TechnicalLocation?.Name, unit.OperationalState.Name);
     }
 
     private async Task LockCompositionAsync(CancellationToken ct)

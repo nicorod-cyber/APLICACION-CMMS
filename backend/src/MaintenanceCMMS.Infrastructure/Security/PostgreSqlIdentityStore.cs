@@ -280,7 +280,7 @@ public sealed class PostgreSqlIdentityStore : IIdentityStore
             var faena = await _dbContext.Faenas.FirstOrDefaultAsync(item => item.Code == faenaCode, cancellationToken);
             if (faena is null)
             {
-                throw new DomainException($"La faena '{faenaCode}' no existe. Debe crearse con su responsable y ubicaci?n t?cnica.");
+                throw new DomainException($"La faena '{faenaCode}' no existe. Debe crearse con su responsable y ubicación técnica.");
             }
 
             if (!user.Faenas.Any(item => item.FaenaId == faena.Id && item.IsActive))

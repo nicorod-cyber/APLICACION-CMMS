@@ -132,14 +132,14 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         {
             var physicalLocationType = Code(query.TipoUbicacionFisica);
             assets = assets.Where(x => _db.AssetPhysicalLocationPeriods.Any(p => p.AssetId == x.Id && p.ValidToUtc == null && p.LocationType == physicalLocationType));
-            units = units.Where(_ => false);
+            units = units.Where(unit => _db.OperationalUnitComponents.Any(component => component.OperationalUnitId == unit.Id && component.RemovedAtUtc == null && _db.AssetPhysicalLocationPeriods.Any(period => period.AssetId == component.AssetId && period.ValidToUtc == null && period.LocationType == physicalLocationType)));
         }
 
         if (!string.IsNullOrWhiteSpace(query.TallerCodigo))
         {
             var workshopCode = Code(query.TallerCodigo);
             assets = assets.Where(x => _db.AssetPhysicalLocationPeriods.Any(p => p.AssetId == x.Id && p.ValidToUtc == null && p.Workshop != null && p.Workshop.Code == workshopCode));
-            units = units.Where(_ => false);
+            units = units.Where(unit => _db.OperationalUnitComponents.Any(component => component.OperationalUnitId == unit.Id && component.RemovedAtUtc == null && _db.AssetPhysicalLocationPeriods.Any(period => period.AssetId == component.AssetId && period.ValidToUtc == null && period.Workshop != null && period.Workshop.Code == workshopCode)));
         }
 
         // No preventive or regulatory-document status is currently reliable as a unified projection.
@@ -261,6 +261,51 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                 null,
                 null))
             .ToArrayAsync(ct);
+
+        var componentLocations = unitIds.Length == 0
+            ? []
+            : await (from component in _db.OperationalUnitComponents.AsNoTracking()
+                   join period in _db.AssetPhysicalLocationPeriods.AsNoTracking() on component.AssetId equals period.AssetId
+                   where unitIds.Contains(component.OperationalUnitId) && component.RemovedAtUtc == null && period.ValidToUtc == null
+                   select new
+                   {
+                       component.OperationalUnitId,
+                       period.LocationType,
+                       period.FaenaId,
+                       FaenaName = period.Faena == null ? null : period.Faena.Name,
+                       period.WorkshopId,
+                       WorkshopName = period.Workshop == null ? null : period.Workshop.Name,
+                       WorkshopCommune = period.Workshop == null ? null : period.Workshop.Commune,
+                       period.ValidFromUtc
+                   }).ToArrayAsync(ct);
+
+        var locationsByUnit = componentLocations.GroupBy(location => location.OperationalUnitId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        unitRows = unitRows.Select(row =>
+        {
+            if (!Guid.TryParse(row.OperationalUnitId, out var unitId) || !locationsByUnit.TryGetValue(unitId, out var locations) || locations.Length == 0)
+            {
+                return row.SiteId is null || row.SiteName is null
+                    ? row
+                    : row with { PhysicalLocationType = "FAENA", PhysicalLocationId = row.SiteId, PhysicalLocationName = row.SiteName };
+            }
+
+            var distinctLocations = locations.Select(location => new { location.LocationType, LocationId = location.WorkshopId ?? location.FaenaId }).Distinct().ToArray();
+            if (distinctLocations.Length != 1)
+            {
+                return row with { PhysicalLocationType = "INCONSISTENTE", PhysicalLocationName = "Ubicación inconsistente" };
+            }
+
+            var location = locations.OrderByDescending(item => item.ValidFromUtc).First();
+            return row with
+            {
+                PhysicalLocationType = location.LocationType,
+                PhysicalLocationId = (location.WorkshopId ?? location.FaenaId)?.ToString(),
+                PhysicalLocationName = location.WorkshopName ?? location.FaenaName,
+                PhysicalLocationCommune = location.WorkshopCommune,
+                PhysicalLocationSinceUtc = location.ValidFromUtc
+            };
+        }).ToArray();
 
         var componentsByUnit = unitIds.Length == 0
             ? new Dictionary<Guid, IReadOnlyCollection<string>>()
