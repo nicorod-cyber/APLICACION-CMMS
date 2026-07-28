@@ -65,7 +65,7 @@ export const navigationItems: NavigationItem[] = [
     path: "/unidades-operativas",
     icon: Boxes,
     accent: "bg-cyan-600",
-    roles: [AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.faenaViewer]
+    permissions: [AUTH_PERMISSIONS.viewOperationalUnits]
   },  {
     label: "Jerarquia",
     path: "/jerarquia-tecnica",

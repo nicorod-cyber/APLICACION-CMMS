@@ -68,6 +68,26 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         return await MapAsync(unit, ct);
     }
 
+    public async Task<IReadOnlyCollection<OperationalUnitRuleResponse>> GetRulesAsync(string codigo, UserAccessContext user, CancellationToken ct)
+    {
+        View(user);
+        var unit = await FindUnitAsync(codigo, ct);
+        if (unit is null) return [];
+        EnsureView(user, unit);
+        return await db.OperationalUnitCompositionRules.AsNoTracking()
+            .Where(x => x.OperationalUnitTypeId == unit.OperationalUnitTypeId && x.IsActive)
+            .OrderBy(x => x.ComponentRole.Code)
+            .Select(x => new OperationalUnitRuleResponse(
+                unit.OperationalUnitType.Code,
+                x.ComponentRole.Code,
+                x.MinimumQuantity,
+                x.MaximumQuantity,
+                x.IsMandatory,
+                x.AllowedAssets.Select(a => new AllowedComponentRequest(
+                    a.AssetType == null ? null : a.AssetType.Code,
+                    a.EquipmentFamily == null ? null : a.EquipmentFamily.Code)).ToArray()))
+            .ToArrayAsync(ct);
+    }
     public async Task<OperationalUnitTypeRequest> CreateTypeAsync(OperationalUnitTypeRequest r, UserAccessContext u, CancellationToken ct)
     {
         ManageUnits(u); Require(r.Codigo, "Codigo"); Require(r.Nombre, "Nombre"); var code = Code(r.Codigo);
@@ -130,6 +150,21 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         return (await GetAsync(unit.Code, u, ct))!;
     }
 
+    public async Task<OperationalUnitResponse?> UpdateAsync(string codigo, UpdateOperationalUnitRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        ManageUnits(u);
+        Require(r.Nombre, nameof(r.Nombre));
+        var unit = await FindUnitAsync(codigo, ct);
+        if (unit is null) return null;
+        EnsureView(u, unit);
+        unit.Name = r.Nombre.Trim();
+        unit.Criticality = Text(r.Criticidad);
+        unit.Observations = Text(r.Observaciones);
+        unit.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+        await Audit(u, "operational_unit.updated", unit.Code, unit.Faena?.Code, ct);
+        return await GetAsync(unit.Code, u, ct);
+    }
     public async Task<OperationalUnitCompositionResponse?> MountAsync(string unidadCodigo, MountOperationalUnitComponentRequest r, UserAccessContext u, CancellationToken ct)
     {
         ManageComposition(u);

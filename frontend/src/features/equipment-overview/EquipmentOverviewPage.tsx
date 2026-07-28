@@ -42,6 +42,6 @@ export function EquipmentOverviewPage() {
       {overviewQuery.hasNextPage ? <div className="border-t border-slate-200 p-4 text-center"><button className="secondary-button" disabled={overviewQuery.isFetchingNextPage} type="button" onClick={() => void overviewQuery.fetchNextPage()}>{overviewQuery.isFetchingNextPage ? "Cargando más…" : "Cargar más equipos"}</button></div> : null}
       <div className="border-t border-teal-100 bg-teal-50 px-4 py-3 text-xs text-teal-800">Los componentes montados no se duplican en el listado general. Accede a ellos desde la composición del camión fábrica.</div>
     </section>
-    <button className="secondary-button" type="button" onClick={() => void overviewQuery.refetch()}><RefreshCw className="h-4 w-4" />Actualizar resultados</button>\n    <AssetEditorDialog open={newOpen} onClose={() => setNewOpen(false)} onSaved={assetCode => { setNewOpen(false); navigate("/equipos/activos/" + encodeURIComponent(assetCode)); }} />
+    <button className="secondary-button" type="button" onClick={() => void overviewQuery.refetch()}><RefreshCw className="h-4 w-4" />Actualizar resultados</button>`r`n    <AssetEditorDialog open={newOpen} onClose={() => setNewOpen(false)} onSaved={assetCode => { setNewOpen(false); navigate("/equipos/activos/" + encodeURIComponent(assetCode)); }} />
   </section>;
 }

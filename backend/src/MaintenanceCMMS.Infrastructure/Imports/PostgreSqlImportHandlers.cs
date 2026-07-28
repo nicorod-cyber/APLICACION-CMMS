@@ -85,7 +85,7 @@ public abstract class PostgreSqlImportHandlerBase(CmmsDbContext db) : IPostgreSq
         return string.IsNullOrWhiteSpace(value)
             ? fallback
             : value.Equals("si", StringComparison.OrdinalIgnoreCase) ||
-              value.Equals("sÃƒÂ­", StringComparison.OrdinalIgnoreCase) ||
+              value.Equals("sí", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("activo", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("activa", StringComparison.OrdinalIgnoreCase) ||
               value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1";

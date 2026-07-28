@@ -8,6 +8,7 @@ public sealed record OperationalUnitRoleRequest(string Codigo, string Nombre, st
 public sealed record AllowedComponentRequest(string? TipoActivoCodigo = null, string? FamiliaEquipoCodigo = null);
 public sealed record OperationalUnitRuleRequest(string TipoUnidadCodigo, string RolComponenteCodigo, int CantidadMinima, int CantidadMaxima, bool Obligatorio, IReadOnlyCollection<AllowedComponentRequest>? Permitidos = null);
 public sealed record OperationalUnitRequest(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string EstadoOperacionalCodigo, string? Criticidad = null, DateOnly? FechaPuestaServicio = null, DateOnly? FechaBaja = null, string? Observaciones = null);
+public sealed record UpdateOperationalUnitRequest(string Nombre, string? Criticidad = null, string? Observaciones = null);
 public sealed record MountOperationalUnitComponentRequest(string ActivoCodigo, string RolComponenteCodigo, string? OrdenTrabajoNumero = null, DateTimeOffset? FechaMontajeUtc = null, string? Observaciones = null, string? Motivo = null);
 public sealed record UnmountOperationalUnitComponentRequest(string? OrdenTrabajoNumero = null, DateTimeOffset? FechaDesmontajeUtc = null, string? Observaciones = null, string? Motivo = null);
 public sealed record ReplaceOperationalUnitComponentRequest(string ActivoSalienteCodigo, string ActivoEntranteCodigo, string RolComponenteCodigo, string? OrdenTrabajoNumero = null, DateTimeOffset? FechaOperacionUtc = null, string? Observaciones = null, string? Motivo = null);
@@ -25,7 +26,9 @@ public interface IOperationalUnitService
     Task<PagedResponse<OperationalUnitSummary>> ListPageAsync(OperationalUnitListQuery query, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<OperationalUnitResponse>> ListAsync(string? faenaCodigo, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitResponse?> GetAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<OperationalUnitRuleResponse>> GetRulesAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitResponse> CreateAsync(OperationalUnitRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitResponse?> UpdateAsync(string codigo, UpdateOperationalUnitRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitTypeRequest> CreateTypeAsync(OperationalUnitTypeRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitRoleRequest> CreateRoleAsync(OperationalUnitRoleRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitRuleResponse> UpsertRuleAsync(OperationalUnitRuleRequest request, UserAccessContext user, CancellationToken cancellationToken);

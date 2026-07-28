@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, Bell, CheckCircle2, ClipboardList, RefreshCw, Send, Wrench, XCircle } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
@@ -131,6 +132,9 @@ const priorityValues: Priority[] = ["Baja", "Media", "Alta", "Critica"];
 const closedStatuses: WorkNotificationStatus[] = ["Rechazado", "ConvertidoOT", "Anulado"];
 
 export function WorkNotificationsPage() {
+  const [searchParams] = useSearchParams();
+  const targetCode = searchParams.get("targetCode");
+  const targetType = searchParams.get("targetType");
   const [notifications, setNotifications] = useState<WorkNotification[]>([]);
   const [assets, setAssets] = useState<AssetSummary[]>([]);
   const [operationalUnits, setOperationalUnits] = useState<OperationalUnitSummary[]>([]);
@@ -148,6 +152,7 @@ export function WorkNotificationsPage() {
     void loadAll();
   }, [filters.status, filters.type, filters.priority, filters.faenaCodigo, filters.includeClosed, filters.supervisorInbox]);
 
+  useEffect(() => { if (targetType !== "OperationalUnit" || !targetCode) return; void apiFetch<{ codigo: string; faenaCodigo?: string | null }>("/api/operational-units/" + encodeURIComponent(targetCode)).then(unit => setForm(current => current.objetivo ? current : { ...current, unidadOperativaCodigo: unit.codigo, objetivo: { tipo: "OperationalUnit", codigo: unit.codigo }, faenaCodigo: unit.faenaCodigo ?? current.faenaCodigo })).catch(error => setError(error instanceof Error ? error.message : "No fue posible preseleccionar la unidad.")); }, [targetCode, targetType]);
   const assetByCode = useMemo(() => new Map(assets.map((item) => [item.codigo, item])), [assets]);
   const unitByCode = useMemo(() => new Map(operationalUnits.map((item) => [item.codigo, item])), [operationalUnits]);
   const selected = useMemo(() => notifications.find((item) => item.avisoId === selectedId) ?? notifications[0] ?? null, [notifications, selectedId]);

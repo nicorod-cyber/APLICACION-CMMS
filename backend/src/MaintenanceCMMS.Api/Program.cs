@@ -967,6 +967,11 @@ operationalUnitsApi.MapGet("/{codigo}", async (string codigo, ClaimsPrincipal us
     catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
 }).RequireAuthorization("VerUnidadesOperativas").WithName("GetOperationalUnit");
 
+operationalUnitsApi.MapGet("/{codigo}/composition-rules", async (string codigo, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.GetRulesAsync(codigo, UserAccessContext.FromClaims(user), ct)); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("GetOperationalUnitCompositionRules");
 operationalUnitsApi.MapPost("/", async (OperationalUnitRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
 {
     try { var result = await service.CreateAsync(request, UserAccessContext.FromClaims(user), ct); return Results.Created($"/api/operational-units/{result.Codigo}", result); }
@@ -974,6 +979,12 @@ operationalUnitsApi.MapPost("/", async (OperationalUnitRequest request, ClaimsPr
     catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
 }).RequireAuthorization("AdministrarUnidadesOperativas").WithName("CreateOperationalUnit");
 
+operationalUnitsApi.MapPut("/{codigo}", async (string codigo, UpdateOperationalUnitRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { var result = await service.UpdateAsync(codigo, request, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("AdministrarUnidadesOperativas").WithName("UpdateOperationalUnit");
 operationalUnitsApi.MapPost("/types", async (OperationalUnitTypeRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
 {
     try { return Results.Ok(await service.CreateTypeAsync(request, UserAccessContext.FromClaims(user), ct)); }

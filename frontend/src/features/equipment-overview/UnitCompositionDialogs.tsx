@@ -119,7 +119,7 @@ export function UnitCompositionDialogs({
     <label className="block text-sm font-medium">
       Buscar componente elegible
       <input className="input mt-1" value={assetSearch} onChange={event => setAssetSearch(event.target.value)} placeholder="Código o nombre (mínimo 2 caracteres)" />
-      <select className="input mt-2" defaultValue="" onChange={event => setter(event.target.value)}>
+      <select aria-label="Seleccionar componente elegible" className="input mt-2" defaultValue="" onChange={event => setter(event.target.value)}>
         <option value="">Selecciona un activo</option>
         {candidates.data?.map(asset => <option key={asset.codigo} value={asset.codigo}>{asset.codigo} · {asset.nombre}{asset.tipoActivoNombre ? " · " + asset.tipoActivoNombre : ""}</option>)}
       </select>

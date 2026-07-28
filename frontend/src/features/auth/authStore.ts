@@ -16,6 +16,8 @@ export const AUTH_PERMISSIONS = {
   administration: "administracion",
   approveImports: "importaciones.aprobar",
   changeAssetFaena: "activos.cambiar_faena",
+  registerAssetReadings: "activos.lecturas.registrar",
+  correctAssetReadings: "activos.lecturas.corregir",
   manageTechnicalHierarchy: "jerarquia.gestionar",
   manageDocuments: "documentos.gestionar",
   validateDocuments: "documentos.validar",
@@ -27,7 +29,10 @@ export const AUTH_PERMISSIONS = {
   closeWorkOrders: "ot.cerrar",
   finalValidateWorkOrders: "ot.validar_final",
   viewCosts: "costos.ver",
-  viewGlobalWarehouses: "bodegas.global"
+  viewGlobalWarehouses: "bodegas.global",
+  viewOperationalUnits: "unidades_operativas.ver",
+  manageOperationalUnits: "unidades_operativas.administrar",
+  manageOperationalUnitComposition: "unidades_operativas.composicion"
 } as const;
 
 export type CurrentUser = {
