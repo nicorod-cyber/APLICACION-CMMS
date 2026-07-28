@@ -31,7 +31,7 @@ export function EquipmentOverviewPage() {
   const loading = overviewQuery.isLoading || catalogQuery.isLoading;
   function applyFilters() { if (JSON.stringify(draft) === JSON.stringify(filters)) void overviewQuery.refetch(); else setFilters({ ...draft }); }
   function open(row: EquipmentOverviewRow) { if (row.rowType === "COMPOSITE_UNIT") navigate("/equipos/unidades/" + encodeURIComponent(row.code) + "?tab=composicion"); else navigate("/equipos/activos/" + encodeURIComponent(row.code)); }
-  return <section className="space-y-4">
+  return <section className="equipment-theme-scope space-y-4">
     <EquipmentPageHeader onNew={() => setNewOpen(true)} />
     <EquipmentRepresentationBanner />
     <EquipmentSummaryCards metrics={{ total, composite: null, loose: null, nonOperational: null, expiringDocuments: null }} />

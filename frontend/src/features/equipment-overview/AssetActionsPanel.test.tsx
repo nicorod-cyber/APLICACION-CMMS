@@ -33,6 +33,7 @@ describe("AssetActionsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Registrar corrección" }));
     expect(await screen.findByText("403 Sin permiso")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveClass("dark:bg-slate-900");
     expect(screen.getByLabelText("Motivo")).toHaveValue("Ajuste validado");
   });
 });

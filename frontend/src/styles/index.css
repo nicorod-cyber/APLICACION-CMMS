@@ -235,4 +235,52 @@ select {
   .info-item strong {
     @apply mt-1 block break-words text-sm font-semibold text-slate-900 dark:text-slate-100;
   }
+  /* Scoped semantic surfaces for the Equipment module. The selector is more
+     specific than the original utility and keeps theme values centralized. */
+  .equipment-theme-scope {
+    color: rgb(15 23 42);
+  }
+
+  .dark .equipment-theme-scope {
+    color: rgb(241 245 249);
+  }
+
+  .dark .equipment-theme-scope .bg-white {
+    background-color: rgb(15 23 42);
+  }
+
+  .dark .equipment-theme-scope .bg-slate-50,
+  .dark .equipment-theme-scope .bg-slate-100 {
+    background-color: rgb(2 6 23);
+  }
+
+  .dark .equipment-theme-scope .border-slate-100,
+  .dark .equipment-theme-scope .border-slate-200,
+  .dark .equipment-theme-scope .border-slate-300 {
+    border-color: rgb(51 65 85);
+  }
+
+  .dark .equipment-theme-scope .text-slate-900,
+  .dark .equipment-theme-scope .text-slate-800,
+  .dark .equipment-theme-scope .text-slate-700 {
+    color: rgb(241 245 249);
+  }
+
+  .dark .equipment-theme-scope .text-slate-600,
+  .dark .equipment-theme-scope .text-slate-500 {
+    color: rgb(203 213 225);
+  }
+
+  .dark .equipment-theme-scope .hover\\:bg-slate-50:hover,
+  .dark .equipment-theme-scope .hover\\:bg-slate-100:hover {
+    background-color: rgb(30 41 59);
+  }
+
+  .dark .equipment-theme-scope .bg-teal-50 {
+    background-color: rgb(19 78 74);
+  }
+
+  .dark .equipment-theme-scope .bg-amber-50 {
+    background-color: rgb(69 26 3);
+  }
 }

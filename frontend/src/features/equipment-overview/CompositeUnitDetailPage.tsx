@@ -52,7 +52,7 @@ export function CompositeUnitDetailPage() {
   if (!unit) return <p className="error-banner">No fue posible cargar la unidad.</p>;
 
   const setTab = (next: string) => setSearch({ tab: next });
-  return <section className="space-y-4">
+  return <section className="equipment-theme-scope space-y-4">
     <div className="text-xs text-slate-500"><Link className="text-teal-700" to="/equipos">Equipos</Link> / {unit.nombre}</div>
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
