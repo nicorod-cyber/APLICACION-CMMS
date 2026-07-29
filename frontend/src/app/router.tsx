@@ -3,6 +3,7 @@ import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { FaenasPage } from "../features/faenas/FaenasPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { ProtectedRoute } from "../features/auth/ProtectedRoute";
+import { AUTH_PERMISSIONS, AUTH_ROLES } from "../features/auth/authStore";
 import { AssetsPage } from "../features/assets/AssetsPage";
 import { EquipmentOverviewPage } from "../features/equipment-overview/EquipmentOverviewPage";
 import { EquipmentAssetDetailPage } from "../features/equipment-overview/EquipmentAssetDetailPage";
@@ -53,6 +54,9 @@ export const router = createBrowserRouter([
       { path: "activos", element: <AssetsPage /> },
       { path: "equipos/activos/:code", element: <EquipmentAssetDetailPage /> },
       { path: "equipos/unidades/:code", element: <CompositeUnitDetailPage /> },
+      { path: "equipos-operacionales", element: <ProtectedRoute roles={[AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.management, AUTH_ROLES.faenaViewer]}><MaintenanceTargetsPage /></ProtectedRoute> },
+      { path: "unidades-operativas", element: <ProtectedRoute permissions={[AUTH_PERMISSIONS.viewOperationalUnits]}><OperationalUnitsPage /></ProtectedRoute> },
+      { path: "jerarquia-tecnica", element: <ProtectedRoute roles={[AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.faenaViewer]}><TechnicalHierarchyPage /></ProtectedRoute> },
       ...navigationItems
         .filter((item) => item.path !== "/dashboard")
         .map((item) => ({

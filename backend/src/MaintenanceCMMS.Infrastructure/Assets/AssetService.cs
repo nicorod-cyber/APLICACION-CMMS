@@ -5,6 +5,7 @@ using MaintenanceCMMS.Application.Abstractions.Pagination;
 using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Documents;
+using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
@@ -48,7 +49,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     {
         var locationType = Code(tipoUbicacion);
         if (!string.IsNullOrWhiteSpace(locationType) && locationType is not "FAENA" and not "TALLER")
-            throw new DomainException("El tipo de ubicación debe ser FAENA o TALLER.");
+            throw new DomainException("El tipo de ubicaci?n debe ser FAENA o TALLER.");
         var allowed = string.IsNullOrWhiteSpace(locationType)
             ? AssetOperationalPolicy.Definitions.Select(item => item.Code).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : AssetOperationalPolicy.SelectableStateCodes(locationType, incluirTerminales).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -118,9 +119,17 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
         if (!string.IsNullOrWhiteSpace(query.Zona))
         {
-            var zone = query.Zona.Trim();
-            assets = assets.Where(x => x.Faena != null && x.Faena.Zone == zone);
-            units = units.Where(x => x.Faena != null && x.Faena.Zone == zone);
+            var zone = FaenaZones.NormalizeFilter(query.Zona);
+            if (zone is null)
+            {
+                assets = assets.Where(_ => false);
+                units = units.Where(_ => false);
+            }
+            else
+            {
+                assets = assets.Where(x => x.Faena != null && x.Faena.Zone == zone);
+                units = units.Where(x => x.Faena != null && x.Faena.Zone == zone);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(query.TipoActivoCodigo))
@@ -311,7 +320,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
             var distinctLocations = locations.Select(location => new { location.LocationType, LocationId = location.WorkshopId ?? location.FaenaId }).Distinct().ToArray();
             if (distinctLocations.Length != 1)
             {
-                return row with { PhysicalLocationType = "INCONSISTENTE", PhysicalLocationName = "Ubicación inconsistente" };
+                return row with { PhysicalLocationType = "INCONSISTENTE", PhysicalLocationName = "Ubicaci?n inconsistente" };
             }
 
             var location = locations.OrderByDescending(item => item.ValidFromUtc).First();
@@ -414,22 +423,22 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset);
         var destination = await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(r.FaenaDestinoCodigo) && x.IsActive, ct) ?? throw new DomainException("Faena destino inexistente.");
         if (!_authorization.CanViewFaena(u, destination.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena destino.");
-        if (destination.TechnicalLocation is null) throw new DomainException("La faena destino no tiene ubicación técnica configurada.");
+        if (destination.TechnicalLocation is null) throw new DomainException("La faena destino no tiene ubicaci?n t?cnica configurada.");
         if (asset.FaenaId == destination.Id) throw new DomainException("El activo ya pertenece a la faena destino.");
         AssetOperationalStateEntity? destinationState = null;
         if (!string.IsNullOrWhiteSpace(r.EstadoOperacionalDestinoCodigo))
         {
-            destinationState = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalDestinoCodigo) && x.IsActive, ct) ?? throw new DomainException("El estado operacional destino no existe o está inactivo.");
+            destinationState = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalDestinoCodigo) && x.IsActive, ct) ?? throw new DomainException("El estado operacional destino no existe o estÃƒÆ’Ã‚Â¡ inactivo.");
             AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, "FAENA", destinationState.Code, destinationState.Name);
         }
         var activeComponent = await _db.OperationalUnitComponents.Include(x => x.OperationalUnit).SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.RemovedAtUtc == null, ct);
         var assets = new List<AssetEntity> { asset }; OperationalUnitEntity? unit = null;
         if (activeComponent is not null)
         {
-            if (!r.TrasladarUnidadCompleta) throw new DomainException("El activo está montado. Traslade la unidad completa o desmonte previamente el componente.");
+            if (!r.TrasladarUnidadCompleta) throw new DomainException("El activo estÃƒÆ’Ã‚Â¡ montado. Traslade la unidad completa o desmonte previamente el componente.");
             unit = activeComponent.OperationalUnit;
             assets = await _db.OperationalUnitComponents.Include(x => x.Asset).ThenInclude(x => x.Faena).Where(x => x.OperationalUnitId == unit.Id && x.RemovedAtUtc == null).Select(x => x.Asset).ToListAsync(ct);
-            if (assets.Any(x => x.FaenaId != asset.FaenaId)) throw new DomainException("La unidad contiene componentes con inconsistencia territorial; corrija la composición antes del traslado.");
+            if (assets.Any(x => x.FaenaId != asset.FaenaId)) throw new DomainException("La unidad contiene componentes con inconsistencia territorial; corrija la composiciÃƒÆ’Ã‚Â³n antes del traslado.");
             unit.FaenaId = destination.Id;
         }
         var results = new List<AssetTransferResponse>();
@@ -450,7 +459,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         var asset = await FindAsync(codigo, false, ct) ?? throw new DomainException("Activo inexistente.");
         View(u, asset);
         var type = AntecedentType(origen, false)!;
-        if (type is "NONE" or "OTHER") throw new DomainException("El origen seleccionado no requiere búsqueda de antecedentes.");
+        if (type is "NONE" or "OTHER") throw new DomainException("El origen seleccionado no requiere b?squeda de antecedentes.");
         var term = Empty(texto); var page = Math.Max(1, pagina); var size = Math.Clamp(tamanoPagina, 1, 50);
         var items = type switch
         {
@@ -458,7 +467,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
             "NOTICE" => await SearchNoticesAsync(asset, term, ct),
             "DOCUMENT" => await SearchDocumentsAsync(asset, term, ct),
             "TRANSFER" => await SearchTransfersAsync(asset, term, ct),
-            _ => throw new DomainException("El origen de cambio seleccionado no está disponible.")
+            _ => throw new DomainException("El origen de cambio seleccionado no estÃƒÆ’Ã‚Â¡ disponible.")
         };
         return new AssetStateEventAntecedentSearchResponse(items.Skip((page - 1) * size).Take(size).ToArray(), items.Count, page, size);
     }
@@ -478,33 +487,33 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         }
         if (type == "OTHER")
         {
-            if (id is not null) throw new DomainException("El origen Otro no admite un identificador técnico.");
+            if (id is not null) throw new DomainException("El origen Otro no admite un identificador t?cnico.");
             if (reference is null) throw new DomainException("Debe indicar la referencia o antecedente.");
             return (type, null, reference);
         }
         if (reference is not null) throw new DomainException("La referencia descriptiva solo se permite para el origen Otro.");
         if (id is null) throw new DomainException("Debe seleccionar un antecedente relacionado.");
-        if (!Guid.TryParse(id, out var antecedentId)) throw new DomainException("El antecedente seleccionado es inválido.");
+        if (!Guid.TryParse(id, out var antecedentId)) throw new DomainException("El antecedente seleccionado es inv?lido.");
         switch (type)
         {
             case "WORK_ORDER":
             {
                 var item = await _db.WorkOrders.Include(x => x.Faena).Include(x => x.Status).SingleOrDefaultAsync(x => x.Id == antecedentId, ct) ?? throw new DomainException("El antecedente seleccionado no existe.");
-                if (item.AnnulledAtUtc is not null || Same(item.Status.Code, "Anulada")) throw new DomainException("La orden de trabajo seleccionada está anulada.");
+                if (item.AnnulledAtUtc is not null || Same(item.Status.Code, "Anulada")) throw new DomainException("La orden de trabajo seleccionada estÃƒÆ’Ã‚Â¡ anulada.");
                 if (item.AssetId != asset.Id && !await _db.WorkOrderAssets.AnyAsync(x => x.WorkOrderId == item.Id && x.AssetId == asset.Id, ct)) throw new DomainException("La orden de trabajo seleccionada no corresponde al activo.");
                 EnsureAntecedentFaena(asset, item.Faena, user); break;
             }
             case "NOTICE":
             {
                 var item = await _db.WorkNotifications.Include(x => x.Faena).Include(x => x.Status).SingleOrDefaultAsync(x => x.Id == antecedentId, ct) ?? throw new DomainException("El antecedente seleccionado no existe.");
-                if (item.AnnulledAtUtc is not null || Same(item.Status.Code, "Anulado")) throw new DomainException("El aviso seleccionado está anulado.");
+                if (item.AnnulledAtUtc is not null || Same(item.Status.Code, "Anulado")) throw new DomainException("El aviso seleccionado estÃƒÆ’Ã‚Â¡ anulado.");
                 if (item.AssetId != asset.Id) throw new DomainException("El aviso seleccionado no corresponde al activo.");
                 EnsureAntecedentFaena(asset, item.Faena, user); break;
             }
             case "DOCUMENT":
             {
                 var item = await _db.Documents.Include(x => x.Assets).SingleOrDefaultAsync(x => x.Id == antecedentId, ct) ?? throw new DomainException("El antecedente seleccionado no existe.");
-                if (item.IsAnnulled || item.IsHistorical || !item.IsCurrent || Same(item.Status, "Anulado") || Same(item.Status, "Reemplazado")) throw new DomainException("El documento seleccionado no está vigente para usarse como antecedente.");
+                if (item.IsAnnulled || item.IsHistorical || !item.IsCurrent || Same(item.Status, "Anulado") || Same(item.Status, "Reemplazado")) throw new DomainException("El documento seleccionado no estÃƒÆ’Ã‚Â¡ vigente para usarse como antecedente.");
                 if (!item.Assets.Any(x => x.AssetId == asset.Id && x.IsActive)) throw new DomainException("El documento seleccionado no corresponde al activo.");
                 break;
             }
@@ -514,7 +523,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                 if (item.AssetId != asset.Id) throw new DomainException("El traslado seleccionado no corresponde al activo.");
                 break;
             }
-            default: throw new DomainException("El origen de cambio seleccionado no es válido.");
+            default: throw new DomainException("El origen de cambio seleccionado no es v?lido.");
         }
         return (type, antecedentId.ToString("D"), null);
     }
@@ -543,36 +552,36 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     {
         var query = _db.Documents.AsNoTracking().Include(x => x.DocumentType).Include(x => x.Versions).Where(x => x.Assets.Any(a => a.AssetId == asset.Id && a.IsActive) && !x.IsAnnulled && !x.IsHistorical && x.IsCurrent && x.Status != "Anulado" && x.Status != "Reemplazado");
         if (term is not null) query = query.Where(x => x.Code.Contains(term) || x.Title.Contains(term) || x.DocumentType.Code.Contains(term) || x.DocumentType.Name.Contains(term) || x.Status.Contains(term));
-        return (await query.OrderByDescending(x => x.CreatedAtUtc).ThenBy(x => x.Code).ToListAsync(ct)).Select(x => new AssetStateEventAntecedentSearchItem(x.Id.ToString("D"), x.Code, x.Title, x.CreatedAtUtc, x.Status, asset.Code, asset.Faena?.Code, $"{x.DocumentType.Code} · v{x.Versions.Where(v => v.IsCurrent).OrderByDescending(v => v.VersionNumber).Select(v => v.VersionNumber).FirstOrDefault()}{(x.ExpiresOn is null ? string.Empty : $" · vence {x.ExpiresOn:dd/MM/yyyy}")}" )).ToList();
+        return (await query.OrderByDescending(x => x.CreatedAtUtc).ThenBy(x => x.Code).ToListAsync(ct)).Select(x => new AssetStateEventAntecedentSearchItem(x.Id.ToString("D"), x.Code, x.Title, x.CreatedAtUtc, x.Status, asset.Code, asset.Faena?.Code, $"{x.DocumentType.Code} ? v{x.Versions.Where(v => v.IsCurrent).OrderByDescending(v => v.VersionNumber).Select(v => v.VersionNumber).FirstOrDefault()}{(x.ExpiresOn is null ? string.Empty : $" ? vence {x.ExpiresOn:dd/MM/yyyy}")}" )).ToList();
     }
 
     private async Task<List<AssetStateEventAntecedentSearchItem>> SearchTransfersAsync(AssetEntity asset, string? term, CancellationToken ct)
     {
         var query = _db.AssetTransfers.AsNoTracking().Include(x => x.OriginFaena).Include(x => x.DestinationFaena).Where(x => x.AssetId == asset.Id);
         if (term is not null) query = query.Where(x => (x.OriginFaena != null && x.OriginFaena.Code.Contains(term)) || (x.DestinationFaena != null && x.DestinationFaena.Code.Contains(term)) || x.Reason.Contains(term));
-        return (await query.OrderByDescending(x => x.EffectiveAtUtc).ToListAsync(ct)).Select(x => new AssetStateEventAntecedentSearchItem(x.Id.ToString("D"), "Traslado", x.Reason, x.EffectiveAtUtc, null, asset.Code, asset.Faena?.Code, $"{x.OriginFaena?.Code ?? "Sin faena"} → {x.DestinationFaena?.Code ?? "Sin faena"}")).ToList();
+        return (await query.OrderByDescending(x => x.EffectiveAtUtc).ToListAsync(ct)).Select(x => new AssetStateEventAntecedentSearchItem(x.Id.ToString("D"), "Traslado", x.Reason, x.EffectiveAtUtc, null, asset.Code, asset.Faena?.Code, $"{x.OriginFaena?.Code ?? "Sin faena"} ? {x.DestinationFaena?.Code ?? "Sin faena"}")).ToList();
     }
 
     private static string? AntecedentType(string? value, bool allowEmpty)
     {
-        if (string.IsNullOrWhiteSpace(value)) return allowEmpty ? null : throw new DomainException("Seleccione un origen de cambio válido.");
+        if (string.IsNullOrWhiteSpace(value)) return allowEmpty ? null : throw new DomainException("Seleccione un origen de cambio v?lido.");
         return Code(value) switch
         {
             "NONE" or "SIN_ANTECEDENTE" => "NONE", "WORK_ORDER" or "OT" or "ORDEN_TRABAJO" => "WORK_ORDER", "NOTICE" or "AVISO" => "NOTICE", "DOCUMENT" or "DOCUMENTO" => "DOCUMENT", "TRANSFER" or "TRASLADO" => "TRANSFER", "OTHER" or "OTRO" => "OTHER",
-            "INSPECTION" or "INSPECCION" => throw new DomainException("No existe un módulo de inspecciones disponible para usar como antecedente."), _ => throw new DomainException("El origen de cambio seleccionado no es válido.")
+            "INSPECTION" or "INSPECCION" => throw new DomainException("No existe un m?dulo de inspecciones disponible para usar como antecedente."), _ => throw new DomainException("El origen de cambio seleccionado no es v?lido.")
         };
     }
     private async Task<AssetTransferResponse> TransferCoreAsync(AssetEntity asset, FaenaEntity destination, OperationalUnitEntity? unit, AssetOperationalStateEntity? destinationState, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
     {
         var current = await _db.AssetLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct);
-        if (current is not null && r.FechaEfectivaUtc <= current.ValidFromUtc) throw new DomainException($"La fecha efectiva del traslado de {asset.Code} debe ser posterior al inicio de su ubicación vigente.");
+        if (current is not null && r.FechaEfectivaUtc <= current.ValidFromUtc) throw new DomainException($"La fecha efectiva del traslado de {asset.Code} debe ser posterior al inicio de su ubicaci?n vigente.");
         if (await _db.AssetTransfers.AnyAsync(x => x.AssetId == asset.Id && x.EffectiveAtUtc >= r.FechaEfectivaUtc, ct)) throw new DomainException($"El traslado de {asset.Code} se superpone con historia posterior.");
-        var physical = await _db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct) ?? throw new DomainException($"El activo '{asset.Code}' no tiene ubicación física vigente.");
-        if (!Same(physical.LocationType, "FAENA")) throw new DomainException($"El activo '{asset.Code}' está en taller; utilice el flujo de retorno a faena.");
+        var physical = await _db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct) ?? throw new DomainException($"El activo '{asset.Code}' no tiene ubicaci?n f?sica vigente.");
+        if (!Same(physical.LocationType, "FAENA")) throw new DomainException($"El activo '{asset.Code}' estÃƒÆ’Ã‚Â¡ en taller; utilice el flujo de retorno a faena.");
         var state = destinationState ?? asset.OperationalState;
         AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, "FAENA", state.Code, state.Name);
         if (AssetOperationalPolicy.IsExcludedFromOperationalUniverse(asset.OperationalState.Code) && !Same(asset.OperationalState.Code, state.Code))
-            throw new DomainException($"El activo '{asset.Code}' está dado de baja y debe conservar ese estado durante el traslado físico.");
+            throw new DomainException($"El activo '{asset.Code}' estÃƒÆ’Ã‚Â¡ dado de baja y debe conservar ese estado durante el traslado fÃƒÆ’Ã‚Â­sico.");
         var transfer = new AssetTransferEntity { AssetId = asset.Id, OriginFaenaId = asset.FaenaId, DestinationFaenaId = destination.Id, OperationalUnitId = unit?.Id, EffectiveAtUtc = r.FechaEfectivaUtc, Reason = r.Motivo.Trim(), UserId = u.UserId, RegisteredAtUtc = DateTimeOffset.UtcNow, Observations = Empty(r.Observaciones) };
         _db.AssetTransfers.Add(transfer);
         if (current is not null) current.ValidToUtc = r.FechaEfectivaUtc;
@@ -635,8 +644,8 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         if (targetType == "TALLER")
         {
             Require(workshopCode, nameof(workshopCode));
-            workshop = await _db.Workshops.Include(x => x.SupervisorUser).SingleOrDefaultAsync(x => x.Code == Code(workshopCode) && x.IsActive, ct) ?? throw new DomainException("El taller no existe o está inactivo.");
-            if (string.IsNullOrWhiteSpace(workshop.Commune) || workshop.SupervisorUser is null) throw new DomainException("El taller no está habilitado operacionalmente: requiere comuna y supervisor.");
+            workshop = await _db.Workshops.Include(x => x.SupervisorUser).SingleOrDefaultAsync(x => x.Code == Code(workshopCode) && x.IsActive, ct) ?? throw new DomainException("El taller no existe o estÃƒÆ’Ã‚Â¡ inactivo.");
+            if (string.IsNullOrWhiteSpace(workshop.Commune) || workshop.SupervisorUser is null) throw new DomainException("El taller no estÃƒÆ’Ã‚Â¡ habilitado operacionalmente: requiere comuna y supervisor.");
         }
         else faena = asset.Faena ?? throw new DomainException("El activo no tiene faena asignada.");
         WorkOrderEntity? order = null;
@@ -660,16 +669,16 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         }
         else
         {
-            targetState = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(destinationStateCode) && x.IsActive, ct) ?? throw new DomainException("El estado operacional destino no existe o está inactivo.");
+            targetState = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(destinationStateCode) && x.IsActive, ct) ?? throw new DomainException("El estado operacional destino no existe o estÃƒÆ’Ã‚Â¡ inactivo.");
         }
         AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, targetType, targetState.Code, targetState.Name);
         var auditPrevious = new Dictionary<Guid, object>();
         foreach (var item in assets.DistinctBy(x => x.Id))
         {
-            var current = await _db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == item.Id && x.ValidToUtc == null, ct) ?? throw new DomainException($"El activo '{item.Code}' no tiene ubicación física vigente.");
-            if (effectiveAt <= current.ValidFromUtc) throw new DomainException("La fecha efectiva debe ser posterior al inicio de la ubicación vigente.");
+            var current = await _db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == item.Id && x.ValidToUtc == null, ct) ?? throw new DomainException($"El activo '{item.Code}' no tiene ubicaci?n f?sica vigente.");
+            if (effectiveAt <= current.ValidFromUtc) throw new DomainException("La fecha efectiva debe ser posterior al inicio de la ubicaci?n vigente.");
             if (AssetOperationalPolicy.IsExcludedFromOperationalUniverse(item.OperationalState.Code) && !Same(item.OperationalState.Code, targetState.Code))
-                throw new DomainException($"El activo '{item.Code}' está dado de baja y debe conservar ese estado durante el traslado físico.");
+                throw new DomainException($"El activo '{item.Code}' estÃƒÆ’Ã‚Â¡ dado de baja y debe conservar ese estado durante el traslado fÃƒÆ’Ã‚Â­sico.");
             AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(item.Code, targetType, targetState.Code, targetState.Name);
             auditPrevious[item.Id] = new { Ubicacion = current.LocationType, Faena = current.FaenaId, Taller = current.WorkshopId, Estado = item.OperationalState.Code, VigenciaDesde = current.ValidFromUtc };
             current.ValidToUtc = effectiveAt;
@@ -888,7 +897,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     private static bool Option(string? json, string value) { try { using var d = JsonDocument.Parse(json ?? "[]"); return d.RootElement.ValueKind == JsonValueKind.Array && d.RootElement.EnumerateArray().Any(x => string.Equals(x.ValueKind == JsonValueKind.String ? x.GetString() : x.ToString(), value, StringComparison.OrdinalIgnoreCase)); } catch { return false; } }
     private static string? Measurement(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var type = Code(value); if (!Measurements.Contains(type)) throw new DomainException("TipoMedicionUso solo permite HOROMETRO, KILOMETRAJE o null."); return type; }
     private static string Source(string value) { var source = Code(value); if (!Sources.Contains(source)) throw new DomainException("Origen de lectura invalido."); return source; }
-    private static void ValidateDates(short? year, DateOnly? start, DateOnly? end) { if (year is { } y && (y < 1900 || y > DateTime.UtcNow.Year + 2)) throw new DomainException("Año de fabricacion invalido."); if (start is { } a && end is { } b && b < a) throw new DomainException("La fecha de baja no puede ser anterior a la puesta en servicio."); }
+    private static void ValidateDates(short? year, DateOnly? start, DateOnly? end) { if (year is { } y && (y < 1900 || y > DateTime.UtcNow.Year + 2)) throw new DomainException("A?o de fabricacion invalido."); if (start is { } a && end is { } b && b < a) throw new DomainException("La fecha de baja no puede ser anterior a la puesta en servicio."); }
     private void RegisterReadings(UserAccessContext u)
     {
         if (u.Permissions.Contains(AuthPermissions.RegisterAssetReadings, StringComparer.OrdinalIgnoreCase) || _authorization.CanAdminister(u)) return;

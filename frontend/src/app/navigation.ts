@@ -7,7 +7,6 @@ import {
   DollarSign,
   ClipboardList,
   FileText,
-  GitBranch,
   History,
   LayoutDashboard,
   MapPinned,
@@ -53,27 +52,7 @@ export const navigationItems: NavigationItem[] = [
       AUTH_ROLES.faenaViewer
     ]
   },
-  {
-    label: "Equipos operacionales",
-    path: "/equipos-operacionales",
-    icon: Activity,
-    accent: "bg-cyan-500",
-    roles: [AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.management, AUTH_ROLES.faenaViewer]
-  },
-  {
-    label: "Unidades operativas",
-    path: "/unidades-operativas",
-    icon: Boxes,
-    accent: "bg-cyan-600",
-    permissions: [AUTH_PERMISSIONS.viewOperationalUnits]
-  },  {
-    label: "Jerarquia",
-    path: "/jerarquia-tecnica",
-    icon: GitBranch,
-    accent: "bg-sky-600",
-    roles: [AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.faenaViewer]
-  },
-  {
+{
     label: "Documentos",
     path: "/documentos",
     icon: FileText,

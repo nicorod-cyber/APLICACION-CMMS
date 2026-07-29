@@ -17,4 +17,10 @@ public static class FaenaZones
     public static IReadOnlySet<string> All => Values;
 
     public static bool IsValid(string? value) => value is not null && Values.Contains(value);
+    public static string? NormalizeFilter(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var match = global::System.Text.RegularExpressions.Regex.Match(value.Trim(), "^(?:zona\\s*)?([0-4])$", global::System.Text.RegularExpressions.RegexOptions.IgnoreCase | global::System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? $"Zona {match.Groups[1].Value}" : null;
+    }
 }
