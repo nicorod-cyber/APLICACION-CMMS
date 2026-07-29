@@ -1,45 +1,18 @@
-import type { DocumentEntityType, DocumentRecord, DocumentType } from "./documentFormTypes";
+import type { DocumentRecord } from "./documentFormTypes";
 
-export type DocumentFormValue = {
-  entidadTipo: DocumentEntityType;
-  entidadCodigo: string;
-  tipoDocumento: string;
-  fechaEmision: string;
-  fechaVencimiento: string;
-  sharePointUrl: string;
-  critico: boolean;
-  obligatorio: boolean;
-  bloqueaDisponibilidad: boolean;
-  reason: string;
-};
+export type DocumentFormValue = { archivo: File | null; fechaEmision: string; fechaVencimiento: string; observaciones: string };
+export const blankDocumentForm = (): DocumentFormValue => ({ archivo: null, fechaEmision: "", fechaVencimiento: "", observaciones: "" });
+export const documentFormFromRecord = (document: DocumentRecord): DocumentFormValue => ({ archivo: null, fechaEmision: document.fechaEmision ?? "", fechaVencimiento: document.fechaVencimiento ?? "", observaciones: "" });
 
-export const blankDocumentForm = (entityType: DocumentEntityType = "Activo", entityCode = ""): DocumentFormValue => ({ entidadTipo: entityType, entidadCodigo: entityCode, tipoDocumento: "", fechaEmision: "", fechaVencimiento: "", sharePointUrl: "", critico: false, obligatorio: false, bloqueaDisponibilidad: false, reason: "" });
+type Props = { value: DocumentFormValue; onChange: (value: DocumentFormValue) => void; mode: "create" | "edit" | "replace"; assetCode?: string; documentType?: string; faenaCode?: string | null; requiresExpirationDate?: boolean };
 
-export const documentFormFromRecord = (document: DocumentRecord, replacement = false): DocumentFormValue => ({
-  entidadTipo: document.entidadTipo,
-  entidadCodigo: document.entidadCodigo,
-  tipoDocumento: document.tipoDocumento,
-  fechaEmision: document.fechaEmision ?? "",
-  fechaVencimiento: document.fechaVencimiento ?? "",
-  sharePointUrl: replacement ? "" : document.sharePointUrl ?? "",
-  critico: document.critico,
-  obligatorio: document.obligatorio,
-  bloqueaDisponibilidad: document.bloqueaDisponibilidad,
-  reason: ""
-});
-
-type Props = { value: DocumentFormValue; onChange: (value: DocumentFormValue) => void; types?: DocumentType[]; mode: "create" | "edit" | "replace"; lockEntity?: boolean };
-
-export function DocumentForm({ value, onChange, types, mode, lockEntity = false }: Props) {
+export function DocumentForm({ value, onChange, mode, assetCode, documentType, faenaCode, requiresExpirationDate = false }: Props) {
   const change = <K extends keyof DocumentFormValue>(key: K, next: DocumentFormValue[K]) => onChange({ ...value, [key]: next });
-  const typeOptions = types?.filter(type => type.activo && (!type.aplicaA || type.aplicaA === value.entidadTipo)) ?? [];
-  return <>
-    {lockEntity ? <p className="text-sm text-slate-500">Entidad bloqueada: {value.entidadTipo} {value.entidadCodigo}</p> : <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm font-medium">Tipo de entidad<select aria-label="Tipo de entidad" className="input mt-1" value={value.entidadTipo} onChange={event => change("entidadTipo", event.target.value as DocumentEntityType)}><option value="Activo">Activo</option><option value="OT">OT</option><option value="Faena">Faena</option></select></label><label className="text-sm font-medium">Codigo de entidad<input aria-label="Codigo de entidad" className="input mt-1" required value={value.entidadCodigo} onChange={event => change("entidadCodigo", event.target.value)} /></label></div>}
-    {mode === "create" ? <label className="block text-sm font-medium">Tipo documental<select aria-label="Tipo documental" className="input mt-1" required value={value.tipoDocumento} onChange={event => change("tipoDocumento", event.target.value)}><option value="">Selecciona</option>{typeOptions.map(type => <option key={type.codigo} value={type.codigo}>{type.nombre}</option>)}</select></label> : <p className="text-sm font-medium">Tipo documental: {value.tipoDocumento}</p>}
-    <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm font-medium">Emision<input aria-label="Emision" className="input mt-1" type="date" value={value.fechaEmision} onChange={event => change("fechaEmision", event.target.value)} /></label><label className="text-sm font-medium">Vencimiento<input aria-label="Vencimiento" className="input mt-1" type="date" value={value.fechaVencimiento} onChange={event => change("fechaVencimiento", event.target.value)} /></label></div>
-    <label className="block text-sm font-medium">Enlace de archivo<input aria-label="Enlace de archivo" className="input mt-1" type="url" value={value.sharePointUrl} onChange={event => change("sharePointUrl", event.target.value)} /></label>
-    {mode !== "replace" ? <div className="grid gap-2 sm:grid-cols-3"><Check label="Critico" value={value.critico} change={next => change("critico", next)} /><Check label="Obligatorio" value={value.obligatorio} change={next => change("obligatorio", next)} /><Check label="Bloquea disponibilidad" value={value.bloqueaDisponibilidad} change={next => change("bloqueaDisponibilidad", next)} /></div> : null}
-  </>;
+  const selectFile = (file?: File | null) => change("archivo", file ?? null);
+  const needsFile = mode !== "edit";
+  return <div className="space-y-3">
+    <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-3"><p><span className="text-slate-500">Activo:</span> <b>{assetCode ?? "NA"}</b></p><p><span className="text-slate-500">Faena:</span> <b>{faenaCode || "NA"}</b></p><p><span className="text-slate-500">Tipo:</span> <b>{documentType || "NA"}</b></p></div>
+    {needsFile ? <label className="block rounded-lg border-2 border-dashed border-slate-300 p-4 text-sm font-medium hover:border-teal-500" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); selectFile(event.dataTransfer.files.item(0)); }}><span className="block">Archivo {value.archivo ? `seleccionado: ${value.archivo.name}` : "(arrastra aquí o selecciónalo)"}</span><input aria-label="Archivo" className="mt-2 block w-full text-sm" required type="file" onChange={event => selectFile(event.target.files?.[0] ?? event.target.files?.item?.(0))} /></label> : null}
+    <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm font-medium">Emisión<input aria-label="Emisión" className="input mt-1" type="date" value={value.fechaEmision} onChange={event => change("fechaEmision", event.target.value)} /></label><label className="text-sm font-medium">Vencimiento{requiresExpirationDate ? " *" : ""}<input aria-label="Vencimiento" className="input mt-1" required={requiresExpirationDate} type="date" value={value.fechaVencimiento} onChange={event => change("fechaVencimiento", event.target.value)} /></label></div>
+  </div>;
 }
-
-function Check({ label, value, change }: { label: string; value: boolean; change: (value: boolean) => void }) { return <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={value} onChange={event => change(event.target.checked)} />{label}</label>; }

@@ -95,12 +95,18 @@ public sealed class DocumentRequirementMatrixConfiguration : IEntityTypeConfigur
         builder.Property(x => x.Status).HasColumnName("estado").HasMaxLength(40).IsRequired();
         builder.Property(x => x.AssetTypeId).HasColumnName("tipo_activo_id");
         builder.Property(x => x.EquipmentFamilyId).HasColumnName("familia_equipo_id");
+        builder.Property(x => x.FaenaId).HasColumnName("faena_id");
         builder.Property(x => x.CreatedByUserId).HasColumnName("creado_por_usuario_id").HasMaxLength(120).IsRequired();
         builder.Property(x => x.ChangeReason).HasColumnName("motivo_cambio").HasMaxLength(500);
-        builder.HasIndex(x => new { x.Code, x.VersionNumber }).IsUnique();
-        builder.HasIndex(x => new { x.AssetTypeId, x.EquipmentFamilyId, x.ValidFrom });
+        builder.HasIndex(x => new { x.FaenaId, x.Code, x.VersionNumber }).IsUnique();
+        builder.HasIndex(x => new { x.FaenaId, x.AssetTypeId, x.EquipmentFamilyId, x.ValidFrom });
+        builder.HasIndex(x => new { x.FaenaId, x.AssetTypeId, x.EquipmentFamilyId }).IsUnique()
+            .HasFilter("faena_id IS NOT NULL AND familia_equipo_id IS NOT NULL AND estado = 'VIGENTE' AND vigencia_hasta IS NULL");
+        builder.HasIndex(x => new { x.FaenaId, x.AssetTypeId }).IsUnique()
+            .HasFilter("faena_id IS NOT NULL AND familia_equipo_id IS NULL AND estado = 'VIGENTE' AND vigencia_hasta IS NULL");
         builder.HasOne(x => x.AssetType).WithMany().HasForeignKey(x => x.AssetTypeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(x => x.EquipmentFamily).WithMany().HasForeignKey(x => x.EquipmentFamilyId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(x => x.Faena).WithMany().HasForeignKey(x => x.FaenaId).OnDelete(DeleteBehavior.Restrict);
         builder.ToTable(table =>
         {
             table.HasCheckConstraint("ck_matrices_requisitos_version", "numero_version > 0");
@@ -123,6 +129,8 @@ public sealed class DocumentRequirementMatrixItemConfiguration : IEntityTypeConf
         builder.Property(x => x.BlocksAvailability).HasColumnName("bloquea_disponibilidad");
         builder.Property(x => x.RequiresExpirationDate).HasColumnName("requiere_fecha_vencimiento");
         builder.Property(x => x.AlertDays).HasColumnName("dias_anticipacion");
+        builder.Property(x => x.ReusableBetweenFaenas).HasColumnName("reutilizable_entre_faenas");
+        builder.Property(x => x.SortOrder).HasColumnName("orden_presentacion");
         builder.HasIndex(x => new { x.MatrixId, x.DocumentTypeId }).IsUnique();
         builder.HasOne(x => x.Matrix).WithMany(x => x.Items).HasForeignKey(x => x.MatrixId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(x => x.DocumentType).WithMany().HasForeignKey(x => x.DocumentTypeId).OnDelete(DeleteBehavior.Restrict);
@@ -142,6 +150,15 @@ public sealed class DocumentaryWorkOrderRequirementConfiguration : IEntityTypeCo
         builder.Property(x => x.MatrixItemId).HasColumnName("matriz_detalle_id");
         builder.Property(x => x.OriginDocumentId).HasColumnName("documento_origen_id");
         builder.Property(x => x.OriginDocumentVersionId).HasColumnName("version_documento_origen_id");
+        builder.Property(x => x.DocumentTypeCodeSnapshot).HasColumnName("tipo_documental_codigo_snapshot").HasMaxLength(120).IsRequired();
+        builder.Property(x => x.DocumentTypeNameSnapshot).HasColumnName("tipo_documental_nombre_snapshot").HasMaxLength(240).IsRequired();
+        builder.Property(x => x.FaenaCodeSnapshot).HasColumnName("faena_codigo_snapshot").HasMaxLength(120).IsRequired();
+        builder.Property(x => x.IsMandatorySnapshot).HasColumnName("obligatorio_snapshot");
+        builder.Property(x => x.IsCriticalSnapshot).HasColumnName("critico_snapshot");
+        builder.Property(x => x.BlocksAvailabilitySnapshot).HasColumnName("bloquea_disponibilidad_snapshot");
+        builder.Property(x => x.RequiresExpirationDateSnapshot).HasColumnName("requiere_fecha_vencimiento_snapshot");
+        builder.Property(x => x.AlertDaysSnapshot).HasColumnName("dias_anticipacion_snapshot");
+        builder.Property(x => x.ReusableBetweenFaenasSnapshot).HasColumnName("reutilizable_entre_faenas_snapshot");
         builder.Property(x => x.CycleKey).HasColumnName("clave_ciclo").HasMaxLength(240).IsRequired();
         builder.Property(x => x.Status).HasColumnName("estado").HasMaxLength(40).IsRequired();
         builder.Property(x => x.IsApplicable).HasColumnName("aplicable");

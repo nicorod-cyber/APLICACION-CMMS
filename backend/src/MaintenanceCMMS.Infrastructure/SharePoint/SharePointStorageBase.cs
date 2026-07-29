@@ -199,12 +199,8 @@ public abstract class SharePointStorageBase : IDocumentStorageService
         file.UpdatedAtUtc = DateTimeOffset.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        var deletedPhysical = false;
-        if (deletePhysicalContent && !referenced && !string.IsNullOrWhiteSpace(file.PhysicalLocation) && File.Exists(file.PhysicalLocation))
-        {
-            File.Delete(file.PhysicalLocation);
-            deletedPhysical = true;
-        }
+        var deletedPhysical = deletePhysicalContent && !referenced &&
+            await DeletePhysicalContentAsync(file, cancellationToken);
 
         await _auditService.RecordAsync(new AuditEventRequest(
             deletedBy,
@@ -302,6 +298,13 @@ public abstract class SharePointStorageBase : IDocumentStorageService
         return ToInfo(entity);
     }
 
+    protected virtual Task<bool> DeletePhysicalContentAsync(FileMetadataEntity file, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(file.PhysicalLocation) || !File.Exists(file.PhysicalLocation)) return Task.FromResult(false);
+        File.Delete(file.PhysicalLocation);
+        return Task.FromResult(true);
+    }
     protected static string ComputeChecksum(byte[] content) => Convert.ToHexString(SHA256.HashData(content));
 
     protected string ResolveLocalRoot()
@@ -389,6 +392,7 @@ public abstract class SharePointStorageBase : IDocumentStorageService
     private bool IsGraphConfigured() =>
         !string.IsNullOrWhiteSpace(Options.TenantId) &&
         !string.IsNullOrWhiteSpace(Options.ClientId) &&
+        !string.IsNullOrWhiteSpace(Options.ClientSecret) &&
         !string.IsNullOrWhiteSpace(Options.SiteId) &&
         !string.IsNullOrWhiteSpace(Options.DriveId);
 

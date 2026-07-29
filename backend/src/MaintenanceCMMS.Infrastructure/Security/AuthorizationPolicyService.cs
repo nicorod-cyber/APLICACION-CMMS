@@ -82,7 +82,7 @@ public sealed class AuthorizationPolicyService : IAuthorizationPolicyService
 
     public bool CanValidateDocuments(UserAccessContext user)
     {
-        return HasRole(user, AuthRoles.Planner) &&
+        return CanAdminister(user) ||
                HasPermission(user, AuthPermissions.ValidateDocuments);
     }
 

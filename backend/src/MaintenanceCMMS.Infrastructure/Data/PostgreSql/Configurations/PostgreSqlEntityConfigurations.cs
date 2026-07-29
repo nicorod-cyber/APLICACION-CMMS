@@ -236,10 +236,18 @@ public sealed class DocumentTypeConfiguration : IEntityTypeConfiguration<Documen
         builder.Property(entity => entity.RequiresAlertPdf).HasColumnName("requiere_pdf_alerta");
         builder.Property(entity => entity.HtmlTemplateCode).HasColumnName("plantilla_html_codigo").HasMaxLength(120);
         builder.Property(entity => entity.IsActive).HasColumnName("activo");
+        builder.Property(entity => entity.AllowedExtensions).HasColumnName("extensiones_permitidas").HasMaxLength(1000);
+        builder.Property(entity => entity.MaximumSizeBytes).HasColumnName("tamano_maximo_bytes");
+        builder.Property(entity => entity.StorageDestinationKey).HasColumnName("storage_destination_key").HasMaxLength(160);
+        builder.Property(entity => entity.FolderTemplate).HasColumnName("plantilla_carpeta").HasMaxLength(500);
         builder.Property(entity => entity.CreatedByUserId).HasColumnName("created_by_user_id").HasMaxLength(120);
         builder.Property(entity => entity.UpdatedByUserId).HasColumnName("updated_by_user_id").HasMaxLength(120);
         builder.HasIndex(entity => entity.Code).IsUnique();
-        builder.ToTable(table => table.HasCheckConstraint("ck_tipos_documentales_dias_alerta", "dias_alerta >= 0"));
+        builder.ToTable(table =>
+        {
+            table.HasCheckConstraint("ck_tipos_documentales_dias_alerta", "dias_alerta >= 0");
+            table.HasCheckConstraint("ck_tipos_documentales_tamano_maximo", "tamano_maximo_bytes IS NULL OR tamano_maximo_bytes > 0");
+        });
     }
 }
 
@@ -276,12 +284,20 @@ public sealed class DocumentConfiguration : IEntityTypeConfiguration<DocumentEnt
         builder.Property(entity => entity.IsMandatory).HasColumnName("obligatorio");
         builder.Property(entity => entity.BlocksAvailability).HasColumnName("bloquea_disponibilidad");
         builder.Property(entity => entity.ChangeReason).HasColumnName("motivo_cambio").HasMaxLength(500);
+        builder.Property(entity => entity.RequirementMatrixId).HasColumnName("matriz_requisito_id");
+        builder.Property(entity => entity.RequirementMatrixItemId).HasColumnName("requisito_matriz_item_id");
+        builder.Property(entity => entity.RequirementAssetId).HasColumnName("activo_requisito_activo_id");
         builder.HasIndex(entity => entity.Code).IsUnique();
         builder.HasIndex(entity => entity.DocumentTypeId);
         builder.HasIndex(entity => entity.Status);
         builder.HasOne(entity => entity.DocumentType).WithMany(type => type.Documents).HasForeignKey(entity => entity.DocumentTypeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.ReplacesDocument).WithMany().HasForeignKey(entity => entity.ReplacesDocumentId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.ReplacedByDocument).WithMany().HasForeignKey(entity => entity.ReplacedByDocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.RequirementMatrix).WithMany().HasForeignKey(entity => entity.RequirementMatrixId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.RequirementMatrixItem).WithMany().HasForeignKey(entity => entity.RequirementMatrixItemId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.RequirementAsset).WithMany().HasForeignKey(entity => entity.RequirementAssetId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(entity => new { entity.RequirementAssetId, entity.RequirementMatrixItemId }).IsUnique()
+            .HasFilter("activo_requisito_activo_id IS NOT NULL AND requisito_matriz_item_id IS NOT NULL AND NOT anulado AND NOT historico");
     }
 }
 

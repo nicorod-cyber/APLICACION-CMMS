@@ -188,7 +188,7 @@ public sealed class DocumentServiceTests
     }
 
     [Fact]
-    public async Task SupervisorCannotValidateOrReject_EvenWithDocumentPermissions()
+    public async Task UserWithCanonicalDocumentValidationPermission_CanValidateWithoutPlannerRole()
     {
         await using var fixture = await CreateFixtureAsync();
         await fixture.Service.CreateTypeAsync(DocumentType("TST-ROLE", alertDays: 15), Admin, CancellationToken.None);
@@ -199,11 +199,13 @@ public sealed class DocumentServiceTests
         var supervisor = new UserAccessContext(
             "supervisor",
             [AuthRoles.MaintenanceSupervisor],
-            [AuthPermissions.ManageDocuments, AuthPermissions.ValidateDocuments, AuthPermissions.RejectDocuments],
+            [AuthPermissions.ManageDocuments, AuthPermissions.ValidateDocuments],
             ["F001"]);
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.ValidateAsync(created.DocumentoId, new ValidateDocumentRequest("No corresponde"), supervisor, CancellationToken.None));
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.RejectAsync(created.DocumentoId, new RejectDocumentRequest("No corresponde"), supervisor, CancellationToken.None));
+        var validated = await fixture.Service.ValidateAsync(created.DocumentoId, new ValidateDocumentRequest("Validación documental autorizada"), supervisor, CancellationToken.None);
+
+        Assert.NotNull(validated);
+        Assert.Equal("supervisor", validated!.ValidadoPor);
     }
 
     [Fact]

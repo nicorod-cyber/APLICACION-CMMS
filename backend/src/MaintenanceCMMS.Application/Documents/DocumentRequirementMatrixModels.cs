@@ -8,7 +8,9 @@ public sealed record DocumentRequirementMatrixItemRequest(
     bool Critico,
     bool BloqueaDisponibilidad,
     bool RequiereFechaVencimiento = true,
-    int DiasAnticipacion = 45);
+    int DiasAnticipacion = 45,
+    bool ReutilizableEntreFaenas = false,
+    int OrdenPresentacion = 0);
 
 public sealed record CreateDocumentRequirementMatrixVersionRequest(
     string Codigo,
@@ -16,7 +18,8 @@ public sealed record CreateDocumentRequirementMatrixVersionRequest(
     string? FamiliaEquipoCodigo,
     DateOnly VigenciaDesde,
     string MotivoCambio,
-    IReadOnlyCollection<DocumentRequirementMatrixItemRequest> Requisitos);
+    IReadOnlyCollection<DocumentRequirementMatrixItemRequest> Requisitos,
+    string? FaenaCodigo = null);
 
 public sealed record DocumentRequirementMatrixItemResponse(
     string Id,
@@ -25,7 +28,9 @@ public sealed record DocumentRequirementMatrixItemResponse(
     bool Critico,
     bool BloqueaDisponibilidad,
     bool RequiereFechaVencimiento,
-    int DiasAnticipacion);
+    int DiasAnticipacion,
+    bool ReutilizableEntreFaenas = false,
+    int OrdenPresentacion = 0);
 
 public sealed record DocumentRequirementMatrixResponse(
     string Id,
@@ -33,6 +38,7 @@ public sealed record DocumentRequirementMatrixResponse(
     int NumeroVersion,
     string TipoActivoCodigo,
     string? FamiliaEquipoCodigo,
+    string? FaenaCodigo,
     DateOnly VigenciaDesde,
     DateOnly? VigenciaHasta,
     string Estado,

@@ -248,6 +248,10 @@ public sealed class DocumentTypeEntity : PostgreSqlEntity
     public bool RequiresAlertPdf { get; set; }
     public string? HtmlTemplateCode { get; set; }
     public bool IsActive { get; set; } = true;
+    public string? AllowedExtensions { get; set; }
+    public long? MaximumSizeBytes { get; set; }
+    public string? StorageDestinationKey { get; set; }
+    public string? FolderTemplate { get; set; }
     public string? CreatedByUserId { get; set; }
     public string? UpdatedByUserId { get; set; }
     public List<DocumentEntity> Documents { get; set; } = [];
@@ -285,6 +289,12 @@ public sealed class DocumentEntity : PostgreSqlEntity
     public bool IsMandatory { get; set; }
     public bool BlocksAvailability { get; set; }
     public string? ChangeReason { get; set; }
+    public Guid? RequirementMatrixId { get; set; }
+    public DocumentRequirementMatrixEntity? RequirementMatrix { get; set; }
+    public Guid? RequirementMatrixItemId { get; set; }
+    public DocumentRequirementMatrixItemEntity? RequirementMatrixItem { get; set; }
+    public Guid? RequirementAssetId { get; set; }
+    public AssetEntity? RequirementAsset { get; set; }
     public List<DocumentVersionEntity> Versions { get; set; } = [];
     public List<DocumentAssetEntity> Assets { get; set; } = [];
     public List<DocumentFaenaEntity> Faenas { get; set; } = [];
@@ -489,6 +499,8 @@ public sealed class DocumentRequirementMatrixEntity : PostgreSqlEntity
     public AssetTypeEntity AssetType { get; set; } = null!;
     public Guid? EquipmentFamilyId { get; set; }
     public EquipmentFamilyEntity? EquipmentFamily { get; set; }
+    public Guid? FaenaId { get; set; }
+    public FaenaEntity? Faena { get; set; }
     public string CreatedByUserId { get; set; } = string.Empty;
     public string? ChangeReason { get; set; }
     public List<DocumentRequirementMatrixItemEntity> Items { get; set; } = [];
@@ -505,6 +517,8 @@ public sealed class DocumentRequirementMatrixItemEntity : PostgreSqlEntity
     public bool BlocksAvailability { get; set; }
     public bool RequiresExpirationDate { get; set; }
     public int AlertDays { get; set; } = 45;
+    public bool ReusableBetweenFaenas { get; set; }
+    public int SortOrder { get; set; }
 }
 
 public sealed class OperationalUnitTypeEntity : PostgreSqlEntity

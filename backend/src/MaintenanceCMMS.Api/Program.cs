@@ -895,6 +895,39 @@ assetsApi.MapGet("/{id}/document-matrix", async (
     })
     .WithName("GetAssetDocumentMatrix");
 
+assetsApi.MapPost("/{id}/documents", async (
+        string id,
+        HttpRequest request,
+        ClaimsPrincipal user,
+        IDocumentService documentService,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            if (!request.HasFormContentType) return Results.BadRequest(new { message = "La carga documental debe enviarse como multipart/form-data." });
+            var form = await request.ReadFormAsync(cancellationToken);
+            var file = form.Files.GetFile("file");
+            if (file is null) return Results.BadRequest(new { message = "Debe seleccionar un archivo." });
+            var issueText = form["fechaEmision"].FirstOrDefault();
+            var expiryText = form["fechaVencimiento"].FirstOrDefault();
+            if (!TryParseDocumentDate(issueText, out var issueDate) || !TryParseDocumentDate(expiryText, out var expiryDate)) return Results.BadRequest(new { message = "Las fechas documentales no tienen un formato válido." });
+            await using var input = file.OpenReadStream();
+            await using var memory = new MemoryStream();
+            await input.CopyToAsync(memory, cancellationToken);
+            var result = await documentService.UploadAssetAsync(id, new DocumentUploadContent(
+                form["tipoDocumento"].FirstOrDefault() ?? string.Empty,
+                file.FileName,
+                file.ContentType,
+                memory.ToArray(),
+                issueDate,
+                expiryDate,
+                form["observaciones"].FirstOrDefault()), UserAccessContext.FromClaims(user), cancellationToken);
+            return Results.Created($"/api/documents/{result.DocumentoId}", result);
+        }
+        catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+        catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+    })
+    .WithName("UploadAssetDocument");
 assetsApi.MapGet("/{id}/physical-location", async (string id, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { var result = await service.GetPhysicalLocationAsync(id, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).WithName("GetAssetPhysicalLocation");
 assetsApi.MapGet("/{id}/physical-location-history", async (string id, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.GetPhysicalLocationHistoryAsync(id, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).WithName("GetAssetPhysicalLocationHistory");
 assetsApi.MapPost("/{id}/physical-location/workshop-entry", async (string id, RegisterWorkshopEntryRequest request, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.RegisterWorkshopEntryAsync(id, request, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).RequireAuthorization().WithName("RegisterAssetWorkshopEntry");
@@ -3006,28 +3039,41 @@ documentsApi.MapGet("/", async (
     })
     .WithName("ListDocuments");
 
-documentsApi.MapPost("/", async (
-        CreateDocumentRequest request,
+
+
+documentsApi.MapPost("/{id}/versions", async (
+        string id,
+        HttpRequest request,
         ClaimsPrincipal user,
         IDocumentService documentService,
         CancellationToken cancellationToken) =>
     {
         try
         {
-            var created = await documentService.CreateAsync(request, UserAccessContext.FromClaims(user), cancellationToken);
-            return Results.Created($"/api/documents/{created.DocumentoId}", created);
+            if (!request.HasFormContentType) return Results.BadRequest(new { message = "El reemplazo documental debe enviarse como multipart/form-data." });
+            var form = await request.ReadFormAsync(cancellationToken);
+            var file = form.Files.GetFile("file");
+            if (file is null) return Results.BadRequest(new { message = "Debe seleccionar un archivo." });
+            var issueText = form["fechaEmision"].FirstOrDefault();
+            var expiryText = form["fechaVencimiento"].FirstOrDefault();
+            if (!TryParseDocumentDate(issueText, out var issueDate) || !TryParseDocumentDate(expiryText, out var expiryDate)) return Results.BadRequest(new { message = "Las fechas documentales no tienen un formato válido." });
+            await using var input = file.OpenReadStream();
+            await using var memory = new MemoryStream();
+            await input.CopyToAsync(memory, cancellationToken);
+            var result = await documentService.ReplaceWithUploadAsync(id, new DocumentUploadContent(
+                form["tipoDocumento"].FirstOrDefault() ?? string.Empty,
+                file.FileName,
+                file.ContentType,
+                memory.ToArray(),
+                issueDate,
+                expiryDate,
+                form["observaciones"].FirstOrDefault()), UserAccessContext.FromClaims(user), cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
         }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
+        catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+        catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
     })
-    .WithName("CreateDocument");
-
+    .WithName("ReplaceDocumentWithUpload");
 documentsApi.MapGet("/{id}", async (
         string id,
         ClaimsPrincipal user,
@@ -3115,28 +3161,7 @@ documentsApi.MapPost("/{id}/reject", async (
     })
     .WithName("RejectDocument");
 
-documentsApi.MapPost("/{id}/replace", async (
-        string id,
-        ReplaceDocumentRequest request,
-        ClaimsPrincipal user,
-        IDocumentService documentService,
-        CancellationToken cancellationToken) =>
-    {
-        try
-        {
-            var result = await documentService.ReplaceAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
-    })
-    .WithName("ReplaceDocument");
+
 
 
 documentsApi.MapGet("/{id}/versions", async (
@@ -3156,52 +3181,9 @@ documentsApi.MapGet("/{id}/versions", async (
     })
     .WithName("ListDocumentVersions");
 
-documentsApi.MapPost("/{id}/assets", async (
-        string id,
-        AssignDocumentAssetsRequest request,
-        ClaimsPrincipal user,
-        IDocumentService documentService,
-        CancellationToken cancellationToken) =>
-    {
-        try
-        {
-            var result = await documentService.AssignAssetsAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
-    })
-    .WithName("AssignDocumentAssets");
 
-documentsApi.MapPost("/{id}/assets/{assetCode}/unassign", async (
-        string id,
-        string assetCode,
-        UnassignDocumentAssetRequest request,
-        ClaimsPrincipal user,
-        IDocumentService documentService,
-        CancellationToken cancellationToken) =>
-    {
-        try
-        {
-            var result = await documentService.UnassignAssetAsync(id, assetCode, request, UserAccessContext.FromClaims(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
-    })
-    .WithName("UnassignDocumentAsset");
+
+
 documentsApi.MapPost("/{id}/annul", async (
         string id,
         AnnulDocumentRequest request,
@@ -4234,6 +4216,14 @@ static bool IsExplicitInactiveFaenaState(IReadOnlyDictionary<string, string?> va
     };
 }
 
+static bool TryParseDocumentDate(string? value, out DateOnly? date)
+{
+    date = null;
+    if (string.IsNullOrWhiteSpace(value)) return true;
+    if (!DateOnly.TryParse(value, out var parsed)) return false;
+    date = parsed;
+    return true;
+}
 static bool ParseEnumOrDefault<TEnum>(string? value, out TEnum parsed)
     where TEnum : struct, Enum
 {

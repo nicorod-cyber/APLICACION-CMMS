@@ -137,6 +137,15 @@ public sealed class DocumentaryWorkOrderRequirementEntity : PostgreSqlEntity
     public DocumentEntity? OriginDocument { get; set; }
     public Guid? OriginDocumentVersionId { get; set; }
     public DocumentVersionEntity? OriginDocumentVersion { get; set; }
+    public string DocumentTypeCodeSnapshot { get; set; } = string.Empty;
+    public string DocumentTypeNameSnapshot { get; set; } = string.Empty;
+    public string FaenaCodeSnapshot { get; set; } = string.Empty;
+    public bool IsMandatorySnapshot { get; set; }
+    public bool IsCriticalSnapshot { get; set; }
+    public bool BlocksAvailabilitySnapshot { get; set; }
+    public bool RequiresExpirationDateSnapshot { get; set; }
+    public int AlertDaysSnapshot { get; set; }
+    public bool ReusableBetweenFaenasSnapshot { get; set; }
     public string CycleKey { get; set; } = string.Empty;
     public string Status { get; set; } = "PENDIENTE";
     public bool IsApplicable { get; set; } = true;

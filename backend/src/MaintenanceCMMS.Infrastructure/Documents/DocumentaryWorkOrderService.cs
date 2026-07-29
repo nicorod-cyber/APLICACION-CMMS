@@ -15,7 +15,7 @@ public sealed class DocumentaryWorkOrderService(CmmsDbContext db) : IDocumentary
     {
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("LOCK TABLE detalles_ot_documental IN SHARE ROW EXCLUSIVE MODE", ct);
-        var matrices = await db.DocumentRequirementMatrices.Include(x => x.Items).ThenInclude(x => x.DocumentType).Where(x => x.Status == "VIGENTE" && x.ValidFrom <= referenceDate && (x.ValidTo == null || x.ValidTo >= referenceDate)).ToListAsync(ct);
+        var matrices = await db.DocumentRequirementMatrices.Include(x => x.Items).ThenInclude(x => x.DocumentType).Where(x => x.FaenaId != null && x.Status == "VIGENTE" && x.ValidFrom <= referenceDate && (x.ValidTo == null || x.ValidTo >= referenceDate)).ToListAsync(ct);
         var assets = await db.Assets.Include(x => x.Faena).Include(x => x.OperationalState).Where(x => x.FaenaId != null).ToListAsync(ct);
         var status = await db.WorkCatalogs.SingleAsync(x => x.Category == "WorkOrderLifecycleStatus" && x.Code == WorkOrderLifecycleStatus.OTCreada.ToString(), ct);
         var maintenanceType = await db.WorkCatalogs.SingleOrDefaultAsync(x => x.Category == "MaintenanceType" && x.Code == MaintenanceType.Documentary.ToString(), ct);
@@ -28,16 +28,16 @@ public sealed class DocumentaryWorkOrderService(CmmsDbContext db) : IDocumentary
         foreach (var asset in assets)
         {
             if (AssetOperationalPolicy.IsDecommissioned(asset)) continue;
-            var matrix = matrices.Where(x => x.AssetTypeId == asset.AssetTypeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == asset.FamilyId)).OrderByDescending(x => x.EquipmentFamilyId.HasValue).ThenByDescending(x => x.ValidFrom).ThenByDescending(x => x.VersionNumber).FirstOrDefault();
+            var matrix = matrices.Where(x => x.FaenaId == asset.FaenaId && x.AssetTypeId == asset.AssetTypeId && (x.EquipmentFamilyId == null || x.EquipmentFamilyId == asset.FamilyId)).OrderByDescending(x => x.EquipmentFamilyId.HasValue).ThenByDescending(x => x.ValidFrom).ThenByDescending(x => x.VersionNumber).FirstOrDefault();
             if (matrix is null) continue;
             var documents = await db.DocumentAssets.Include(x => x.Document).ThenInclude(x => x.Versions).Where(x => x.AssetId == asset.Id && x.IsActive).Select(x => x.Document).ToListAsync(ct);
             var due = new List<(DocumentRequirementMatrixItemEntity Item, DocumentEntity? Document, DocumentVersionEntity? Version, DocumentComplianceResult Result, string Cycle)>();
             foreach (var item in matrix.Items)
             {
-                var document = documents.Where(x => x.DocumentTypeId == item.DocumentTypeId).OrderByDescending(x => x.CreatedAtUtc).FirstOrDefault();
+                var document = documents.Where(x => x.DocumentTypeId == item.DocumentTypeId && (!x.RequirementMatrixId.HasValue || x.RequirementMatrixId == matrix.Id || item.ReusableBetweenFaenas)).OrderByDescending(x => x.CreatedAtUtc).FirstOrDefault();
                 var version = document?.Versions.OrderByDescending(x => x.IsCurrent).ThenByDescending(x => x.VersionNumber).FirstOrDefault();
                 var result = DocumentComplianceCalculator.Evaluate(document?.Status, version?.ExpiresOn ?? document?.ExpiresOn, item.AlertDays, version is not null, item.BlocksAvailability, referenceDate);
-                var entersWindow = result.DaysToExpire is null ? !result.IsCompliant : result.DaysToExpire <= 45;
+                var entersWindow = result.DaysToExpire is null ? !result.IsCompliant : result.DaysToExpire <= item.AlertDays;
                 if (!entersWindow) continue;
                 var cycle = version is null ? $"MISSING:{matrix.Id:N}:{item.Id:N}" : $"VERSION:{version.Id:N}";
                 due.Add((item, document, version, result, cycle));
@@ -65,7 +65,7 @@ public sealed class DocumentaryWorkOrderService(CmmsDbContext db) : IDocumentary
             numbers.Add(order.WorkOrderNumber);
             foreach (var current in newDue)
             {
-                db.DocumentaryWorkOrderRequirements.Add(new DocumentaryWorkOrderRequirementEntity { WorkOrder = order, AssetId = asset.Id, MatrixVersionId = matrix.Id, MatrixItemId = current.Item.Id, OriginDocumentId = current.Document?.Id, OriginDocumentVersionId = current.Version?.Id, CycleKey = current.Cycle, Status = DocumentComplianceCalculator.ToCode(current.Result.Status), IsApplicable = true, Observation = current.Result.Observation, CompletedAtUtc = current.Result.IsCompliant ? DateTimeOffset.UtcNow : null });
+                db.DocumentaryWorkOrderRequirements.Add(new DocumentaryWorkOrderRequirementEntity { WorkOrder = order, AssetId = asset.Id, MatrixVersionId = matrix.Id, MatrixItemId = current.Item.Id, OriginDocumentId = current.Document?.Id, OriginDocumentVersionId = current.Version?.Id, DocumentTypeCodeSnapshot = current.Item.DocumentType.Code, DocumentTypeNameSnapshot = current.Item.DocumentType.Name, FaenaCodeSnapshot = asset.Faena!.Code, IsMandatorySnapshot = current.Item.IsMandatory, IsCriticalSnapshot = current.Item.IsCritical, BlocksAvailabilitySnapshot = current.Item.BlocksAvailability, RequiresExpirationDateSnapshot = current.Item.RequiresExpirationDate, AlertDaysSnapshot = current.Item.AlertDays, ReusableBetweenFaenasSnapshot = current.Item.ReusableBetweenFaenas, CycleKey = current.Cycle, Status = DocumentComplianceCalculator.ToCode(current.Result.Status), IsApplicable = true, Observation = current.Result.Observation, CompletedAtUtc = current.Result.IsCompliant ? DateTimeOffset.UtcNow : null });
                 createdRequirements++;
             }
         }

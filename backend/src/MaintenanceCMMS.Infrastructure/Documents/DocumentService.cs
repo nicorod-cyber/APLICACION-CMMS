@@ -3,6 +3,7 @@ using System.Text.Json;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
+using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
@@ -15,15 +16,26 @@ public sealed class DocumentService : IDocumentService
     private readonly CmmsDbContext _dbContext;
     private readonly IAuditService _auditService;
     private readonly IAuthorizationPolicyService _authorizationPolicyService;
+    private readonly IDocumentStorageService? _documentStorageService;
 
     public DocumentService(
         CmmsDbContext dbContext,
         IAuditService auditService,
         IAuthorizationPolicyService authorizationPolicyService)
+        : this(dbContext, auditService, authorizationPolicyService, null)
+    {
+    }
+
+    public DocumentService(
+        CmmsDbContext dbContext,
+        IAuditService auditService,
+        IAuthorizationPolicyService authorizationPolicyService,
+        IDocumentStorageService? documentStorageService)
     {
         _dbContext = dbContext;
         _auditService = auditService;
         _authorizationPolicyService = authorizationPolicyService;
+        _documentStorageService = documentStorageService;
     }
 
     public async Task<IReadOnlyCollection<DocumentTypeResponse>> ListTypesAsync(CancellationToken cancellationToken)
@@ -214,6 +226,133 @@ public sealed class DocumentService : IDocumentService
         return ToDocumentResponse((await FindDocumentAsync(document.Id.ToString("D"), tracking: false, cancellationToken))!);
     }
 
+    public async Task<DocumentResponse> UploadAssetAsync(
+        string assetCode,
+        DocumentUploadContent upload,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
+    {
+        EnsureCanManage(user);
+        ValidateRequired(upload.TipoDocumento, nameof(upload.TipoDocumento));
+        var asset = await ResolveAssetAsync(assetCode, user, cancellationToken);
+        var (matrix, requirement) = await ResolveApplicableRequirementAsync(asset, upload.TipoDocumento, cancellationToken);
+        ValidateUpload(asset, requirement, upload);
+
+        var stored = await SaveAssetFileAsync(asset, matrix, requirement, upload, user, cancellationToken);
+        try
+        {
+            await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+            if (await _dbContext.Documents.AnyAsync(document =>
+                    document.RequirementAssetId == asset.Id &&
+                    document.RequirementMatrixItemId == requirement.Id &&
+                    !document.IsAnnulled && !document.IsHistorical,
+                    cancellationToken))
+            {
+                throw new DomainException("Ya existe un documento lógico vigente para este requisito. Use Reemplazar para crear una nueva versión.");
+            }
+
+            var file = await _dbContext.Files.SingleAsync(item => item.FileKey == stored.FileKey, cancellationToken);
+            var now = DateTimeOffset.UtcNow;
+            var document = new DocumentEntity
+            {
+                Id = Guid.NewGuid(),
+                Code = $"DOC-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}"[..31],
+                Title = $"{requirement.DocumentType.Name} {asset.Code}",
+                DocumentTypeId = requirement.DocumentTypeId,
+                DocumentType = requirement.DocumentType,
+                Status = DocumentLifecycleStatus.PendienteValidacion.ToString(),
+                IssueDate = upload.FechaEmision,
+                ExpiresOn = upload.FechaVencimiento,
+                IsCurrent = true,
+                CreatedByUserId = user.UserId,
+                IsCritical = requirement.IsCritical,
+                IsMandatory = requirement.IsMandatory,
+                BlocksAvailability = requirement.BlocksAvailability,
+                ChangeReason = upload.Observaciones,
+                RequirementMatrixId = matrix.Id,
+                RequirementMatrix = matrix,
+                RequirementMatrixItemId = requirement.Id,
+                RequirementMatrixItem = requirement,
+                RequirementAssetId = asset.Id,
+                RequirementAsset = asset
+            };
+            _dbContext.Documents.Add(document);
+            _dbContext.DocumentAssets.Add(new DocumentAssetEntity
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = document.Id,
+                Document = document,
+                AssetId = asset.Id,
+                Asset = asset,
+                IsActive = true,
+                AssignedAtUtc = now,
+                AssignedByUserId = user.UserId
+            });
+            _dbContext.DocumentVersions.Add(CreateStoredVersion(document, file, upload, user, now, 1, null));
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            await RecordAuditAsync(user, "document.uploaded", document.Id.ToString("D"), null, Serialize(new { DocumentId = document.Id, MatrixId = matrix.Id, RequirementId = requirement.Id, stored.FileKey }), upload.Observaciones ?? "Carga documental", cancellationToken);
+            return ToDocumentResponse((await FindDocumentAsync(document.Id.ToString("D"), tracking: false, cancellationToken))!);
+        }
+        catch
+        {
+            await CompensateStoredFileAsync(stored.FileKey, user, cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task<DocumentResponse?> ReplaceWithUploadAsync(
+        string id,
+        DocumentUploadContent upload,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
+    {
+        EnsureCanManage(user);
+        DomainGuard.AgainstEmpty(upload.Observaciones ?? string.Empty, nameof(upload.Observaciones));
+        var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
+        if (document is null) return null;
+        EnsureCanViewDocument(document, user);
+        EnsureCanChangeDocument(ToDocumentResponse(document));
+        var assetCode = document.Assets.SingleOrDefault(link => link.IsActive)?.Asset.Code
+            ?? throw new DomainException("El documento no tiene un activo vigente asociado.");
+        var asset = await ResolveAssetAsync(assetCode, user, cancellationToken);
+        var (matrix, requirement) = await ResolveApplicableRequirementAsync(asset, upload.TipoDocumento, cancellationToken);
+        if (requirement.DocumentTypeId != document.DocumentTypeId)
+        {
+            throw new DomainException("El tipo documental del archivo de reemplazo no corresponde al requisito original.");
+        }
+        ValidateUpload(asset, requirement, upload);
+
+        var stored = await SaveAssetFileAsync(asset, matrix, requirement, upload, user, cancellationToken);
+        try
+        {
+            var previous = Serialize(document);
+            await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+            var file = await _dbContext.Files.SingleAsync(item => item.FileKey == stored.FileKey, cancellationToken);
+            document.IssueDate = upload.FechaEmision;
+            document.ExpiresOn = upload.FechaVencimiento;
+            document.Status = DocumentLifecycleStatus.PendienteValidacion.ToString();
+            document.ValidatedAtUtc = null;
+            document.ValidatedByUserId = null;
+            document.RejectedAtUtc = null;
+            document.RejectedByUserId = null;
+            document.RejectReason = null;
+            document.ExpiryDateValidated = false;
+            document.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            document.UpdatedByUserId = user.UserId;
+            document.ChangeReason = upload.Observaciones;
+            AddStoredVersion(document, file, upload, user, DateTimeOffset.UtcNow);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            await RecordAuditAsync(user, "document.replaced", id, previous, Serialize(document), upload.Observaciones, cancellationToken);
+            return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+        }
+        catch
+        {
+            await CompensateStoredFileAsync(stored.FileKey, user, cancellationToken);
+            throw;
+        }
+    }
     public async Task<DocumentResponse?> UpdateAsync(
         string id,
         UpdateDocumentRequest request,
@@ -233,29 +372,17 @@ public sealed class DocumentService : IDocumentService
         var existingResponse = ToDocumentResponse(document);
         EnsureCanViewDocument(document, user);
         EnsureCanChangeDocument(existingResponse);
+        if (HasFile(request.ArchivoKey, request.SharePointUrl)) throw new DomainException("Los archivos documentales solo pueden cargarse o reemplazarse mediante multipart/form-data.");
         EnsureExpiryCanChange(existingResponse, request.FechaVencimiento, user);
 
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         document.IssueDate = request.FechaEmision;
         document.ExpiresOn = request.FechaVencimiento;
-        document.IsCritical = request.Critico ?? document.IsCritical;
-        document.IsMandatory = request.Obligatorio ?? document.IsMandatory;
-        document.BlocksAvailability = request.BloqueaDisponibilidad ?? document.BlocksAvailability;
         document.UpdatedAtUtc = DateTimeOffset.UtcNow;
         document.UpdatedByUserId = user.UserId;
         document.ChangeReason = request.Reason;
 
-        if (HasFile(request.ArchivoKey, request.SharePointUrl))
-        {
-            await AddNewVersionAsync(document, request.ArchivoKey, request.SharePointUrl, null, null, null, null, request.Reason, user, cancellationToken);
-            document.Status = DocumentLifecycleStatus.PendienteValidacion.ToString();
-            document.ValidatedAtUtc = null;
-            document.ValidatedByUserId = null;
-            document.RejectedAtUtc = null;
-            document.RejectedByUserId = null;
-            document.RejectReason = null;
-        }
-        else if (document.Versions.Count == 0)
+        if (document.Versions.Count == 0)
         {
             document.Status = DocumentLifecycleStatus.PendienteCarga.ToString();
         }
@@ -575,40 +702,31 @@ public sealed class DocumentService : IDocumentService
         CancellationToken cancellationToken)
     {
         EnsureCanViewFaenaFilter(faenaCodigo, user);
-        var types = await _dbContext.DocumentTypes.AsNoTracking().Where(type => type.IsActive).ToArrayAsync(cancellationToken);
-        var assets = await _dbContext.Assets.AsNoTracking().Include(asset => asset.Faena).ToArrayAsync(cancellationToken);
-        var documents = await BaseDocumentsQuery().ToArrayAsync(cancellationToken);
-        var responses = documents.Select(ToDocumentResponse).Where(item => !item.EsHistorico).ToArray();
-
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var assets = await _dbContext.Assets.AsNoTracking().Include(asset => asset.Faena)
+            .Where(asset => asset.FaenaId != null)
+            .ToArrayAsync(cancellationToken);
+        var matrices = await _dbContext.DocumentRequirementMatrices.AsNoTracking()
+            .Include(matrix => matrix.Items).ThenInclude(item => item.DocumentType)
+            .Where(matrix => matrix.FaenaId != null && matrix.Status == "VIGENTE" && matrix.ValidFrom <= today && (matrix.ValidTo == null || matrix.ValidTo >= today))
+            .ToArrayAsync(cancellationToken);
+        var documents = await BaseDocumentsQuery().AsNoTracking().Where(document => !document.IsHistorical).ToArrayAsync(cancellationToken);
         var rows = new List<DocumentMatrixRow>();
-        foreach (var asset in assets.Where(asset => CanViewFaena(asset.Faena.Code, user) && (string.IsNullOrWhiteSpace(faenaCodigo) || SameCode(asset.Faena.Code, faenaCodigo))))
+        foreach (var asset in assets.Where(asset => asset.Faena is not null && CanViewFaena(asset.Faena.Code, user) && (string.IsNullOrWhiteSpace(faenaCodigo) || SameCode(asset.Faena.Code, faenaCodigo))))
         {
-            foreach (var type in types.Where(type => AppliesTo(type, DocumentEntityType.Activo)))
+            var matrix = matrices.Where(item => item.FaenaId == asset.FaenaId && item.AssetTypeId == asset.AssetTypeId && (item.EquipmentFamilyId == null || item.EquipmentFamilyId == asset.FamilyId))
+                .OrderByDescending(item => item.EquipmentFamilyId.HasValue).ThenByDescending(item => item.ValidFrom).ThenByDescending(item => item.VersionNumber).FirstOrDefault();
+            if (matrix is null) continue;
+            foreach (var requirement in matrix.Items.OrderBy(item => item.SortOrder).ThenBy(item => item.DocumentType.Code))
             {
-                var document = responses
-                    .Where(item => item.EntidadTipo == DocumentEntityType.Activo &&
-                                   (item.EntidadCodigos?.Contains(asset.Code, StringComparer.OrdinalIgnoreCase) ?? SameCode(item.EntidadCodigo, asset.Code)) &&
-                                   SameCode(item.TipoDocumento, type.Code))
-                    .OrderByDescending(item => item.FechaCargaUtc)
-                    .FirstOrDefault();
-
-                rows.Add(new DocumentMatrixRow(
-                    DocumentEntityType.Activo,
-                    asset.Code,
-                    asset.Name,
-                    type.Code,
-                    type.IsMandatory,
-                    type.BlocksAvailability,
-                    document?.Estado ?? DocumentLifecycleStatus.PendienteCarga,
-                    document?.DocumentoId,
-                    document?.FechaVencimiento,
-                    document?.BloqueaDisponibilidadActual ?? false));
+                var document = documents.Where(item => item.DocumentTypeId == requirement.DocumentTypeId && item.Assets.Any(link => link.IsActive && link.AssetId == asset.Id) && (!item.RequirementMatrixId.HasValue || item.RequirementMatrixId == matrix.Id || requirement.ReusableBetweenFaenas))
+                    .OrderByDescending(item => item.CreatedAtUtc).FirstOrDefault();
+                var response = document is null ? null : ToDocumentResponse(document);
+                rows.Add(new DocumentMatrixRow(DocumentEntityType.Activo, asset.Code, asset.Name, requirement.DocumentType.Code, requirement.IsMandatory, requirement.BlocksAvailability, response?.Estado ?? DocumentLifecycleStatus.PendienteCarga, response?.DocumentoId, response?.FechaVencimiento, response?.BloqueaDisponibilidadActual ?? false));
             }
         }
-
         return rows;
     }
-
     public async Task<DocumentDashboardSummary> GetSummaryAsync(
         string? faenaCodigo,
         UserAccessContext user,
@@ -654,6 +772,188 @@ public sealed class DocumentService : IDocumentService
         return await query.FirstOrDefaultAsync(document => document.Id == documentId, cancellationToken);
     }
 
+    private async Task<(DocumentRequirementMatrixEntity Matrix, DocumentRequirementMatrixItemEntity Requirement)> ResolveApplicableRequirementAsync(
+        AssetEntity asset,
+        string documentTypeCode,
+        CancellationToken cancellationToken)
+    {
+        if (!asset.FaenaId.HasValue || asset.Faena is null)
+        {
+            throw new DomainException("El activo no posee una faena vigente; no se puede resolver su configuración documental.");
+        }
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var matrix = await _dbContext.DocumentRequirementMatrices
+            .Include(item => item.Items).ThenInclude(item => item.DocumentType)
+            .Where(item => item.FaenaId == asset.FaenaId &&
+                           item.Status == "VIGENTE" &&
+                           item.AssetTypeId == asset.AssetTypeId &&
+                           (item.EquipmentFamilyId == null || item.EquipmentFamilyId == asset.FamilyId) &&
+                           item.ValidFrom <= today &&
+                           (item.ValidTo == null || item.ValidTo >= today))
+            .OrderByDescending(item => item.EquipmentFamilyId.HasValue)
+            .ThenByDescending(item => item.ValidFrom)
+            .ThenByDescending(item => item.VersionNumber)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (matrix is null)
+        {
+            throw new DomainException($"La configuración documental está incompleta para la faena '{asset.Faena.Code}', tipo '{asset.AssetTypeId.ToString("D")}' y familia '{asset.Family?.Code ?? "sin familia"}'.");
+        }
+
+        var code = NormalizeCode(documentTypeCode);
+        var requirement = matrix.Items.SingleOrDefault(item => item.DocumentType.IsActive && SameCode(item.DocumentType.Code, code));
+        if (requirement is null)
+        {
+            throw new DomainException($"El tipo documental '{documentTypeCode}' no pertenece a la matriz vigente del activo.");
+        }
+
+        return (matrix, requirement);
+    }
+
+    private static void ValidateUpload(AssetEntity asset, DocumentRequirementMatrixItemEntity requirement, DocumentUploadContent upload)
+    {
+        if (upload.Contenido is null || upload.Contenido.Length == 0)
+        {
+            throw new DomainException("Debe adjuntar un archivo no vacío.");
+        }
+        if (string.IsNullOrWhiteSpace(upload.NombreArchivo) || !string.Equals(Path.GetFileName(upload.NombreArchivo), upload.NombreArchivo.Trim(), StringComparison.Ordinal))
+        {
+            throw new DomainException("El nombre del archivo no es seguro.");
+        }
+        if (string.IsNullOrWhiteSpace(upload.TipoMime))
+        {
+            throw new DomainException("El tipo MIME del archivo es obligatorio.");
+        }
+        if (upload.FechaEmision.HasValue && upload.FechaVencimiento.HasValue && upload.FechaVencimiento < upload.FechaEmision)
+        {
+            throw new DomainException("La fecha de vencimiento no puede ser anterior a la fecha de emisión.");
+        }
+        if (requirement.RequiresExpirationDate && !upload.FechaVencimiento.HasValue)
+        {
+            throw new DomainException("El requisito documental exige fecha de vencimiento.");
+        }
+
+        var extension = Path.GetExtension(upload.NombreArchivo).TrimStart('.').ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(extension)) throw new DomainException("El archivo debe tener una extensión válida.");
+        var forbidden = new[] { "ade", "adp", "app", "bat", "cmd", "com", "cpl", "exe", "hta", "jar", "js", "jse", "lnk", "msi", "msp", "ps1", "reg", "scr", "vbe", "vbs", "wsf" };
+        if (forbidden.Contains(extension, StringComparer.OrdinalIgnoreCase)) throw new DomainException("No se permiten archivos ejecutables o de script.");
+        var allowed = SplitList(requirement.DocumentType.AllowedExtensions)
+            .Select(value => value.Trim().TrimStart('.').ToLowerInvariant())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToArray();
+        if (allowed.Length == 0) allowed = ["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"];
+        if (!allowed.Contains(extension, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new DomainException($"La extensión '.{extension}' no está permitida para el tipo documental '{requirement.DocumentType.Code}'.");
+        }
+        if (requirement.DocumentType.MaximumSizeBytes.HasValue && upload.Contenido.LongLength > requirement.DocumentType.MaximumSizeBytes.Value)
+        {
+            throw new DomainException("El archivo supera el tamaño máximo permitido por el tipo documental.");
+        }
+    }
+
+    private async Task<DocumentStorageInfo> SaveAssetFileAsync(
+        AssetEntity asset,
+        DocumentRequirementMatrixEntity matrix,
+        DocumentRequirementMatrixItemEntity requirement,
+        DocumentUploadContent upload,
+        UserAccessContext user,
+        CancellationToken cancellationToken)
+    {
+        if (_documentStorageService is null)
+        {
+            throw new InvalidOperationException("No hay un proveedor de almacenamiento documental configurado.");
+        }
+        return await _documentStorageService.SaveDocumentAsync(new DocumentStorageSaveRequest(
+            requirement.DocumentType.StorageDestinationKey ?? requirement.DocumentType.Code,
+            "Document",
+            $"asset:{asset.Id:N}:matrix:{matrix.Id:N}:item:{requirement.Id:N}:{Guid.NewGuid():N}",
+            upload.NombreArchivo,
+            upload.TipoMime,
+            upload.Contenido,
+            user.UserId,
+            DocumentStoragePurpose.Document,
+            asset.Faena?.Code,
+            asset.Code,
+            Metadata: new Dictionary<string, string?>
+            {
+                ["documentType"] = requirement.DocumentType.Code,
+                ["matrixId"] = matrix.Id.ToString("D"),
+                ["matrixVersion"] = matrix.VersionNumber.ToString(CultureInfo.InvariantCulture),
+                ["folderTemplate"] = requirement.DocumentType.FolderTemplate
+            }), cancellationToken);
+    }
+
+    private async Task CompensateStoredFileAsync(string fileKey, UserAccessContext user, CancellationToken cancellationToken)
+    {
+        if (_documentStorageService is null) return;
+        try
+        {
+            var result = await _documentStorageService.DeleteAsync(fileKey, user.UserId, deletePhysicalContent: true, cancellationToken);
+            if (!result.Deleted)
+            {
+                await RecordAuditAsync(user, "document.storage_compensation_failed", fileKey, null, null, "No fue posible eliminar el archivo sin referencia después de un fallo de persistencia.", cancellationToken);
+            }
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                await RecordAuditAsync(user, "document.storage_compensation_failed", fileKey, null, exception.Message, "No fue posible compensar un archivo cargado sin documento.", cancellationToken);
+            }
+            catch
+            {
+                // The original persistence failure remains the result; the provider error is intentionally not hidden from audit when possible.
+            }
+        }
+    }
+
+    private static DocumentVersionEntity CreateStoredVersion(
+        DocumentEntity document,
+        FileMetadataEntity file,
+        DocumentUploadContent upload,
+        UserAccessContext user,
+        DateTimeOffset uploadedAt,
+        int versionNumber,
+        DocumentVersionEntity? replacesVersion)
+    {
+        return new DocumentVersionEntity
+        {
+            Id = Guid.NewGuid(),
+            DocumentId = document.Id,
+            Document = document,
+            VersionNumber = versionNumber,
+            VersionCode = versionNumber.ToString(CultureInfo.InvariantCulture),
+            FileId = file.Id,
+            File = file,
+            UploadedAtUtc = uploadedAt,
+            UploadedByUserId = user.UserId,
+            Observations = upload.Observaciones,
+            IsCurrent = true,
+            Status = "vigente",
+            IssueDate = upload.FechaEmision,
+            ExpiresOn = upload.FechaVencimiento,
+            ValidationStatus = DocumentLifecycleStatus.PendienteValidacion.ToString(),
+            ReplacesVersionId = replacesVersion?.Id,
+            CorrectionResponsibleUserId = user.UserId,
+            CorrectionStatus = "PENDIENTE_REVISION",
+            CorrectionCycleId = replacesVersion?.CorrectionCycleId ?? Guid.NewGuid()
+        };
+    }
+
+    private void AddStoredVersion(DocumentEntity document, FileMetadataEntity file, DocumentUploadContent upload, UserAccessContext user, DateTimeOffset uploadedAt)
+    {
+        var replaced = document.Versions.SingleOrDefault(version => version.IsCurrent);
+        foreach (var version in document.Versions.Where(version => version.IsCurrent))
+        {
+            version.IsCurrent = false;
+            version.Status = "historico";
+            version.UpdatedAtUtc = uploadedAt;
+            if (string.Equals(version.ValidationStatus, DocumentLifecycleStatus.Rechazado.ToString(), StringComparison.OrdinalIgnoreCase)) version.CorrectionStatus = "CORREGIDO_NUEVA_VERSION";
+        }
+        var number = document.Versions.Count == 0 ? 1 : document.Versions.Max(version => version.VersionNumber) + 1;
+        _dbContext.DocumentVersions.Add(CreateStoredVersion(document, file, upload, user, uploadedAt, number, replaced));
+    }
     private async Task<DocumentTypeEntity> ResolveActiveTypeAsync(string code, CancellationToken cancellationToken)
     {
         var normalized = NormalizeCode(code);
@@ -898,7 +1198,11 @@ public sealed class DocumentService : IDocumentService
             SplitList(entity.ResponsibleRoles),
             entity.RequiresAlertPdf,
             entity.HtmlTemplateCode,
-            entity.IsActive);
+            entity.IsActive,
+            SplitList(entity.AllowedExtensions),
+            entity.MaximumSizeBytes,
+            entity.StorageDestinationKey,
+            entity.FolderTemplate);
     }
 
     private static DocumentResponse ToDocumentResponse(DocumentEntity entity)

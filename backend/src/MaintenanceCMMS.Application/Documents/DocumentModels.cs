@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MaintenanceCMMS.Application.Documents;
 
 public enum DocumentEntityType
@@ -38,7 +40,11 @@ public sealed record CreateDocumentTypeRequest(
     IReadOnlyCollection<string>? RolesResponsables = null,
     bool RequierePdfAlerta = false,
     string? PlantillaHtmlCodigo = null,
-    bool Activo = true);
+    bool Activo = true,
+    IReadOnlyCollection<string>? ExtensionesPermitidas = null,
+    long? TamanoMaximoBytes = null,
+    string? DestinoAlmacenamientoKey = null,
+    string? PlantillaCarpeta = null);
 
 public sealed record UpdateDocumentTypeRequest(
     string Nombre,
@@ -51,7 +57,11 @@ public sealed record UpdateDocumentTypeRequest(
     bool RequierePdfAlerta = false,
     string? PlantillaHtmlCodigo = null,
     bool Activo = true,
-    string? Reason = null);
+    string? Reason = null,
+    IReadOnlyCollection<string>? ExtensionesPermitidas = null,
+    long? TamanoMaximoBytes = null,
+    string? DestinoAlmacenamientoKey = null,
+    string? PlantillaCarpeta = null);
 
 public sealed record DocumentTypeResponse(
     string Codigo,
@@ -64,7 +74,11 @@ public sealed record DocumentTypeResponse(
     IReadOnlyCollection<string> RolesResponsables,
     bool RequierePdfAlerta,
     string? PlantillaHtmlCodigo,
-    bool Activo);
+    bool Activo,
+    IReadOnlyCollection<string>? ExtensionesPermitidas = null,
+    long? TamanoMaximoBytes = null,
+    string? DestinoAlmacenamientoKey = null,
+    string? PlantillaCarpeta = null);
 
 public sealed record CreateDocumentRequest(
     DocumentEntityType EntidadTipo,
@@ -74,9 +88,9 @@ public sealed record CreateDocumentRequest(
     DateOnly? FechaVencimiento,
     string? ArchivoKey,
     string? SharePointUrl,
-    bool? Critico = null,
-    bool? Obligatorio = null,
-    bool? BloqueaDisponibilidad = null,
+    [property: JsonIgnore] bool? Critico = null,
+    [property: JsonIgnore] bool? Obligatorio = null,
+    [property: JsonIgnore] bool? BloqueaDisponibilidad = null,
     string? Reason = null,
     IReadOnlyCollection<string>? EntidadCodigos = null,
     string? NombreOriginal = null,
@@ -89,10 +103,14 @@ public sealed record UpdateDocumentRequest(
     DateOnly? FechaVencimiento,
     string? ArchivoKey,
     string? SharePointUrl,
-    bool? Critico = null,
-    bool? Obligatorio = null,
-    bool? BloqueaDisponibilidad = null,
-    string? Reason = null);
+    [property: JsonIgnore] bool? Critico = null,
+    [property: JsonIgnore] bool? Obligatorio = null,
+    [property: JsonIgnore] bool? BloqueaDisponibilidad = null,
+    string? Reason = null,
+    IReadOnlyCollection<string>? ExtensionesPermitidas = null,
+    long? TamanoMaximoBytes = null,
+    string? DestinoAlmacenamientoKey = null,
+    string? PlantillaCarpeta = null);
 
 public sealed record ReplaceDocumentRequest(
     DateOnly? FechaEmision,
@@ -106,6 +124,16 @@ public sealed record ValidateDocumentRequest(string? Comments = null);
 public sealed record RejectDocumentRequest(string Reason);
 
 public sealed record AnnulDocumentRequest(string Reason);
+
+/// <summary>Payload already read from multipart/form-data by the API boundary.</summary>
+public sealed record DocumentUploadContent(
+    string TipoDocumento,
+    string NombreArchivo,
+    string TipoMime,
+    byte[] Contenido,
+    DateOnly? FechaEmision,
+    DateOnly? FechaVencimiento,
+    string? Observaciones = null);
 
 public sealed record DocumentResponse(
     string DocumentoId,
@@ -168,7 +196,11 @@ public sealed record DocumentVersionResponse(
 
 public sealed record AssignDocumentAssetsRequest(
     IReadOnlyCollection<string> ActivoCodigos,
-    string? Reason = null);
+    string? Reason = null,
+    IReadOnlyCollection<string>? ExtensionesPermitidas = null,
+    long? TamanoMaximoBytes = null,
+    string? DestinoAlmacenamientoKey = null,
+    string? PlantillaCarpeta = null);
 
 public sealed record UnassignDocumentAssetRequest(string Reason);
 
@@ -182,7 +214,11 @@ public sealed record DocumentMatrixRow(
     DocumentLifecycleStatus Estado,
     string? DocumentoId,
     DateOnly? FechaVencimiento,
-    bool BloqueaDisponibilidadActual);
+    bool BloqueaDisponibilidadActual,
+    string? MatrizId = null,
+    string? RequisitoId = null,
+    bool RequiereFechaVencimiento = false,
+    string? FaenaCodigo = null);
 
 public sealed record DocumentDashboardSummary(
     int Total,

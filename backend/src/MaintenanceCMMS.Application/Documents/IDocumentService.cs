@@ -32,6 +32,18 @@ public interface IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken);
 
+    Task<DocumentResponse> UploadAssetAsync(
+        string assetCode,
+        DocumentUploadContent upload,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
+    Task<DocumentResponse?> ReplaceWithUploadAsync(
+        string id,
+        DocumentUploadContent upload,
+        UserAccessContext user,
+        CancellationToken cancellationToken);
+
     Task<DocumentResponse?> UpdateAsync(
         string id,
         UpdateDocumentRequest request,
