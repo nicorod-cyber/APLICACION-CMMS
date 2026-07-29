@@ -6801,7 +6801,7 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
 
                     b.HasIndex("FaenaId");
 
-                    b.HasIndex("UserId", "FaenaId", "IsActive")
+                    b.HasIndex("UserId", "FaenaId")
                         .IsUnique();
 
                     b.ToTable("usuario_faenas", (string)null);
@@ -6867,7 +6867,7 @@ namespace MaintenanceCMMS.Infrastructure.Data.PostgreSql.Migrations
 
                     b.HasIndex("RoleId");
 
-                    b.HasIndex("UserId", "RoleId", "IsActive")
+                    b.HasIndex("UserId", "RoleId")
                         .IsUnique();
 
                     b.ToTable("usuario_roles", (string)null);

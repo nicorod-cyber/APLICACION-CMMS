@@ -78,7 +78,7 @@ public sealed class UserRoleConfiguration : IEntityTypeConfiguration<UserRoleEnt
         builder.Property(entity => entity.UnassignedReason).HasColumnName("motivo_desasignacion").HasMaxLength(500);
         builder.HasOne(entity => entity.User).WithMany(user => user.Roles).HasForeignKey(entity => entity.UserId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.Role).WithMany().HasForeignKey(entity => entity.RoleId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(entity => new { entity.UserId, entity.RoleId, entity.IsActive }).IsUnique();
+        builder.HasIndex(entity => new { entity.UserId, entity.RoleId }).IsUnique();
     }
 }
 
@@ -113,7 +113,7 @@ public sealed class UserFaenaConfiguration : IEntityTypeConfiguration<UserFaenaE
         builder.Property(entity => entity.UnassignedReason).HasColumnName("motivo_desasignacion").HasMaxLength(500);
         builder.HasOne(entity => entity.User).WithMany(user => user.Faenas).HasForeignKey(entity => entity.UserId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(entity => entity.Faena).WithMany().HasForeignKey(entity => entity.FaenaId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(entity => new { entity.UserId, entity.FaenaId, entity.IsActive }).IsUnique();
+        builder.HasIndex(entity => new { entity.UserId, entity.FaenaId }).IsUnique();
     }
 }
 

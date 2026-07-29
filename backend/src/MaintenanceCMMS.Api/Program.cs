@@ -601,8 +601,15 @@ usersApi.MapPost("/{id}/faenas", async (
         IUserManagementService userManagementService,
         CancellationToken cancellationToken) =>
     {
-        var result = await userManagementService.AssignFaenasAsync(id, request.Faenas, GetActorId(user), cancellationToken);
-        return result is null ? Results.NotFound() : Results.Ok(result);
+        try
+        {
+            var result = await userManagementService.AssignFaenasAsync(id, request.Faenas, GetActorId(user), cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
     })
     .WithName("AssignUserFaenas");
 

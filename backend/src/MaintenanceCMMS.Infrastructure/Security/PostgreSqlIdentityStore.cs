@@ -54,13 +54,17 @@ public sealed class PostgreSqlIdentityStore : IIdentityStore
         var entity = Guid.TryParse(user.Id, out var parsedId)
             ? await _dbContext.Users
                 .Include(item => item.Roles)
+                    .ThenInclude(userRole => userRole.Role)
                 .Include(item => item.Faenas)
+                    .ThenInclude(userFaena => userFaena.Faena)
                 .FirstOrDefaultAsync(item => item.Id == parsedId, cancellationToken)
             : null;
 
         entity ??= await _dbContext.Users
             .Include(item => item.Roles)
+                .ThenInclude(userRole => userRole.Role)
             .Include(item => item.Faenas)
+                .ThenInclude(userFaena => userFaena.Faena)
             .FirstOrDefaultAsync(item => item.Username == normalizedUsername || item.Email == normalizedEmail, cancellationToken);
 
         if (entity is null)
@@ -236,60 +240,128 @@ public sealed class PostgreSqlIdentityStore : IIdentityStore
             .Include(user => user.Faenas.Where(faena => faena.IsActive)).ThenInclude(faena => faena.Faena);
     }
 
-    private async Task SyncUserRolesAsync(AppUserEntity user, IReadOnlyCollection<string> roleCodes, CancellationToken cancellationToken)
+    private async Task SyncUserRolesAsync(AppUserEntity user, IReadOnlyCollection<string>? roleCodes, CancellationToken cancellationToken)
     {
-        var activeCodes = roleCodes.Select(Normalize).Where(code => !string.IsNullOrWhiteSpace(code)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var activeCodes = (roleCodes ?? Array.Empty<string>())
+            .Select(Normalize)
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var requestedRoles = await _dbContext.Roles
+            .Where(role => activeCodes.Contains(role.Code))
+            .ToListAsync(cancellationToken);
+        var foundCodes = requestedRoles
+            .Select(role => role.Code)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missingCodes = activeCodes
+            .Where(code => !foundCodes.Contains(code))
+            .Order()
+            .ToArray();
+
+        if (missingCodes.Length > 0)
+        {
+            throw new DomainException($"Los siguientes roles no existen: {string.Join(", ", missingCodes)}.");
+        }
+
+        var requestedRoleIds = requestedRoles.Select(role => role.Id).ToHashSet();
+        var now = DateTimeOffset.UtcNow;
         foreach (var existing in user.Roles)
         {
-            existing.IsActive = activeCodes.Contains(existing.Role.Code);
-            if (!existing.IsActive)
+            var shouldBeActive = requestedRoleIds.Contains(existing.RoleId);
+            existing.IsActive = shouldBeActive;
+
+            if (shouldBeActive)
             {
-                existing.UnassignedAtUtc = DateTimeOffset.UtcNow;
+                existing.UnassignedAtUtc = null;
+            }
+            else if (existing.UnassignedAtUtc is null)
+            {
+                existing.UnassignedAtUtc = now;
             }
         }
 
-        foreach (var roleCode in activeCodes)
+        foreach (var role in requestedRoles)
         {
-            var role = await _dbContext.Roles.FirstOrDefaultAsync(item => item.Code == roleCode, cancellationToken);
-            if (role is null)
+            var existingAssignment = user.Roles.FirstOrDefault(item => item.RoleId == role.Id);
+            if (existingAssignment is null)
             {
+                _dbContext.UserRoles.Add(new UserRoleEntity
+                {
+                    User = user,
+                    UserId = user.Id,
+                    Role = role,
+                    RoleId = role.Id,
+                    IsActive = true,
+                    UnassignedAtUtc = null
+                });
                 continue;
             }
 
-            if (!user.Roles.Any(item => item.RoleId == role.Id && item.IsActive))
-            {
-                user.Roles.Add(new UserRoleEntity { User = user, Role = role, IsActive = true });
-            }
+            existingAssignment.IsActive = true;
+            existingAssignment.UnassignedAtUtc = null;
         }
     }
-
-    private async Task SyncUserFaenasAsync(AppUserEntity user, IReadOnlyCollection<string> faenaCodes, CancellationToken cancellationToken)
+    private async Task SyncUserFaenasAsync(AppUserEntity user, IReadOnlyCollection<string>? faenaCodes, CancellationToken cancellationToken)
     {
-        var activeCodes = faenaCodes.Select(NormalizeCode).Where(code => !string.IsNullOrWhiteSpace(code)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var activeCodes = (faenaCodes ?? Array.Empty<string>())
+            .Select(NormalizeCode)
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var requestedFaenas = await _dbContext.Faenas
+            .Where(faena => activeCodes.Contains(faena.Code))
+            .ToListAsync(cancellationToken);
+        var foundCodes = requestedFaenas
+            .Select(faena => faena.Code)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missingCodes = activeCodes
+            .Where(code => !foundCodes.Contains(code))
+            .Order()
+            .ToArray();
+
+        if (missingCodes.Length > 0)
+        {
+            throw new DomainException($"La faena '{missingCodes[0]}' no existe. Debe crearse con su responsable y ubicación técnica.");
+        }
+
+        var requestedFaenaIds = requestedFaenas.Select(faena => faena.Id).ToHashSet();
+        var now = DateTimeOffset.UtcNow;
         foreach (var existing in user.Faenas)
         {
-            existing.IsActive = activeCodes.Contains(existing.Faena.Code);
-            if (!existing.IsActive)
+            var shouldBeActive = requestedFaenaIds.Contains(existing.FaenaId);
+            existing.IsActive = shouldBeActive;
+
+            if (shouldBeActive)
             {
-                existing.UnassignedAtUtc = DateTimeOffset.UtcNow;
+                existing.UnassignedAtUtc = null;
+            }
+            else if (existing.UnassignedAtUtc is null)
+            {
+                existing.UnassignedAtUtc = now;
             }
         }
 
-        foreach (var faenaCode in activeCodes)
+        foreach (var faena in requestedFaenas)
         {
-            var faena = await _dbContext.Faenas.FirstOrDefaultAsync(item => item.Code == faenaCode, cancellationToken);
-            if (faena is null)
+            var existingAssignment = user.Faenas.FirstOrDefault(item => item.FaenaId == faena.Id);
+            if (existingAssignment is null)
             {
-                throw new DomainException($"La faena '{faenaCode}' no existe. Debe crearse con su responsable y ubicación técnica.");
+                _dbContext.UserFaenas.Add(new UserFaenaEntity
+                {
+                    User = user,
+                    UserId = user.Id,
+                    Faena = faena,
+                    FaenaId = faena.Id,
+                    IsActive = true,
+                    UnassignedAtUtc = null
+                });
+                continue;
             }
 
-            if (!user.Faenas.Any(item => item.FaenaId == faena.Id && item.IsActive))
-            {
-                user.Faenas.Add(new UserFaenaEntity { User = user, Faena = faena, IsActive = true });
-            }
+            existingAssignment.IsActive = true;
+            existingAssignment.UnassignedAtUtc = null;
         }
     }
-
     private static UserAccount MapUser(AppUserEntity user)
     {
         return new UserAccount(

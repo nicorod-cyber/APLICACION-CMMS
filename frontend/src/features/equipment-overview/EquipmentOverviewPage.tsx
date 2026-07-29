@@ -34,14 +34,12 @@ export function EquipmentOverviewPage() {
   function open(row: EquipmentOverviewRow) { if (row.rowType === "COMPOSITE_UNIT") navigate("/equipos/unidades/" + encodeURIComponent(row.code) + "?tab=composicion"); else navigate("/equipos/activos/" + encodeURIComponent(row.code)); }
   return <section className="equipment-theme-scope space-y-4">
     <EquipmentPageHeader onNew={() => setNewOpen(true)} />
-    <EquipmentRepresentationBanner />
     <EquipmentSummaryCards metrics={{ total, composite: null, loose: null, nonOperational: null, expiringDocuments: null }} />
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <EquipmentOverviewFilters value={draft} catalog={catalog} onChange={setDraft} onApply={applyFilters} disabled={loading} />
       {error ? <div className="m-4 error-banner">No fue posible cargar los equipos. <button className="underline" type="button" onClick={() => void overviewQuery.refetch()}>Reintentar</button></div> : null}
       {loading ? <p className="p-5 text-sm text-slate-500">Cargando equipos?</p> : rows.length === 0 ? <p className="p-5 text-sm text-slate-500">No hay equipos que coincidan con los filtros.</p> : <EquipmentOverviewTable rows={rows} onOpen={open} />}
-      {overviewQuery.hasNextPage ? <div className="border-t border-slate-200 p-4 text-center"><button className="secondary-button" disabled={overviewQuery.isFetchingNextPage} type="button" onClick={() => void overviewQuery.fetchNextPage()}>{overviewQuery.isFetchingNextPage ? "Cargando m?s?" : "Cargar m?s equipos"}</button></div> : null}
-      <div className="border-t border-teal-100 bg-teal-50 px-4 py-3 text-xs text-teal-800">Los componentes montados no se duplican en el listado general. Accede a ellos desde la composición del camión fábrica.</div>
+      {overviewQuery.hasNextPage ? <div className="border-t border-slate-200 p-4 text-center"><button className="secondary-button" disabled={overviewQuery.isFetchingNextPage} type="button" onClick={() => void overviewQuery.fetchNextPage()}>{overviewQuery.isFetchingNextPage ? "Cargando mas?" : "Cargar mas equipos"}</button></div> : null}
     </section>
     <button className="secondary-button" type="button" onClick={() => void overviewQuery.refetch()}><RefreshCw className="h-4 w-4" />Actualizar resultados</button>
     <AssetEditorDialog open={newOpen} onClose={() => setNewOpen(false)} onSaved={assetCode => { setNewOpen(false); navigate("/equipos/activos/" + encodeURIComponent(assetCode)); }} />
