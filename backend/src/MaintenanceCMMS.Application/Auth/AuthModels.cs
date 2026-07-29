@@ -3,6 +3,8 @@ using System.Security.Claims;
 namespace MaintenanceCMMS.Application.Auth;
 
 public sealed record LoginRequest(string Username, string Password);
+public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword, string ConfirmNewPassword);
+
 
 public sealed record LoginResponse(
     string AccessToken,

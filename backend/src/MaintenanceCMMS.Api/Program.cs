@@ -388,6 +388,34 @@ api.MapPost("/auth/login", async (LoginRequest request, IAuthService authService
     .AllowAnonymous()
     .WithName("Login");
 
+api.MapPost("/auth/change-password", async (
+        ChangePasswordRequest request,
+        ClaimsPrincipal user,
+        IAuthService authService,
+        CancellationToken cancellationToken) =>
+    {
+        var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Results.Unauthorized();
+        }
+
+        try
+        {
+            var changed = await authService.ChangeOwnPasswordAsync(userId, request, cancellationToken);
+            return changed ? Results.NoContent() : Results.NotFound();
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .RequireAuthorization()
+    .WithName("ChangeOwnPassword");
 api.MapPost("/auth/logout", async (ClaimsPrincipal user, IAuthService authService, CancellationToken cancellationToken) =>
     {
         await authService.LogoutAsync(user, cancellationToken);
@@ -650,11 +678,11 @@ api.MapGet("/maintenance-targets", async (
         var targetScope = MaintenanceTargetScope.Operational;
         if (!string.IsNullOrWhiteSpace(tipo) && !Enum.TryParse<MaintenanceTargetType>(tipo, true, out targetType))
         {
-            return Results.BadRequest(new { message = "El parÃ¡metro tipo no es vÃ¡lido." });
+            return Results.BadRequest(new { message = "El parámetro tipo no es válido." });
         }
         if (!string.IsNullOrWhiteSpace(scope) && !Enum.TryParse<MaintenanceTargetScope>(scope, true, out targetScope))
         {
-            return Results.BadRequest(new { message = "El parÃ¡metro scope no es vÃ¡lido." });
+            return Results.BadRequest(new { message = "El parámetro scope no es válido." });
         }
         try
         {

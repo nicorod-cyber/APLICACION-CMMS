@@ -6,6 +6,8 @@ namespace MaintenanceCMMS.Application.Auth;
 public interface IAuthService
 {
     Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken);
+    Task<bool> ChangeOwnPasswordAsync(string userId, ChangePasswordRequest request, CancellationToken cancellationToken);
+
 
     Task LogoutAsync(ClaimsPrincipal user, CancellationToken cancellationToken);
 

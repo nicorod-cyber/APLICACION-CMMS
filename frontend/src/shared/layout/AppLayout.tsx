@@ -1,13 +1,15 @@
-import { LogOut, Menu, Search, UserCircle } from "lucide-react";
+import { KeyRound, LogOut, Menu, Search, UserCircle } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { getVisibleNavigationItems } from "../../app/navigation";
 import { useAuthStore } from "../../features/auth/authStore";
+import { ChangePasswordDialog } from "../../features/auth/ChangePasswordDialog";
 import { Logo } from "../ui/Logo";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
@@ -86,6 +88,15 @@ export function AppLayout() {
             <span className="max-w-44 truncate text-slate-700 dark:text-slate-200">{user?.displayName}</span>
           </div>
           <button
+            aria-label="Cambiar contraseña"
+            title="Cambiar contraseña"
+            className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+            onClick={() => setPasswordDialogOpen(true)}
+            type="button"
+          >
+            <KeyRound className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button
             aria-label="Cerrar sesion"
             title="Cerrar sesion"
             className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
@@ -98,6 +109,7 @@ export function AppLayout() {
 
         <main className="mx-auto max-w-7xl px-4 py-6 md:px-6">
           <Outlet />
+          {passwordDialogOpen ? <ChangePasswordDialog onClose={() => setPasswordDialogOpen(false)} /> : null}
         </main>
       </div>
     </div>

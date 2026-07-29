@@ -1,4 +1,6 @@
+using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Auditing;
 using MaintenanceCMMS.Infrastructure.Data.Excel;
 using MaintenanceCMMS.Infrastructure.Options;
@@ -46,6 +48,79 @@ public sealed class AuthAndAuthorizationTests
             fixture.AuthService.LoginAsync(new LoginRequest("admin", "Test.Admin123!"), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task ChangeOwnPasswordAsync_ReplacesHash_RejectsPreviousPassword_AndAuditsChange()
+    {
+        var fixture = await CreateFixtureAsync();
+        var admin = await fixture.IdentityStore.FindUserByUsernameAsync("admin", CancellationToken.None);
+        Assert.NotNull(admin);
+
+        var changed = await fixture.AuthService.ChangeOwnPasswordAsync(
+            admin!.Id,
+            new ChangePasswordRequest("Test.Admin123!", "Nueva.Clave2026!", "Nueva.Clave2026!"),
+            CancellationToken.None);
+
+        Assert.True(changed);
+        var updated = await fixture.IdentityStore.FindUserByIdAsync(admin.Id, CancellationToken.None);
+        Assert.NotNull(updated);
+        Assert.False(new PasswordHasher().Verify("Test.Admin123!", updated!.PasswordHash));
+        Assert.True(new PasswordHasher().Verify("Nueva.Clave2026!", updated.PasswordHash));
+        Assert.Equal(admin.Roles, updated.Roles);
+        Assert.Equal(admin.Faenas, updated.Faenas);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            fixture.AuthService.LoginAsync(new LoginRequest("admin", "Test.Admin123!"), CancellationToken.None));
+        var response = await fixture.AuthService.LoginAsync(new LoginRequest("admin", "Nueva.Clave2026!"), CancellationToken.None);
+        Assert.Equal(admin.Id, response.User.Id);
+
+        var audit = await fixture.AuditService.QueryAsync(new AuditQuery(UserId: admin.Id, Action: "auth.password_changed"), CancellationToken.None);
+        var entry = Assert.Single(audit.Items);
+        Assert.Null(entry.PreviousValue);
+        Assert.Null(entry.NewValue);
+    }
+
+    [Theory]
+    [InlineData("incorrecta", "Nueva.Clave2026!", "Nueva.Clave2026!", "contraseña actual es incorrecta")]
+    [InlineData("Test.Admin123!", "Nueva.Clave2026!", "Otra.Clave2026!", "no coinciden")]
+    [InlineData("Test.Admin123!", "Test.Admin123!", "Test.Admin123!", "debe ser diferente")]
+    [InlineData("Test.Admin123!", "corta", "corta", "al menos 12 caracteres")]
+    [InlineData("Test.Admin123!", "sinmayuscula2026!", "sinmayuscula2026!", "mayúscula")]
+    [InlineData("Test.Admin123!", "SINMINUSCULA2026!", "SINMINUSCULA2026!", "minúscula")]
+    [InlineData("Test.Admin123!", "SinNumeroEspecial!", "SinNumeroEspecial!", "número")]
+    [InlineData("Test.Admin123!", "SinEspecial2026A", "SinEspecial2026A", "carácter especial")]
+    public async Task ChangeOwnPasswordAsync_RejectsInvalidPasswordInputs(string current, string next, string confirmation, string message)
+    {
+        var fixture = await CreateFixtureAsync();
+        var admin = await fixture.IdentityStore.FindUserByUsernameAsync("admin", CancellationToken.None);
+        Assert.NotNull(admin);
+
+        var exception = await Assert.ThrowsAsync<DomainException>(() => fixture.AuthService.ChangeOwnPasswordAsync(
+            admin!.Id,
+            new ChangePasswordRequest(current, next, confirmation),
+            CancellationToken.None));
+
+        Assert.Contains(message, exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ChangeOwnPasswordAsync_RejectsInactiveAndLockedUsers()
+    {
+        var fixture = await CreateFixtureAsync();
+        var admin = await fixture.IdentityStore.FindUserByUsernameAsync("admin", CancellationToken.None);
+        Assert.NotNull(admin);
+
+        await fixture.IdentityStore.UpsertUserAsync(admin! with { IsActive = false }, CancellationToken.None);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.AuthService.ChangeOwnPasswordAsync(
+            admin.Id,
+            new ChangePasswordRequest("Test.Admin123!", "Nueva.Clave2026!", "Nueva.Clave2026!"),
+            CancellationToken.None));
+
+        await fixture.IdentityStore.UpsertUserAsync(admin with { IsActive = true, IsLocked = true }, CancellationToken.None);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.AuthService.ChangeOwnPasswordAsync(
+            admin.Id,
+            new ChangePasswordRequest("Test.Admin123!", "Nueva.Clave2026!", "Nueva.Clave2026!"),
+            CancellationToken.None));
+    }
     [Fact]
     public async Task IdentitySeed_AssignsAuthorizedOperationalPermissionMatrixIdempotently()
     {
@@ -147,7 +222,8 @@ public sealed class AuthAndAuthorizationTests
         return new AuthFixture(
             identityStore,
             seed,
-            new AuthService(identityStore, passwordHasher, jwtTokenService, auditService));
+            new AuthService(identityStore, passwordHasher, jwtTokenService, auditService, Options.Create(new PasswordPolicyOptions())),
+            auditService);
     }
 
     private static string CreateTempPath()
@@ -158,5 +234,6 @@ public sealed class AuthAndAuthorizationTests
     private sealed record AuthFixture(
         IIdentityStore IdentityStore,
         IdentitySeedService Seed,
-        IAuthService AuthService);
+        IAuthService AuthService,
+        IAuditService AuditService);
 }

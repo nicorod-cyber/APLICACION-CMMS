@@ -85,6 +85,7 @@ public static class DependencyInjection
         services.Configure<PowerBIOptions>(configuration.GetSection("PowerBI"));
         services.Configure<OfflineOptions>(configuration.GetSection("Offline"));
         services.Configure<ImportStorageOptions>(configuration.GetSection("Imports"));
+        services.Configure<PasswordPolicyOptions>(configuration.GetSection("PasswordPolicy"));
 
         services.AddSingleton<IExcelSchemaRegistry, ExcelSchemaRegistry>();
         services.AddDbContext<CmmsDbContext>(options =>
