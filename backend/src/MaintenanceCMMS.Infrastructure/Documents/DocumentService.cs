@@ -236,6 +236,7 @@ public sealed class DocumentService : IDocumentService
         ValidateRequired(upload.TipoDocumento, nameof(upload.TipoDocumento));
         var asset = await ResolveAssetAsync(assetCode, user, cancellationToken);
         var (matrix, requirement) = await ResolveApplicableRequirementAsync(asset, upload.TipoDocumento, cancellationToken);
+        upload = NormalizeUpload(requirement, upload);
         ValidateUpload(asset, requirement, upload);
 
         var stored = await SaveAssetFileAsync(asset, matrix, requirement, upload, user, cancellationToken);
@@ -321,6 +322,7 @@ public sealed class DocumentService : IDocumentService
         {
             throw new DomainException("El tipo documental del archivo de reemplazo no corresponde al requisito original.");
         }
+        upload = NormalizeUpload(requirement, upload);
         ValidateUpload(asset, requirement, upload);
 
         var stored = await SaveAssetFileAsync(asset, matrix, requirement, upload, user, cancellationToken);
@@ -373,11 +375,12 @@ public sealed class DocumentService : IDocumentService
         EnsureCanViewDocument(document, user);
         EnsureCanChangeDocument(existingResponse);
         if (HasFile(request.ArchivoKey, request.SharePointUrl)) throw new DomainException("Los archivos documentales solo pueden cargarse o reemplazarse mediante multipart/form-data.");
-        EnsureExpiryCanChange(existingResponse, request.FechaVencimiento, user);
+        var expirationDate = await ResolveExpirationForDocumentAsync(document, request.FechaEmision, request.FechaVencimiento, user, cancellationToken);
+        EnsureExpiryCanChange(existingResponse, expirationDate, user);
 
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         document.IssueDate = request.FechaEmision;
-        document.ExpiresOn = request.FechaVencimiento;
+        document.ExpiresOn = expirationDate;
         document.UpdatedAtUtc = DateTimeOffset.UtcNow;
         document.UpdatedByUserId = user.UserId;
         document.ChangeReason = request.Reason;
@@ -500,11 +503,12 @@ public sealed class DocumentService : IDocumentService
 
         var response = ToDocumentResponse(document);
         EnsureCanViewDocument(document, user);
+        var expirationDate = await ResolveExpirationForDocumentAsync(document, request.FechaEmision, request.FechaVencimiento, user, cancellationToken);
         var previous = Serialize(document);
 
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         document.IssueDate = request.FechaEmision;
-        document.ExpiresOn = request.FechaVencimiento;
+        document.ExpiresOn = expirationDate;
         document.Status = HasFile(request.ArchivoKey, request.SharePointUrl)
             ? DocumentLifecycleStatus.PendienteValidacion.ToString()
             : DocumentLifecycleStatus.PendienteCarga.ToString();
@@ -810,6 +814,35 @@ public sealed class DocumentService : IDocumentService
         return (matrix, requirement);
     }
 
+    private static DocumentUploadContent NormalizeUpload(DocumentRequirementMatrixItemEntity requirement, DocumentUploadContent upload) => upload with { FechaVencimiento = NormalizeExpiration(requirement, upload.FechaEmision, upload.FechaVencimiento) };
+
+    private static DateOnly? NormalizeExpiration(DocumentRequirementMatrixItemEntity requirement, DateOnly? issueDate, DateOnly? expirationDate)
+    {
+        if (!requirement.RequiresExpirationDate) return null;
+        if (!expirationDate.HasValue) throw new DomainException("La fecha de vencimiento es obligatoria para este documento.");
+        if (issueDate.HasValue && expirationDate < issueDate) throw new DomainException("La fecha de vencimiento no puede ser anterior a la fecha de emisión.");
+        return expirationDate;
+    }
+
+    private async Task<DateOnly?> ResolveExpirationForDocumentAsync(DocumentEntity document, DateOnly? issueDate, DateOnly? expirationDate, UserAccessContext user, CancellationToken cancellationToken)
+    {
+        if (!document.RequirementMatrixItemId.HasValue)
+        {
+            if (issueDate.HasValue && expirationDate.HasValue && expirationDate < issueDate) throw new DomainException("La fecha de vencimiento no puede ser anterior a la fecha de emisión.");
+            return expirationDate;
+        }
+
+        var assetCode = document.Assets.SingleOrDefault(link => link.IsActive)?.Asset.Code;
+        if (string.IsNullOrWhiteSpace(assetCode))
+        {
+            if (issueDate.HasValue && expirationDate.HasValue && expirationDate < issueDate) throw new DomainException("La fecha de vencimiento no puede ser anterior a la fecha de emisión.");
+            return expirationDate;
+        }
+
+        var asset = await ResolveAssetAsync(assetCode, user, cancellationToken);
+        var (_, requirement) = await ResolveApplicableRequirementAsync(asset, document.DocumentType.Code, cancellationToken);
+        return NormalizeExpiration(requirement, issueDate, expirationDate);
+    }
     private static void ValidateUpload(AssetEntity asset, DocumentRequirementMatrixItemEntity requirement, DocumentUploadContent upload)
     {
         if (upload.Contenido is null || upload.Contenido.Length == 0)
@@ -823,14 +856,6 @@ public sealed class DocumentService : IDocumentService
         if (string.IsNullOrWhiteSpace(upload.TipoMime))
         {
             throw new DomainException("El tipo MIME del archivo es obligatorio.");
-        }
-        if (upload.FechaEmision.HasValue && upload.FechaVencimiento.HasValue && upload.FechaVencimiento < upload.FechaEmision)
-        {
-            throw new DomainException("La fecha de vencimiento no puede ser anterior a la fecha de emisión.");
-        }
-        if (requirement.RequiresExpirationDate && !upload.FechaVencimiento.HasValue)
-        {
-            throw new DomainException("El requisito documental exige fecha de vencimiento.");
         }
 
         var extension = Path.GetExtension(upload.NombreArchivo).TrimStart('.').ToLowerInvariant();

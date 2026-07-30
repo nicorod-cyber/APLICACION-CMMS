@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -5,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore, type CurrentUser } from "../../auth/authStore";
 import { DocumentsPage } from "../DocumentsPage";
 import { DocumentActionsMenu } from "./DocumentActionsMenu";
-import { DocumentAnnulDialog } from "./DocumentAnnulDialog";
 import { DocumentEditorDialog } from "./DocumentEditorDialog";
+import { DocumentForm, type DocumentFormValue } from "./DocumentForm";
 import { DocumentReplacementDialog } from "./DocumentReplacementDialog";
 import { DocumentReviewDialog } from "./DocumentReviewDialog";
+import { DocumentAnnulDialog } from "./DocumentAnnulDialog";
 import { DocumentVersionsDialog } from "./DocumentVersionsDialog";
 import { documentApi } from "./documentApi";
 import type { DocumentRecord } from "./documentFormTypes";
@@ -17,39 +19,61 @@ const document: DocumentRecord = { documentoId: "doc-1", entidadTipo: "Activo", 
 const user: CurrentUser = { id: "1", username: "planner", email: "planner@example.com", displayName: "Planner", isActive: true, isLocked: false, roles: ["Planificador"], permissions: ["documentos.gestionar", "documentos.validar"], faenas: [] };
 const renderUi = (ui: React.ReactElement) => { const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }); return render(<MemoryRouter><QueryClientProvider client={client}>{ui}</QueryClientProvider></MemoryRouter>); };
 const file = () => new File(["documento"], "cert.pdf", { type: "application/pdf" });
+const names = { assetName: "Camión fábrica 41", faenaName: "El Romeral", documentTypeName: "Mantenimiento chasis 450" };
 
 beforeEach(() => { useAuthStore.setState({ user }); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+function FormHarness({ requiresExpirationDate }: { requiresExpirationDate: boolean }) {
+  const [value, setValue] = useState<DocumentFormValue>({ archivo: null, fechaEmision: "2026-01-01", fechaVencimiento: "2026-12-31", observaciones: "" });
+  return <DocumentForm value={value} onChange={setValue} mode="create" requiresExpirationDate={requiresExpirationDate} {...names} />;
+}
+
 describe("document dialogs", () => {
-  it("uploads only the file associated with the matrix requirement and updates metadata", async () => {
+  it("shows descriptive names and requires expiration only when the matrix requires it", async () => {
     const upload = vi.spyOn(documentApi, "uploadAsset").mockResolvedValue(document);
-    const update = vi.spyOn(documentApi, "update").mockResolvedValue(document);
-    const view = renderUi(<DocumentEditorDialog open mode="create" entityCode="AC-1" documentType="CERT" faenaCode="FAE-1" requiresExpirationDate onClose={vi.fn()} />);
+    renderUi(<DocumentEditorDialog open mode="create" entityCode="AC-1" documentType="CERT" requiresExpirationDate {...names} onClose={vi.fn()} />);
+    expect(screen.getByText("Camión fábrica 41")).toBeInTheDocument();
+    expect(screen.getByText("El Romeral")).toBeInTheDocument();
+    expect(screen.getByText("Mantenimiento chasis 450")).toBeInTheDocument();
+    expect(screen.queryByText("AC-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("CERT")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Vencimiento")).toBeRequired();
+    expect(screen.getByText("La fecha de vencimiento es obligatoria para este documento.")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Archivo"), { target: { files: [file()] } });
+    fireEvent.change(screen.getByLabelText("Vencimiento"), { target: { value: "2026-12-31" } });
     fireEvent.submit(globalThis.document.querySelector("#document-editor")!);
-    await waitFor(() => expect(upload).toHaveBeenCalledWith("AC-1", expect.objectContaining({ tipoDocumento: "CERT" })));
-    view.unmount();
-    renderUi(<DocumentEditorDialog open mode="edit" document={document} entityCode="AC-1" documentType="CERT" onClose={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText("Observaciones"), { target: { value: "Corrección de fecha" } });
-    fireEvent.submit(globalThis.document.querySelector("#document-editor")!);
-    await waitFor(() => expect(update).toHaveBeenCalledWith("doc-1", expect.any(Object)));
+    await waitFor(() => expect(upload).toHaveBeenCalledWith("AC-1", expect.objectContaining({ tipoDocumento: "CERT", fechaVencimiento: "2026-12-31" })));
   });
 
-  it("loads versions, replaces with a file, validates, rejects and annuls", async () => {
-    const versions = vi.spyOn(documentApi, "versions").mockResolvedValue([{ versionId: "v1", documentoId: "doc-1", numeroVersion: 1, codigoVersion: "v1", archivoId: "a1", archivoKey: "ignored", sharePointUrl: "https://files.example/v1", fechaCargaUtc: "2026-01-01T00:00:00Z", cargadoPor: "tester", vigente: true }]);
+  it("hides and clears expiration for a requirement that does not expire", async () => {
+    const view = renderUi(<FormHarness requiresExpirationDate />);
+    expect(screen.getByLabelText("Vencimiento")).toHaveValue("2026-12-31");
+    view.rerender(<MemoryRouter><QueryClientProvider client={new QueryClient()}><FormHarness requiresExpirationDate={false} /></QueryClientProvider></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByLabelText("Vencimiento")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Emisión").parentElement?.parentElement).not.toHaveClass("sm:grid-cols-2");
+  });
+
+  it("uses the same expiration rule for replacement", async () => {
     const replace = vi.spyOn(documentApi, "replaceUpload").mockResolvedValue(document);
+    renderUi(<DocumentReplacementDialog open document={document} requiresExpirationDate={false} {...names} onClose={vi.fn()} />);
+    expect(screen.queryByLabelText("Vencimiento")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Archivo"), { target: { files: [file()] } });
+    fireEvent.change(screen.getByLabelText("Motivo de reemplazo"), { target: { value: "Actualización" } });
+    fireEvent.submit(globalThis.document.querySelector("#document-replacement")!);
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("doc-1", expect.objectContaining({ fechaVencimiento: null, observaciones: "Actualización" })));
+  });
+
+  it("loads versions, validates, rejects and annuls", async () => {
+    const versions = vi.spyOn(documentApi, "versions").mockResolvedValue([{ versionId: "v1", documentoId: "doc-1", numeroVersion: 1, codigoVersion: "v1", archivoId: "a1", archivoKey: "ignored", sharePointUrl: "https://files.example/v1", fechaCargaUtc: "2026-01-01T00:00:00Z", cargadoPor: "tester", vigente: true }]);
     const validate = vi.spyOn(documentApi, "validate").mockResolvedValue(document);
     const reject = vi.spyOn(documentApi, "reject").mockResolvedValue(document);
     const annul = vi.spyOn(documentApi, "annul").mockResolvedValue(document);
     const view = renderUi(<DocumentVersionsDialog open documentId="doc-1" onClose={vi.fn()} />);
     expect(await screen.findByText("v1")).toBeInTheDocument(); expect(versions).toHaveBeenCalledWith("doc-1"); view.unmount();
-    renderUi(<DocumentReplacementDialog open document={document} onClose={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText("Archivo"), { target: { files: [file()] } }); fireEvent.change(screen.getByLabelText("Motivo de reemplazo"), { target: { value: "Actualización" } }); fireEvent.submit(globalThis.document.querySelector("#document-replacement")!);
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("doc-1", expect.objectContaining({ observaciones: "Actualización" })));
-    cleanup(); renderUi(<DocumentReviewDialog open action="validate" document={document} onClose={vi.fn()} />); fireEvent.click(screen.getByRole("button", { name: "Confirmar" })); await waitFor(() => expect(validate).toHaveBeenCalledWith("doc-1", null));
+    renderUi(<DocumentReviewDialog open action="validate" document={document} onClose={vi.fn()} />); fireEvent.click(screen.getByRole("button", { name: "Confirmar" })); await waitFor(() => expect(validate).toHaveBeenCalledWith("doc-1", null));
     cleanup(); renderUi(<DocumentReviewDialog open action="reject" document={document} onClose={vi.fn()} />); fireEvent.change(screen.getByLabelText("Motivo"), { target: { value: "Falta antecedente" } }); fireEvent.click(screen.getByRole("button", { name: "Confirmar" })); await waitFor(() => expect(reject).toHaveBeenCalledWith("doc-1", "Falta antecedente"));
-    cleanup(); renderUi(<DocumentAnnulDialog open document={document} onClose={vi.fn()} />); fireEvent.change(screen.getByLabelText("Motivo"), { target: { value: "Duplicado" } }); fireEvent.click(screen.getByRole("button", { name: "Confirmar" })); await waitFor(() => expect(annul).toHaveBeenCalledWith("doc-1", "Duplicado")); expect("delete" in documentApi).toBe(false);
+    cleanup(); renderUi(<DocumentAnnulDialog open document={document} onClose={vi.fn()} />); fireEvent.change(screen.getByLabelText("Motivo"), { target: { value: "Duplicado" } }); fireEvent.click(screen.getByRole("button", { name: "Confirmar" })); await waitFor(() => expect(annul).toHaveBeenCalledWith("doc-1", "Duplicado"));
   });
 });
 

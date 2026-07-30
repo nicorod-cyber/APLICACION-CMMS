@@ -2,11 +2,15 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Application.OperationalUnits;
+using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Auditing;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using MaintenanceCMMS.Infrastructure.Documents;
 using MaintenanceCMMS.Infrastructure.OperationalUnits;
 using MaintenanceCMMS.Infrastructure.Security;
+using MaintenanceCMMS.Infrastructure.Options;
+using MaintenanceCMMS.Infrastructure.SharePoint;
+using Microsoft.Extensions.Options;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -91,6 +95,46 @@ public sealed class OperationalUnitDocumentServiceTests
         var incomplete = await service.GetAsync(unit.Code, Admin, CancellationToken.None);
         Assert.False(incomplete!.CompositionComplete);
         Assert.Single(incomplete.ConfigurationWarnings.Where(item => item.Contains("composición está incompleta", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task Upload_EnforcesTheCurrentMatrixExpirationRule_AndNormalizesNonExpiringRequirements()
+    {
+        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        var db = fixture.DbContext;
+        var audit = new PostgreSqlAuditService(db, new AuditContextAccessor());
+        var storage = new LocalSharePointSimulationService(db, audit, Options.Create(new SharePointOptions
+        {
+            Provider = "LocalSimulation",
+            LocalPath = Path.Combine(Path.GetTempPath(), "maintenance-cmms-document-upload-tests", Guid.NewGuid().ToString("N"))
+        }));
+        var documents = new DocumentService(db, audit, new AuthorizationPolicyService(), storage);
+        var site = await db.Faenas.SingleAsync(item => item.Code == Faena);
+        var asset = await db.Assets.SingleAsync(item => item.Code == "ACT-1");
+        var type = await db.AssetTypes.SingleAsync(item => item.Code == "EQUIPO");
+        var family = await db.EquipmentFamilies.SingleAsync(item => item.Code == "FAM-1");
+        await documents.CreateTypeAsync(new CreateDocumentTypeRequest("EXP-REQ", "Documento con vencimiento", DocumentEntityType.Activo, true, false, false), Admin, CancellationToken.None);
+        await documents.CreateTypeAsync(new CreateDocumentTypeRequest("NOEXP-REQ", "Documento sin vencimiento", DocumentEntityType.Activo, true, false, false), Admin, CancellationToken.None);
+        var expiringType = await db.DocumentTypes.SingleAsync(item => item.Code == "EXP-REQ");
+        var nonExpiringType = await db.DocumentTypes.SingleAsync(item => item.Code == "NOEXP-REQ");
+        db.DocumentRequirementMatrices.Add(new DocumentRequirementMatrixEntity
+        {
+            Code = "M-EXPIRATION", VersionNumber = 1, ValidFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)), Status = "VIGENTE", Faena = site, AssetType = type, EquipmentFamily = family, CreatedByUserId = Admin.UserId,
+            Items = [
+                new DocumentRequirementMatrixItemEntity { DocumentType = expiringType, IsMandatory = true, RequiresExpirationDate = true, AlertDays = 30 },
+                new DocumentRequirementMatrixItemEntity { DocumentType = nonExpiringType, IsMandatory = true, RequiresExpirationDate = false, AlertDays = 30 }]
+        });
+        await db.SaveChangesAsync();
+
+        var bytes = new byte[] { 1, 2, 3 };
+        await Assert.ThrowsAsync<DomainException>(() => documents.UploadAssetAsync(asset.Code, new DocumentUploadContent("EXP-REQ", "exp.pdf", "application/pdf", bytes, DateOnly.FromDateTime(DateTime.UtcNow), null), Admin, CancellationToken.None));
+        await Assert.ThrowsAsync<DomainException>(() => documents.UploadAssetAsync(asset.Code, new DocumentUploadContent("EXP-REQ", "exp.pdf", "application/pdf", bytes, DateOnly.FromDateTime(DateTime.UtcNow), DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1))), Admin, CancellationToken.None));
+
+        var nonExpiring = await documents.UploadAssetAsync(asset.Code, new DocumentUploadContent("NOEXP-REQ", "noexp.pdf", "application/pdf", bytes, DateOnly.FromDateTime(DateTime.UtcNow), DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30))), Admin, CancellationToken.None);
+        Assert.Null(nonExpiring.FechaVencimiento);
+        var stored = await db.Documents.SingleAsync(item => item.Id == Guid.Parse(nonExpiring.DocumentoId));
+        Assert.Null(stored.ExpiresOn);
+        Assert.Null((await db.DocumentVersions.SingleAsync(item => item.DocumentId == stored.Id)).ExpiresOn);
     }
 
     private static DocumentRequirementMatrixEntity Matrix(string code, FaenaEntity faena, AssetTypeEntity type, EquipmentFamilyEntity family, DocumentTypeEntity documentType, bool blocks) => new()

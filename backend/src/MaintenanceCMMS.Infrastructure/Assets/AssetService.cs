@@ -818,7 +818,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                 rows = matrix.Items.OrderBy(x => x.SortOrder).ThenBy(x => x.DocumentType.Code).Select(rule => MatrixRow(
                     rule.DocumentType, rule.IsMandatory, rule.IsCritical, rule.BlocksAvailability, rule.AlertDays,
                     BestDocument(documents.Where(document => !document.RequirementMatrixId.HasValue || document.RequirementMatrixId == matrix.Id || rule.ReusableBetweenFaenas), rule.DocumentTypeId),
-                    today, matrix, rule, asset.Faena?.Code)).ToArray();
+                    today, matrix, rule, asset.Faena?.Code, asset.Name, asset.Faena?.Name)).ToArray();
             }            return new AssetSummary(asset.Code, asset.Name, asset.AssetTypeDefinition.Code, asset.AssetTypeDefinition.Name, asset.Family?.Code, asset.Family?.Name, asset.Faena?.Code, asset.Faena?.TechnicalLocation?.Code, asset.OperationalState.Code, asset.Criticality, asset.UsageMeasurementType, latestReading?.Value, Unit(asset.UsageMeasurementType), completeness, DocumentState(rows), !rows.Any(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER"), asset.Faena?.Name, asset.Faena?.Zone, asset.OperationalState.Name);
         }).ToArray();
     }
@@ -842,16 +842,16 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         return matrix.Items.OrderBy(x => x.SortOrder).ThenBy(x => x.DocumentType.Code).Select(rule => MatrixRow(
             rule.DocumentType, rule.IsMandatory, rule.IsCritical, rule.BlocksAvailability, rule.AlertDays,
             BestDocument(documents.Where(document => !document.RequirementMatrixId.HasValue || document.RequirementMatrixId == matrix.Id || rule.ReusableBetweenFaenas), rule.DocumentTypeId),
-            today, matrix, rule, asset.Faena?.Code)).ToArray();
+            today, matrix, rule, asset.Faena?.Code, asset.Name, asset.Faena?.Name)).ToArray();
     }
     private static DocumentEntity? BestDocument(IEnumerable<DocumentEntity> documents, Guid typeId) => documents.Where(x => x.DocumentTypeId == typeId).OrderByDescending(x => DocumentComplianceCalculator.Evaluate(x.Status, x.ExpiresOn, x.DocumentType.AlertDays, x.Versions.Any(v => v.IsCurrent), x.BlocksAvailability).IsCompliant).ThenByDescending(x => x.CreatedAtUtc).FirstOrDefault();
 
-    private static AssetDocumentMatrixRow MatrixRow(DocumentTypeEntity type, bool mandatory, bool critical, bool blocks, int alertDays, DocumentEntity? document, DateOnly today, DocumentRequirementMatrixEntity matrix, DocumentRequirementMatrixItemEntity rule, string? faenaCode)
+    private static AssetDocumentMatrixRow MatrixRow(DocumentTypeEntity type, bool mandatory, bool critical, bool blocks, int alertDays, DocumentEntity? document, DateOnly today, DocumentRequirementMatrixEntity matrix, DocumentRequirementMatrixItemEntity rule, string? faenaCode, string assetName, string? faenaName)
     {
-        if (document is null) return new(type.Code, mandatory, critical, blocks, "PENDIENTE_CARGA", null, null, null, null, "No existe documento vigente.", matrix.Id.ToString("D"), rule.Id.ToString("D"), rule.RequiresExpirationDate, faenaCode);
+        if (document is null) return new(type.Code, mandatory, critical, blocks, "PENDIENTE_CARGA", null, null, null, null, "No existe documento vigente.", matrix.Id.ToString("D"), rule.Id.ToString("D"), rule.RequiresExpirationDate, faenaCode, assetName, faenaName, type.Name);
         var result = DocumentComplianceCalculator.Evaluate(document.Status, document.ExpiresOn, alertDays, document.Versions.Any(x => x.IsCurrent), blocks, today);
         var current = document.Versions.OrderByDescending(x => x.IsCurrent).ThenByDescending(x => x.VersionNumber).FirstOrDefault();
-        return new(type.Code, mandatory, critical, blocks, DocumentComplianceCalculator.ToCode(result.Status), document.Code, current?.VersionNumber, document.ExpiresOn, result.DaysToExpire, result.Observation, matrix.Id.ToString("D"), rule.Id.ToString("D"), rule.RequiresExpirationDate, faenaCode);
+        return new(type.Code, mandatory, critical, blocks, DocumentComplianceCalculator.ToCode(result.Status), document.Code, current?.VersionNumber, document.ExpiresOn, result.DaysToExpire, result.Observation, matrix.Id.ToString("D"), rule.Id.ToString("D"), rule.RequiresExpirationDate, faenaCode, assetName, faenaName, type.Name);
     }
     private async Task SyncIdentifierAliasesAsync(AssetEntity asset, CancellationToken ct)
     {
