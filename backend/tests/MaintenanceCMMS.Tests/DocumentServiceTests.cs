@@ -30,6 +30,25 @@ public sealed class DocumentServiceTests
         "planner", [AuthRoles.Planner], [AuthPermissions.ManageDocuments, AuthPermissions.ReviewDocuments, AuthPermissions.ValidateDocuments, AuthPermissions.RejectDocuments], ["F001"]);
 
     [Fact]
+    public async Task DocumentResponses_ExposeUserDisplayNamesAndKeepIdentifiersForAudit()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var userId = Guid.NewGuid();
+        fixture.DbContext.Users.Add(new AppUserEntity { Id = userId, Username = "valentina", Email = "valentina@example.com", DisplayName = "Valentina Rojas", PasswordHash = "test" });
+        await fixture.DbContext.SaveChangesAsync(CancellationToken.None);
+        var uploader = new UserAccessContext(userId.ToString("D"), [AuthRoles.Planner], [AuthPermissions.ManageDocuments], ["F001"]);
+        await fixture.Service.CreateTypeAsync(DocumentType("TST-USER", alertDays: 15), Admin, CancellationToken.None);
+
+        var created = await fixture.Service.CreateAsync(Document(["EQ-001"], "TST-USER", DateOnly.FromDateTime(DateTime.UtcNow.AddDays(20))), uploader, CancellationToken.None);
+        var listed = Assert.Single(await fixture.Service.ListAsync(new DocumentQuery(EntidadCodigo: "EQ-001"), Admin, CancellationToken.None));
+        var version = Assert.Single(await fixture.Service.ListVersionsAsync(created.DocumentoId, Admin, CancellationToken.None));
+
+        Assert.Equal(userId.ToString("D"), created.CargadoPor);
+        Assert.Equal("Valentina Rojas", created.CargadoPorNombre);
+        Assert.Equal("Valentina Rojas", listed.CargadoPorNombre);
+        Assert.Equal("Valentina Rojas", version.CargadoPorNombre);
+    }
+    [Fact]
     public async Task CreateDocument_PersistsTypeFileVersionAndTwoAssetAssociations()
     {
         await using var fixture = await CreateFixtureAsync();

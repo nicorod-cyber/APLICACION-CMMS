@@ -22,9 +22,9 @@ function asDocument(row: OperationalUnitDocumentRow): DocumentRecord | null {
     tipoDocumento: row.documentTypeCode, estado: row.status as DocumentStatus,
     fechaEmision: row.issueDate, fechaVencimiento: row.expirationDate, sharePointUrl: row.sharePointUrl,
     critico: row.critical, obligatorio: row.mandatory, bloqueaDisponibilidad: row.blocksAvailability,
-    esHistorico: false, fechaVencimientoValidada: !!row.validatedBy, validadoPor: row.validatedBy,
+    esHistorico: false, fechaVencimientoValidada: !!row.validatedBy, validadoPor: row.validatedBy, validadoPorNombre: row.validatedBy,
     validadoEnUtc: row.validatedAtUtc, motivoRechazo: row.rejectionReason, fechaCargaUtc: row.validatedAtUtc ?? new Date().toISOString(),
-    cargadoPor: row.validatedBy ?? "", diasParaVencer: row.daysToExpire, bloqueaDisponibilidadActual: row.blocksAvailability,
+    cargadoPor: row.validatedBy ?? "", cargadoPorNombre: row.validatedBy, diasParaVencer: row.daysToExpire, bloqueaDisponibilidadActual: row.blocksAvailability,
     versionVigente: row.versionNumber
   };
 }

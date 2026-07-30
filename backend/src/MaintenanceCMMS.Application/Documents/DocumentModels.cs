@@ -166,7 +166,12 @@ public sealed record DocumentResponse(
     bool BloqueaDisponibilidadActual,
     IReadOnlyCollection<string>? EntidadCodigos = null,
     int? VersionVigente = null,
-    string? ArchivoId = null);
+    string? ArchivoId = null,
+    string? ValidadoPorNombre = null,
+    string? RechazadoPorNombre = null,
+    string? AnuladoPorNombre = null,
+    string? CargadoPorNombre = null,
+    string? ModificadoPorNombre = null);
 
 public sealed record DocumentVersionResponse(
     string VersionId,
@@ -192,7 +197,11 @@ public sealed record DocumentVersionResponse(
     string? ResponsableCorreccion = null,
     string? EstadoCorreccion = null,
     string? ObservacionCorreccion = null,
-    string? CicloCorreccionId = null);
+    string? CicloCorreccionId = null,
+    string? CargadoPorNombre = null,
+    string? ValidadoPorNombre = null,
+    string? RechazadoPorNombre = null,
+    string? ResponsableCorreccionNombre = null);
 
 public sealed record AssignDocumentAssetsRequest(
     IReadOnlyCollection<string> ActivoCodigos,

@@ -130,14 +130,14 @@ public sealed class DocumentService : IDocumentService
     {
         EnsureCanViewFaenaFilter(query.FaenaCodigo, user);
         var documents = await BaseDocumentsQuery().ToArrayAsync(cancellationToken);
-        return documents
+        var filtered = documents
             .Where(document => MatchesEntity(document, query, user))
-            .Select(ToDocumentResponse)
-            .Where(document => MatchesResponse(document, query))
-            .OrderBy(document => document.EntidadTipo)
-            .ThenBy(document => document.EntidadCodigo, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(document => document.TipoDocumento, StringComparer.OrdinalIgnoreCase)
+            .Where(document => MatchesResponse(ToDocumentResponse(document), query))
             .ToArray();
+        var userNames = await ResolveUserDisplayNamesAsync(filtered.SelectMany(GetDocumentUserIds), cancellationToken);
+        return filtered.Select(document => ToDocumentResponse(document, userNames))
+            .OrderBy(document => document.EntidadTipo).ThenBy(document => document.EntidadCodigo, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(document => document.TipoDocumento, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     public async Task<DocumentResponse?> GetByIdAsync(
@@ -151,9 +151,9 @@ public sealed class DocumentService : IDocumentService
             return null;
         }
 
-        var response = ToDocumentResponse(document);
         EnsureCanViewDocument(document, user);
-        return response;
+        var userNames = await ResolveUserDisplayNamesAsync(GetDocumentUserIds(document), cancellationToken);
+        return ToDocumentResponse(document, userNames);
     }
 
     public async Task<DocumentResponse> CreateAsync(
@@ -223,7 +223,7 @@ public sealed class DocumentService : IDocumentService
         await transaction.CommitAsync(cancellationToken);
         await RecordAuditAsync(user, "document.created", document.Id.ToString("D"), null, Serialize(document), request.Reason ?? "Documento cargado", cancellationToken);
 
-        return ToDocumentResponse((await FindDocumentAsync(document.Id.ToString("D"), tracking: false, cancellationToken))!);
+        return await LoadDocumentResponseAsync(document.Id.ToString("D"), cancellationToken);
     }
 
     public async Task<DocumentResponse> UploadAssetAsync(
@@ -293,7 +293,7 @@ public sealed class DocumentService : IDocumentService
             await _dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             await RecordAuditAsync(user, "document.uploaded", document.Id.ToString("D"), null, Serialize(new { DocumentId = document.Id, MatrixId = matrix.Id, RequirementId = requirement.Id, stored.FileKey }), upload.Observaciones ?? "Carga documental", cancellationToken);
-            return ToDocumentResponse((await FindDocumentAsync(document.Id.ToString("D"), tracking: false, cancellationToken))!);
+            return await LoadDocumentResponseAsync(document.Id.ToString("D"), cancellationToken);
         }
         catch
         {
@@ -347,7 +347,7 @@ public sealed class DocumentService : IDocumentService
             await _dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             await RecordAuditAsync(user, "document.replaced", id, previous, Serialize(document), upload.Observaciones, cancellationToken);
-            return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+            return await LoadDocumentResponseAsync(id, cancellationToken);
         }
         catch
         {
@@ -394,7 +394,7 @@ public sealed class DocumentService : IDocumentService
         await transaction.CommitAsync(cancellationToken);
         await RecordAuditAsync(user, "document.updated", id, previous, Serialize(document), request.Reason, cancellationToken);
 
-        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+        return await LoadDocumentResponseAsync(id, cancellationToken);
     }
 
     public async Task<DocumentResponse?> ValidateAsync(
@@ -442,7 +442,7 @@ public sealed class DocumentService : IDocumentService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await RecordAuditAsync(user, "document.validated", id, previous, Serialize(document), request.Comments ?? "Documento validado", cancellationToken);
 
-        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+        return await LoadDocumentResponseAsync(id, cancellationToken);
     }
 
     public async Task<DocumentResponse?> RejectAsync(
@@ -484,7 +484,7 @@ public sealed class DocumentService : IDocumentService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await RecordAuditAsync(user, "document.rejected", id, previous, Serialize(document), request.Reason, cancellationToken);
 
-        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+        return await LoadDocumentResponseAsync(id, cancellationToken);
     }
 
     public async Task<DocumentResponse?> ReplaceAsync(
@@ -531,7 +531,7 @@ public sealed class DocumentService : IDocumentService
         await transaction.CommitAsync(cancellationToken);
         await RecordAuditAsync(user, "document.replaced", id, previous, Serialize(document), request.Reason, cancellationToken);
 
-        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+        return await LoadDocumentResponseAsync(id, cancellationToken);
     }
 
     public async Task<IReadOnlyCollection<DocumentVersionResponse>> ListVersionsAsync(
@@ -546,36 +546,20 @@ public sealed class DocumentService : IDocumentService
         }
 
         EnsureCanViewDocument(document, user);
-        return document.Versions
-            .OrderBy(version => version.VersionNumber)
+        var userNames = await ResolveUserDisplayNamesAsync(GetDocumentUserIds(document), cancellationToken);
+        return document.Versions.OrderBy(version => version.VersionNumber)
             .Select(version => new DocumentVersionResponse(
-                version.Id.ToString("D"),
-                document.Id.ToString("D"),
-                version.VersionNumber,
-                version.VersionCode,
-                version.FileId.ToString("D"),
-                version.File.FileKey,
-                version.File.LogicalUri,
-                version.UploadedAtUtc,
-                version.UploadedByUserId,
-                version.Observations,
-                version.IsCurrent,
-                version.IssueDate,
-                version.ExpiresOn,
-                version.ValidationStatus,
-                version.ValidatedByUserId,
-                version.ValidatedAtUtc,
-                version.RejectedByUserId,
-                version.RejectedAtUtc,
-                version.RejectReason,
-                version.ReplacesVersionId?.ToString("D"),
-                version.CorrectionResponsibleUserId,
-                version.CorrectionStatus,
-                version.CorrectionObservation,
-                version.CorrectionCycleId?.ToString("D")))
+                version.Id.ToString("D"), document.Id.ToString("D"), version.VersionNumber, version.VersionCode,
+                version.FileId.ToString("D"), version.File.FileKey, version.File.LogicalUri, version.UploadedAtUtc,
+                version.UploadedByUserId, version.Observations, version.IsCurrent, version.IssueDate, version.ExpiresOn,
+                version.ValidationStatus, version.ValidatedByUserId, version.ValidatedAtUtc, version.RejectedByUserId,
+                version.RejectedAtUtc, version.RejectReason, version.ReplacesVersionId?.ToString("D"),
+                version.CorrectionResponsibleUserId, version.CorrectionStatus, version.CorrectionObservation,
+                version.CorrectionCycleId?.ToString("D"), UserDisplayName(userNames, version.UploadedByUserId),
+                UserDisplayName(userNames, version.ValidatedByUserId), UserDisplayName(userNames, version.RejectedByUserId),
+                UserDisplayName(userNames, version.CorrectionResponsibleUserId)))
             .ToArray();
     }
-
     public async Task<DocumentResponse?> AssignAssetsAsync(
         string id,
         AssignDocumentAssetsRequest request,
@@ -614,7 +598,7 @@ public sealed class DocumentService : IDocumentService
         await transaction.CommitAsync(cancellationToken);
         await RecordAuditAsync(user, "document.asset.assigned", id, null, JsonSerializer.Serialize(request.ActivoCodigos), request.Reason ?? "Asociacion de activos", cancellationToken);
 
-        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+        return await LoadDocumentResponseAsync(id, cancellationToken);
     }
 
     public async Task<DocumentResponse?> UnassignAssetAsync(
@@ -636,7 +620,8 @@ public sealed class DocumentService : IDocumentService
         var link = document.Assets.FirstOrDefault(item => item.IsActive && SameCode(item.Asset.Code, assetCode));
         if (link is null)
         {
-            return ToDocumentResponse(document);
+            var userNames = await ResolveUserDisplayNamesAsync(GetDocumentUserIds(document), cancellationToken);
+            return ToDocumentResponse(document, userNames);
         }
 
         link.IsActive = false;
@@ -648,7 +633,7 @@ public sealed class DocumentService : IDocumentService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await RecordAuditAsync(user, "document.asset.unassigned", id, assetCode, null, request.Reason, cancellationToken);
 
-        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+        return await LoadDocumentResponseAsync(id, cancellationToken);
     }
 
     public async Task<DocumentResponse?> AnnulAsync(
@@ -681,7 +666,7 @@ public sealed class DocumentService : IDocumentService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await RecordAuditAsync(user, "document.annulled", id, previous, Serialize(document), request.Reason, cancellationToken);
 
-        return ToDocumentResponse((await FindDocumentAsync(id, tracking: false, cancellationToken))!);
+        return await LoadDocumentResponseAsync(id, cancellationToken);
     }
 
     public async Task<IReadOnlyCollection<DocumentResponse>> GetExpiredAsync(
@@ -1230,7 +1215,34 @@ public sealed class DocumentService : IDocumentService
             entity.FolderTemplate);
     }
 
-    private static DocumentResponse ToDocumentResponse(DocumentEntity entity)
+    private async Task<DocumentResponse> LoadDocumentResponseAsync(string id, CancellationToken cancellationToken)
+    {
+        var document = await FindDocumentAsync(id, tracking: false, cancellationToken) ?? throw new DomainException("No se encontró el documento solicitado.");
+        var userNames = await ResolveUserDisplayNamesAsync(GetDocumentUserIds(document), cancellationToken);
+        return ToDocumentResponse(document, userNames);
+    }
+
+    private async Task<IReadOnlyDictionary<string, string>> ResolveUserDisplayNamesAsync(IEnumerable<string?> userIds, CancellationToken cancellationToken)
+    {
+        var ids = userIds.Where(id => Guid.TryParse(id, out _)).Select(id => Guid.Parse(id!)).Distinct().ToArray();
+        if (ids.Length == 0) return EmptyUserNames;
+        var users = await _dbContext.Users.AsNoTracking().Where(user => ids.Contains(user.Id))
+            .Select(user => new { user.Id, user.DisplayName, user.Username, user.Email }).ToArrayAsync(cancellationToken);
+        return users.ToDictionary(user => user.Id.ToString("D"), user => FirstNonEmpty(user.DisplayName, user.Username, user.Email) ?? "Usuario no disponible", StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string?> GetDocumentUserIds(DocumentEntity document)
+    {
+        yield return document.CreatedByUserId; yield return document.UpdatedByUserId; yield return document.ValidatedByUserId; yield return document.RejectedByUserId; yield return document.AnnulledByUserId;
+        foreach (var version in document.Versions) { yield return version.UploadedByUserId; yield return version.ValidatedByUserId; yield return version.RejectedByUserId; yield return version.CorrectionResponsibleUserId; }
+    }
+
+    private static string UserDisplayName(IReadOnlyDictionary<string, string> userNames, string? userId) =>
+        string.IsNullOrWhiteSpace(userId) ? "Usuario no disponible" : userNames.TryGetValue(userId, out var displayName) ? displayName : Guid.TryParse(userId, out _) ? "Usuario no disponible" : userId;
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyUserNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    private static DocumentResponse ToDocumentResponse(DocumentEntity entity, IReadOnlyDictionary<string, string>? userNames = null)
     {
         var currentVersion = entity.Versions.OrderByDescending(version => version.IsCurrent).ThenByDescending(version => version.VersionNumber).FirstOrDefault();
         var activeAssets = entity.Assets.Where(link => link.IsActive).Select(link => link.Asset.Code).OrderBy(code => code, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -1274,7 +1286,12 @@ public sealed class DocumentService : IDocumentService
             blocksNow,
             entityCodes,
             currentVersion?.VersionNumber,
-            currentVersion?.FileId.ToString("D"));
+            currentVersion?.FileId.ToString("D"),
+            UserDisplayName(userNames ?? EmptyUserNames, entity.ValidatedByUserId),
+            UserDisplayName(userNames ?? EmptyUserNames, entity.RejectedByUserId),
+            UserDisplayName(userNames ?? EmptyUserNames, entity.AnnulledByUserId),
+            UserDisplayName(userNames ?? EmptyUserNames, currentVersion?.UploadedByUserId ?? entity.CreatedByUserId),
+            UserDisplayName(userNames ?? EmptyUserNames, entity.UpdatedByUserId));
     }
 
     private static DocumentLifecycleStatus ResolveStatus(DocumentLifecycleStatus rawStatus, DateOnly? expiresOn, int alertDays, bool hasCurrentFile) =>
@@ -1510,6 +1527,7 @@ public sealed class DocumentService : IDocumentService
         return clean.Length == 0 ? null : string.Join(';', clean);
     }
 
+    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
     private static string? EmptyToNull(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();

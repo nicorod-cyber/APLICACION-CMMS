@@ -62,6 +62,7 @@ public sealed class OperationalUnitDocumentService(
             .Include(link => link.Document).ThenInclude(document => document.Versions).ThenInclude(version => version.File)
             .ToArrayAsync(ct);
         var documentsByAsset = links.GroupBy(link => link.AssetId).ToDictionary(group => group.Key, group => group.Select(link => link.Document).DistinctBy(document => document.Id).ToArray());
+        var userNames = await ResolveUserDisplayNamesAsync(links.SelectMany(link => GetDocumentUserIds(link.Document)), ct);
         var canManage = authorization.CanManageDocuments(user);
         var canValidate = authorization.CanValidateDocuments(user);
         var rows = new List<OperationalUnitDocumentRow>();
@@ -110,7 +111,7 @@ public sealed class OperationalUnitDocumentService(
                     MatrixId: matrix.Id.ToString("D"),
                     MatrixItemId: requirement.Id.ToString("D"),
                     IsHistorical: document?.IsHistorical ?? false,
-                    ValidatedBy: version?.ValidatedByUserId ?? document?.ValidatedByUserId,
+                    ValidatedBy: UserDisplayName(userNames, version?.ValidatedByUserId ?? document?.ValidatedByUserId),
                     ValidatedAtUtc: version?.ValidatedAtUtc ?? document?.ValidatedAtUtc,
                     SharePointUrl: version?.File.LogicalUri,
                     DaysToExpire: result.DaysToExpire,
@@ -278,6 +279,25 @@ public sealed class OperationalUnitDocumentService(
         throw new UnauthorizedAccessException("El usuario no tiene acceso a la faena de la unidad operativa.");
     }
 
+    private async Task<IReadOnlyDictionary<string, string>> ResolveUserDisplayNamesAsync(IEnumerable<string?> userIds, CancellationToken ct)
+    {
+        var ids = userIds.Where(id => Guid.TryParse(id, out _)).Select(id => Guid.Parse(id!)).Distinct().ToArray();
+        if (ids.Length == 0) return EmptyUserNames;
+        var users = await db.Users.AsNoTracking().Where(item => ids.Contains(item.Id))
+            .Select(item => new { item.Id, item.DisplayName, item.Username, item.Email }).ToArrayAsync(ct);
+        return users.ToDictionary(item => item.Id.ToString("D"), item => FirstNonEmpty(item.DisplayName, item.Username, item.Email) ?? "Usuario no disponible", StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string?> GetDocumentUserIds(DocumentEntity document)
+    {
+        yield return document.ValidatedByUserId;
+        foreach (var version in document.Versions) { yield return version.UploadedByUserId; yield return version.ValidatedByUserId; yield return version.RejectedByUserId; yield return version.CorrectionResponsibleUserId; }
+    }
+
+    private static string? UserDisplayName(IReadOnlyDictionary<string, string> userNames, string? userId) =>
+        string.IsNullOrWhiteSpace(userId) ? null : userNames.TryGetValue(userId, out var name) ? name : Guid.TryParse(userId, out _) ? "Usuario no disponible" : userId;
+    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
+    private static readonly IReadOnlyDictionary<string, string> EmptyUserNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     private static string RequirementKey(Guid assetId, Guid matrixItemId) => $"{assetId:D}:{matrixItemId:D}";
     private static bool TryParseRequirementKey(string value, out Guid assetId, out Guid matrixItemId)
     {
