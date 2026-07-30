@@ -7,7 +7,7 @@ import { na } from "./formatters";
 import { UnitCompositionDialogs, type UnitComponent } from "./UnitCompositionDialogs";
 import { Dialog } from "../../shared/ui/Dialog";
 import { UnitEditorDialog } from "../operational-units/components/UnitEditorDialog";
-import { AssetDocumentManager } from "../documents/components/AssetDocumentManager";
+import { OperationalUnitDocumentManager } from "../documents/components/OperationalUnitDocumentManager";
 import { UnitTransferDialog } from "../operational-units/components/UnitTransferDialog";
 import { UnitMaintenanceActions } from "../operational-units/components/UnitMaintenanceActions";
 
@@ -30,7 +30,7 @@ type Unit = {
   composicion: { completa: boolean; faltantes: string[]; vigentes: UnitComponent[]; historial: UnitComponent[] };
 };
 
-const tabs = [["resumen", "Resumen"], ["composicion", "Composición"], ["historial", "Historial de composición"], ["documentos", "Documentos de componentes"]] as const;
+const tabs = [["resumen", "Resumen"], ["composicion", "Composición"], ["historial", "Historial de composición"], ["documentos", "Documentos"]] as const;
 
 export function CompositeUnitDetailPage() {
   const { code = "" } = useParams();
@@ -63,7 +63,7 @@ export function CompositeUnitDetailPage() {
           </div>
         </header>
         <nav className="flex overflow-auto border-y border-slate-200 bg-slate-50">{tabs.map(([key, label]) => <button className={"h-12 shrink-0 border-b-2 px-4 text-sm font-semibold " + (tab === key ? "border-teal-500 text-teal-700" : "border-transparent text-slate-500")} key={key} onClick={() => setTab(key)} type="button">{label}</button>)}</nav>
-        <div className="p-5">{tab === "resumen" ? <UnitSummary unit={unit} /> : tab === "composicion" ? <Composition unit={unit} openAsset={asset => navigate("/equipos/activos/" + encodeURIComponent(asset))} onAction={setCompositionMode} canCompose={canCompose} /> : tab === "historial" ? <CompositionHistory rows={unit.composicion.historial} /> : <UnitDocuments components={unit.composicion.vigentes} />}</div>
+        <div className="p-5">{tab === "resumen" ? <UnitSummary unit={unit} /> : tab === "composicion" ? <Composition unit={unit} openAsset={asset => navigate("/equipos/activos/" + encodeURIComponent(asset))} onAction={setCompositionMode} canCompose={canCompose} /> : tab === "historial" ? <CompositionHistory rows={unit.composicion.historial} /> : <OperationalUnitDocumentManager unitCode={unit.codigo} />}</div>
       </section>
       <aside className="space-y-3">
         <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="font-semibold">Acciones de la unidad</h2><div className="mt-3 grid gap-2"><button className="secondary-button" type="button" disabled={!canManage} onClick={() => setEditing(true)}>Editar identificación</button><button className="secondary-button" type="button" disabled={!canTransfer} onClick={() => setTransferring(true)}>Trasladar unidad completa</button><button className="secondary-button" type="button" disabled={!canCompose} onClick={() => setCompositionMode("mount")}>Montar componente</button><button className="secondary-button" type="button" disabled={!canCompose || unit.composicion.vigentes.length === 0} onClick={() => setCompositionMode("replace")}>Reemplazar componente</button><button className="secondary-button text-red-700" type="button" disabled={!canCompose || unit.composicion.vigentes.length === 0} onClick={() => setCompositionMode("unmount")}>Desmontar componente</button><button className="secondary-button" type="button" onClick={() => setRulesOpen(true)}>Ver reglas de composición</button></div></article><article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="font-semibold">Mantenimiento</h2><div className="mt-3"><UnitMaintenanceActions unitCode={unit.codigo} canTransfer={canTransfer} /></div></article>
@@ -95,5 +95,3 @@ function ComponentCard({ label, component, openAsset, onAction, canCompose }: { 
 function CompositionHistory({ rows }: { rows: UnitComponent[] }) {
   return <table className="min-w-full text-sm"><thead><tr><th>Fecha</th><th>Rol</th><th>Activo</th><th>Accion</th><th>Motivo</th></tr></thead><tbody>{rows.map((row, index) => <tr className="border-t" key={row.activoCodigo + index}><td className="p-2">{new Intl.DateTimeFormat("es-CL").format(new Date(row.fechaMontajeUtc))}</td><td className="p-2">{row.rolComponenteCodigo}</td><td className="p-2">{row.activoNombre || row.activoCodigo}</td><td className="p-2">{row.fechaDesmontajeUtc ? "Desmontaje" : "Montaje"}</td><td className="p-2">{na(row.fechaDesmontajeUtc ? row.motivoDesmontaje : row.motivoMontaje)}</td></tr>)}</tbody></table>;
 }
-
-function UnitDocuments({ components }: { components: UnitComponent[] }) { const [selected, setSelected] = useState(components[0]?.activoCodigo ?? ""); const owner = components.find(component => component.activoCodigo === selected); return <><div className="mb-3 flex flex-wrap gap-2"><button className={"secondary-button " + (!selected ? "ring-2 ring-teal-500" : "")} type="button" onClick={() => setSelected("")}>Todos</button>{components.map(component => <button className={"secondary-button " + (selected === component.activoCodigo ? "ring-2 ring-teal-500" : "")} key={component.activoCodigo} type="button" onClick={() => setSelected(component.activoCodigo)}>{component.rolComponenteCodigo}: {component.activoNombre || component.activoCodigo}</button>)}</div>{selected && owner ? <AssetDocumentManager assetCode={selected} ownerLabel={owner.rolComponenteCodigo + " - " + (owner.activoNombre || owner.activoCodigo)} /> : <div className="grid gap-4">{components.map(component => <AssetDocumentManager key={component.activoCodigo} assetCode={component.activoCodigo} ownerLabel={component.rolComponenteCodigo + " - " + (component.activoNombre || component.activoCodigo)} />)}</div>}</>; }

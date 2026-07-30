@@ -21,6 +21,26 @@ public sealed record OperationalUnitListQuery(string? FaenaCodigo = null, string
 public sealed record OperationalUnitSummary(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string? UbicacionTecnicaCodigo, string EstadoOperacionalCodigo, string? Criticidad, bool ComposicionCompleta, IReadOnlyCollection<string> RolesFaltantes);
 public sealed record OperationalUnitRuleResponse(string TipoUnidadCodigo, string RolComponenteCodigo, int CantidadMinima, int CantidadMaxima, bool Obligatorio, IReadOnlyCollection<AllowedComponentRequest> Permitidos);
 
+/// <summary>Vista documental consolidada: cada fila conserva su activo propietario técnico.</summary>
+public sealed record OperationalUnitDocumentSummary(int PendingUpload, int PendingValidation, int Expiring, int Expired, int Valid, bool Compliant, bool BlocksAvailability);
+
+public sealed record OperationalUnitDocumentRow(
+    string RequirementKey, string DocumentTypeCode, string DocumentTypeName, bool Mandatory, bool Critical,
+    bool BlocksAvailability, bool RequiresExpirationDate, int AlertDays, string Status, int? VersionNumber,
+    DateOnly? IssueDate, DateOnly? ExpirationDate, string? ValidationStatus, string? RejectionReason,
+    string? DocumentId, string? CurrentVersionId, bool CanUpload, bool CanReplace, bool CanValidate,
+    bool CanReject, bool CanAnnul, string TechnicalOwnerRole, string TechnicalOwnerAssetCode,
+    string TechnicalOwnerAssetName, string MatrixId, string MatrixItemId, bool IsHistorical = false,
+    string? ValidatedBy = null, DateTimeOffset? ValidatedAtUtc = null, string? SharePointUrl = null,
+    int? DaysToExpire = null, string? PendingReason = null);
+
+public sealed record OperationalUnitDocumentResponse(
+    string UnitCode, string UnitName, string? FaenaCode, string? FaenaName, bool CompositionComplete,
+    bool MatrixConfigurationComplete, OperationalUnitDocumentSummary Summary,
+    IReadOnlyCollection<string> ConfigurationWarnings, IReadOnlyCollection<OperationalUnitDocumentRow> Rows);
+
+public sealed record OperationalUnitDocumentOwnerContext(string UnitCode, string UnitName, string TechnicalOwnerRole, string TechnicalOwnerAssetCode);
+
 public interface IOperationalUnitService
 {
     Task<PagedResponse<OperationalUnitSummary>> ListPageAsync(OperationalUnitListQuery query, UserAccessContext user, CancellationToken cancellationToken);
@@ -35,5 +55,17 @@ public interface IOperationalUnitService
     Task<OperationalUnitCompositionResponse?> MountAsync(string unidadCodigo, MountOperationalUnitComponentRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitCompositionResponse?> UnmountAsync(string unidadCodigo, string activoCodigo, UnmountOperationalUnitComponentRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitCompositionResponse?> ReplaceAsync(string unidadCodigo, ReplaceOperationalUnitComponentRequest request, UserAccessContext user, CancellationToken cancellationToken);
+}
+
+public interface IOperationalUnitDocumentService
+{
+    Task<OperationalUnitDocumentResponse?> GetAsync(string unitCode, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitDocumentResponse?> UploadAsync(string unitCode, string requirementKey, MaintenanceCMMS.Application.Documents.DocumentUploadContent upload, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitDocumentResponse?> ReplaceAsync(string unitCode, string documentId, MaintenanceCMMS.Application.Documents.DocumentUploadContent upload, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitDocumentResponse?> UpdateAsync(string unitCode, string documentId, MaintenanceCMMS.Application.Documents.UpdateDocumentRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitDocumentResponse?> ValidateAsync(string unitCode, string documentId, MaintenanceCMMS.Application.Documents.ValidateDocumentRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitDocumentResponse?> RejectAsync(string unitCode, string documentId, MaintenanceCMMS.Application.Documents.RejectDocumentRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitDocumentResponse?> AnnulAsync(string unitCode, string documentId, MaintenanceCMMS.Application.Documents.AnnulDocumentRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitDocumentOwnerContext?> FindCurrentUnitByComponentAsync(string assetCode, UserAccessContext user, CancellationToken cancellationToken);
 }
 

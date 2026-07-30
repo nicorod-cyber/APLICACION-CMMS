@@ -1083,6 +1083,77 @@ operationalUnitsApi.MapGet("/", async (string? faenaCodigo, string? texto, int? 
     catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
 }).RequireAuthorization("VerUnidadesOperativas").WithName("ListOperationalUnits");
 
+operationalUnitsApi.MapGet("/{codigo}/documents", async (string codigo, ClaimsPrincipal user, IOperationalUnitDocumentService service, CancellationToken ct) =>
+{
+    try { var result = await service.GetAsync(codigo, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("GetOperationalUnitDocuments");
+
+operationalUnitsApi.MapPost("/{codigo}/document-requirements/{requirementKey}/upload", async (string codigo, string requirementKey, HttpRequest request, ClaimsPrincipal user, IOperationalUnitDocumentService service, CancellationToken ct) =>
+{
+    try
+    {
+        if (!request.HasFormContentType) return Results.BadRequest(new { message = "La carga documental debe enviarse como multipart/form-data." });
+        var form = await request.ReadFormAsync(ct); var file = form.Files.GetFile("file");
+        if (file is null) return Results.BadRequest(new { message = "Debe seleccionar un archivo." });
+        if (!TryParseDocumentDate(form["fechaEmision"].FirstOrDefault(), out var issueDate) || !TryParseDocumentDate(form["fechaVencimiento"].FirstOrDefault(), out var expiryDate)) return Results.BadRequest(new { message = "Las fechas documentales no tienen un formato válido." });
+        await using var input = file.OpenReadStream(); await using var memory = new MemoryStream(); await input.CopyToAsync(memory, ct);
+        var result = await service.UploadAsync(codigo, requirementKey, new DocumentUploadContent(form["tipoDocumento"].FirstOrDefault() ?? string.Empty, file.FileName, file.ContentType, memory.ToArray(), issueDate, expiryDate, form["observaciones"].FirstOrDefault()), UserAccessContext.FromClaims(user), ct);
+        return result is null ? Results.NotFound() : Results.Ok(result);
+    }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("UploadOperationalUnitDocument");
+
+operationalUnitsApi.MapPost("/{codigo}/documents/{documentId}/versions", async (string codigo, string documentId, HttpRequest request, ClaimsPrincipal user, IOperationalUnitDocumentService service, CancellationToken ct) =>
+{
+    try
+    {
+        if (!request.HasFormContentType) return Results.BadRequest(new { message = "El reemplazo documental debe enviarse como multipart/form-data." });
+        var form = await request.ReadFormAsync(ct); var file = form.Files.GetFile("file");
+        if (file is null) return Results.BadRequest(new { message = "Debe seleccionar un archivo." });
+        if (!TryParseDocumentDate(form["fechaEmision"].FirstOrDefault(), out var issueDate) || !TryParseDocumentDate(form["fechaVencimiento"].FirstOrDefault(), out var expiryDate)) return Results.BadRequest(new { message = "Las fechas documentales no tienen un formato válido." });
+        await using var input = file.OpenReadStream(); await using var memory = new MemoryStream(); await input.CopyToAsync(memory, ct);
+        var result = await service.ReplaceAsync(codigo, documentId, new DocumentUploadContent(form["tipoDocumento"].FirstOrDefault() ?? string.Empty, file.FileName, file.ContentType, memory.ToArray(), issueDate, expiryDate, form["observaciones"].FirstOrDefault()), UserAccessContext.FromClaims(user), ct);
+        return result is null ? Results.NotFound() : Results.Ok(result);
+    }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("ReplaceOperationalUnitDocument");
+
+operationalUnitsApi.MapPut("/{codigo}/documents/{documentId}", async (string codigo, string documentId, UpdateDocumentRequest request, ClaimsPrincipal user, IOperationalUnitDocumentService service, CancellationToken ct) =>
+{
+    try { var result = await service.UpdateAsync(codigo, documentId, request, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("UpdateOperationalUnitDocument");
+
+operationalUnitsApi.MapPost("/{codigo}/documents/{documentId}/validate", async (string codigo, string documentId, ValidateDocumentRequest request, ClaimsPrincipal user, IOperationalUnitDocumentService service, CancellationToken ct) =>
+{
+    try { var result = await service.ValidateAsync(codigo, documentId, request, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("ValidateOperationalUnitDocument");
+
+operationalUnitsApi.MapPost("/{codigo}/documents/{documentId}/reject", async (string codigo, string documentId, RejectDocumentRequest request, ClaimsPrincipal user, IOperationalUnitDocumentService service, CancellationToken ct) =>
+{
+    try { var result = await service.RejectAsync(codigo, documentId, request, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("RejectOperationalUnitDocument");
+
+operationalUnitsApi.MapPost("/{codigo}/documents/{documentId}/annul", async (string codigo, string documentId, AnnulDocumentRequest request, ClaimsPrincipal user, IOperationalUnitDocumentService service, CancellationToken ct) =>
+{
+    try { var result = await service.AnnulAsync(codigo, documentId, request, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("AnnulOperationalUnitDocument");
+
+operationalUnitsApi.MapGet("/component-context/{activoCodigo}", async (string activoCodigo, ClaimsPrincipal user, IOperationalUnitDocumentService service, CancellationToken ct) =>
+{
+    try { var result = await service.FindCurrentUnitByComponentAsync(activoCodigo, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("VerUnidadesOperativas").WithName("GetOperationalUnitComponentContext");
 operationalUnitsApi.MapGet("/{codigo}", async (string codigo, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
 {
     try { var result = await service.GetAsync(codigo, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }

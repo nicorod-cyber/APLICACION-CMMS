@@ -114,6 +114,7 @@ public static class DependencyInjection
         services.AddScoped<IFaenaService, FaenaService>();
         services.AddScoped<IAssetService, AssetService>();
         services.AddScoped<IOperationalUnitService, OperationalUnitService>();
+        services.AddScoped<IOperationalUnitDocumentService, OperationalUnitDocumentService>();
         services.AddScoped<IMaintenanceTargetService, MaintenanceTargetService>();
         services.AddScoped<IAvailabilityService, AvailabilityService>();
         services.AddScoped<IInventoryService, InventoryService>();

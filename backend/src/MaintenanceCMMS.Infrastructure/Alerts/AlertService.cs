@@ -50,6 +50,7 @@ public sealed class AlertService : IAlertService
         EnsureCanManage(user); ValidateGenerate(request); await EnsureDefaultsAsync(cancellationToken);
         if (request.Objetivo is not null && (!string.IsNullOrWhiteSpace(request.EntityType) || !string.IsNullOrWhiteSpace(request.EntityId))) throw new DomainException("No puede informar Objetivo junto con EntityType o EntityId.");
         var target = request.Objetivo is null ? null : await _maintenanceTargets.ResolveAsync(request.Objetivo, user, cancellationToken);
+        target = await ResolveDocumentaryOperationalUnitTargetAsync(request, target, user, cancellationToken);
         var rule = await _dbContext.AlertRules.Include(item => item.Template).Include(item => item.Faena).Include(item => item.Recipients)
             .SingleOrDefaultAsync(item => item.Code == request.RuleCode && item.IsEnabled, cancellationToken)
             ?? throw new DomainException($"La regla de alerta '{request.RuleCode}' no existe o no esta habilitada.");
@@ -146,6 +147,17 @@ public sealed class AlertService : IAlertService
     private static IEnumerable<(string Code, string Name, string EventType, AlertSeverityLevel Severity, bool Repeat, bool Pdf, string Recipients)> DefaultRules() =>
     [ ("document-expiring", "Documento por vencer", "DocumentoPorVencer", AlertSeverityLevel.Warning, false, true, "planificacion@example.local"), ("document-expired", "Documento vencido", "DocumentoVencido", AlertSeverityLevel.Critical, true, true, "planificacion@example.local"), ("spare-low-stock", "Repuesto bajo stock", "RepuestoBajoStock", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("critical-spare-no-stock", "Repuesto critico sin stock", "RepuestoCriticoSinStock", AlertSeverityLevel.Critical, true, true, "bodega@example.local"), ("work-order-overdue", "OT vencida", "OTVencida", AlertSeverityLevel.Critical, true, true, "planificacion@example.local"), ("preventive-created", "Preventivo creado automaticamente", "PreventivoCreado", AlertSeverityLevel.Info, false, false, "planificacion@example.local"), ("preventive-overdue", "Preventivo vencido", "PreventivoVencido", AlertSeverityLevel.Critical, true, true, "planificacion@example.local;supervisores@example.local;jefatura.mantenimiento@example.local"), ("request-pending-approval", "Solicitud pendiente aprobacion", "SolicitudPendienteAprobacion", AlertSeverityLevel.Warning, false, false, "abastecimiento@example.local"), ("spare-pending-delivery", "Repuesto pendiente entrega", "RepuestoPendienteEntrega", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("reserved-stock-without-pickup", "Stock reservado sin retiro", "StockReservadoSinRetiro", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("transfer-pending", "Transferencia pendiente", "TransferenciaPendiente", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("reception-overdue", "Recepcion vencida", "RecepcionVencida", AlertSeverityLevel.Warning, false, false, "bodega@example.local"), ("incomplete-work-order-close", "Cierre OT incompleto", "CierreOTIncompleto", AlertSeverityLevel.Critical, true, true, "planificacion@example.local"), ("availability-affected", "Disponibilidad afectada", "DisponibilidadAfectada", AlertSeverityLevel.Critical, true, true, "planificacion@example.local") ];
 
+    private async Task<ResolvedMaintenanceTarget?> ResolveDocumentaryOperationalUnitTargetAsync(GenerateAlertRequest request, ResolvedMaintenanceTarget? target, UserAccessContext user, CancellationToken cancellationToken)
+    {
+        var isDocumentary = request.Source.Contains("document", StringComparison.OrdinalIgnoreCase) || request.RuleCode.StartsWith("document-", StringComparison.OrdinalIgnoreCase);
+        if (!isDocumentary || target?.Tipo != MaintenanceTargetType.Asset || target.AssetId is not Guid assetId) return target;
+
+        var unitCode = await _dbContext.OperationalUnitComponents.AsNoTracking()
+            .Where(component => component.AssetId == assetId && component.RemovedAtUtc == null)
+            .Select(component => component.OperationalUnit.Code)
+            .SingleOrDefaultAsync(cancellationToken);
+        return string.IsNullOrWhiteSpace(unitCode) ? target : await _maintenanceTargets.ResolveAsync(new MaintenanceTargetReference(MaintenanceTargetType.OperationalUnit, unitCode), user, cancellationToken);
+    }
     private async Task<MaintenanceTargetSummary?> ResolveTargetSummaryAsync(AlertEntity alert, UserAccessContext user, CancellationToken cancellationToken)
     {
         var type = alert.EntityType?.Trim().ToUpperInvariant();
