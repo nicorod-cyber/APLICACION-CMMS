@@ -31,9 +31,18 @@ public sealed class IdentitySeedService : IIdentitySeedService
             : _seedTransaction.ExecuteAsync(SeedCoreAsync, cancellationToken);
     }
 
+    private static async Task ValidateCanonicalRolePermissionsAsync(IIdentityStore identityStore, CancellationToken cancellationToken)
+    {
+        var planner = (await identityStore.ListRolesAsync(cancellationToken)).SingleOrDefault(role => string.Equals(role.Code.Trim(), AuthRoles.Planner, StringComparison.OrdinalIgnoreCase));
+        var required = new[] { AuthPermissions.ViewFaenas, AuthPermissions.ManageAssets, AuthPermissions.ChangeAssetFaena, AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings };
+        var missing = required.Where(permission => !planner?.Permissions.Contains(permission, StringComparer.OrdinalIgnoreCase) == true).ToArray();
+        if (planner is null || missing.Length > 0) throw new InvalidOperationException($"Sincronización de identidad incompleta para el rol {AuthRoles.Planner}. Permisos faltantes: {string.Join(", ", missing)}.");
+    }
+
     private async Task SeedCoreAsync(IIdentityStore identityStore, CancellationToken cancellationToken)
     {
         await identityStore.UpsertRolesAsync(RolePermissionCatalog.InitialRoles, cancellationToken);
+        await ValidateCanonicalRolePermissionsAsync(identityStore, cancellationToken);
 
         var users = await identityStore.ListUsersAsync(cancellationToken);
         if (users.Count > 0)

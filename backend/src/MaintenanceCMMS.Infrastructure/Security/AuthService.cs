@@ -78,6 +78,15 @@ public sealed class AuthService : IAuthService
         return response;
     }
 
+    public async Task<LoginResponse> RefreshAsync(ClaimsPrincipal principal, CancellationToken cancellationToken)
+    {
+        var userId = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrWhiteSpace(userId)) throw new UnauthorizedAccessException("Token sin usuario.");
+        var user = await _identityStore.FindUserByIdAsync(userId, cancellationToken);
+        if (user is null || !user.IsActive || user.IsLocked) throw new UnauthorizedAccessException("Usuario no disponible.");
+        return _jwtTokenService.CreateToken(user, await ResolvePermissionsAsync(user.Roles, cancellationToken));
+    }
+
     public async Task<bool> ChangeOwnPasswordAsync(
         string userId,
         ChangePasswordRequest request,

@@ -37,7 +37,7 @@ export const navigationItems: NavigationItem[] = [
     path: "/faenas",
     icon: MapPinned,
     accent: "bg-teal-600",
-    roles: [AUTH_ROLES.admin]
+    roles: [AUTH_ROLES.admin, AUTH_ROLES.planner]
   },
   {
     label: "Equipos",

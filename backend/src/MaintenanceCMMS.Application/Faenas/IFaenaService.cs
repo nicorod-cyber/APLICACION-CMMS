@@ -14,6 +14,8 @@ public interface IFaenaService
         UserAccessContext user,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyCollection<FaenaResponsibleUserOption>> ListResponsibleUserOptionsAsync(CancellationToken cancellationToken);
+
     Task<FaenaResponse> CreateAsync(
         UpsertFaenaRequest request,
         UserAccessContext user,

@@ -24,6 +24,7 @@ public sealed class JwtTokenService : IJwtTokenService
             throw new InvalidOperationException("Jwt:Secret must be configured with at least 32 bytes.");
         }
 
+        var effectivePermissions = permissions.Where(permission => !string.IsNullOrWhiteSpace(permission)).Select(permission => permission.Trim().ToLowerInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(permission => permission, StringComparer.OrdinalIgnoreCase).ToArray();
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(Math.Max(1, _options.ExpirationMinutes));
         var claims = new List<Claim>
         {
@@ -35,7 +36,7 @@ public sealed class JwtTokenService : IJwtTokenService
         };
 
         claims.AddRange(user.Roles.Select(role => new Claim(ClaimTypes.Role, role)));
-        claims.AddRange(permissions.Select(permission => new Claim("permission", permission)));
+        claims.AddRange(effectivePermissions.Select(permission => new Claim("permission", permission)));
         claims.AddRange(user.Faenas.Select(faena => new Claim("faena", faena)));
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.Secret));
@@ -51,6 +52,6 @@ public sealed class JwtTokenService : IJwtTokenService
         return new LoginResponse(
             new JwtSecurityTokenHandler().WriteToken(jwt),
             expiresAt,
-            AuthResponseFactory.FromUser(user, permissions));
+            AuthResponseFactory.FromUser(user, effectivePermissions));
     }
 }

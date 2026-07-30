@@ -909,7 +909,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         if (u.Permissions.Contains(AuthPermissions.CorrectAssetReadings, StringComparer.OrdinalIgnoreCase) || _authorization.CanAdminister(u)) return;
         throw new UnauthorizedAccessException("No tiene permisos para corregir lecturas de activos.");
     }
-    private void Maintain(UserAccessContext u) { if (!_authorization.CanAdminister(u) && !u.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase) && !u.Roles.Contains(AuthRoles.MaintenanceSupervisor, StringComparer.OrdinalIgnoreCase)) throw new UnauthorizedAccessException("No tiene permisos para administrar activos."); }
+    private void Maintain(UserAccessContext u) { if (!_authorization.CanAdminister(u) && !u.Permissions.Contains(AuthPermissions.ManageAssets, StringComparer.OrdinalIgnoreCase) && !u.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase) && !u.Roles.Contains(AuthRoles.MaintenanceSupervisor, StringComparer.OrdinalIgnoreCase)) throw new UnauthorizedAccessException("No tiene permisos para administrar activos."); }
     private static bool CanView(UserAccessContext u, AssetEntity a) => a.Faena is null || u.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) || u.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase) || u.Faenas.Contains(a.Faena.Code, StringComparer.OrdinalIgnoreCase);
     private static void View(UserAccessContext u, AssetEntity a) { if (!CanView(u, a)) throw new UnauthorizedAccessException("No tiene acceso al activo."); }
     private async Task AuditAsync(UserAccessContext u, string action, AssetEntity a, object? previous, object? next, CancellationToken ct) =>

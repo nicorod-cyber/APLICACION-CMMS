@@ -1,4 +1,4 @@
-namespace MaintenanceCMMS.Application.Auth;
+﻿namespace MaintenanceCMMS.Application.Auth;
 
 public static class AuthRoles
 {
@@ -35,6 +35,7 @@ public static class AuthPermissions
     public const string DeactivateFaenas = "faenas.desactivar";
     public const string ApproveImports = "importaciones.aprobar";
     public const string ChangeAssetFaena = "activos.cambiar_faena";
+    public const string ManageAssets = "activos.administrar";
     public const string ManageEquipmentFamilies = "familias_equipo.gestionar";
     public const string ManageAssetCatalogs = "activos.catalogos.administrar";
     public const string ManageAssetAttributes = "activos.atributos.administrar";

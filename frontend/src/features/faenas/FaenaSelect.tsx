@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { apiFetch } from "../auth/authStore";
+import { apiFetch, useAuthStore } from "../auth/authStore";
 
 export type FaenaRecord = {
   id: string;
@@ -55,13 +55,15 @@ type FaenaChecklistProps = {
 const faenaRequests = new Map<string, Promise<FaenaRecord[]>>();
 
 export function useFaenas(includeInactive = true): UseFaenasResult {
+  const token = useAuthStore(state => state.token);
+  const faenaScope = useAuthStore(state => state.user?.faenas.join("|") ?? "");
   const [faenas, setFaenas] = useState<FaenaRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
-    const cacheKey = includeInactive ? "all" : "active";
+    const cacheKey = `${includeInactive ? "all" : "active"}:${token ?? "anonymous"}:${faenaScope}`;
 
     async function loadFaenas() {
       setIsLoading(true);
@@ -97,7 +99,7 @@ export function useFaenas(includeInactive = true): UseFaenasResult {
     return () => {
       isMounted = false;
     };
-  }, [includeInactive]);
+  }, [includeInactive, token, faenaScope]);
 
   return { faenas, isLoading, error };
 }
@@ -119,8 +121,8 @@ export function FaenaSelect({
   return (
     <label className="block text-sm font-medium text-slate-700 dark:text-slate-200" htmlFor={id}>
       {label}
-      {searchable ? <input id={`${id}-search`} className="mt-2 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950" disabled={disabled || isLoading} placeholder="Buscar por nombre de faena" value={search} onChange={(event) => setSearch(event.target.value)} /> : null}
-      <select id={id} className="mt-2 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-900" disabled={disabled || isLoading} value={value} onChange={(event) => choose(event.target.value)}>
+      {searchable ? <input id={`${id}-search`} className="mt-2 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950" disabled={disabled || isLoading || !!error} placeholder="Buscar por nombre de faena" value={search} onChange={(event) => setSearch(event.target.value)} /> : null}
+      <select id={id} className="mt-2 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:disabled:bg-slate-900" disabled={disabled || isLoading || !!error} value={value} onChange={(event) => choose(event.target.value)}>
         {includeEmpty ? <option value="">{isLoading ? "Cargando faenas..." : emptyLabel}</option> : null}
         {filtered.map((faena) => <option key={faena.codigo} value={faena.codigo} title={faena.codigo}>{faena.nombre || faena.codigo}</option>)}
       </select>

@@ -16,6 +16,11 @@ export const AUTH_PERMISSIONS = {
   administration: "administracion",
   approveImports: "importaciones.aprobar",
   changeAssetFaena: "activos.cambiar_faena",
+  manageAssets: "activos.administrar",
+  viewFaenas: "faenas.ver",
+  createFaenas: "faenas.crear",
+  editFaenas: "faenas.editar",
+  deactivateFaenas: "faenas.desactivar",
   registerAssetReadings: "activos.lecturas.registrar",
   correctAssetReadings: "activos.lecturas.corregir",
   manageTechnicalHierarchy: "jerarquia.gestionar",
@@ -119,7 +124,8 @@ export const useAuthStore = create<AuthState>()(
         }
 
         set({ status: "loading" });
-        const response = await fetch("/api/auth/me", {
+        const response = await fetch("/api/auth/refresh", {
+          method: "POST",
           headers: { Authorization: `Bearer ${token}` }
         });
 
@@ -128,8 +134,8 @@ export const useAuthStore = create<AuthState>()(
           return;
         }
 
-        const user = (await response.json()) as CurrentUser;
-        set({ user, status: "authenticated" });
+        const data = (await response.json()) as LoginResponse;
+        set({ token: data.accessToken, expiresAtUtc: data.expiresAtUtc, user: data.user, status: "authenticated" });
       },
 
       clearSession() {

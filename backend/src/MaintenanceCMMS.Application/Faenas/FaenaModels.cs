@@ -20,6 +20,8 @@ public sealed record TechnicalLocationSummary(
     string Nombre,
     bool Obsoleto);
 
+public sealed record FaenaResponsibleUserOption(Guid Id, string DisplayName, string Username);
+
 public sealed record FaenaResponse(
     Guid Id,
     string Codigo,

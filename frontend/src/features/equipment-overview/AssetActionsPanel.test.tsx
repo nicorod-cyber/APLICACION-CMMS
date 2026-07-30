@@ -5,7 +5,7 @@ import * as auth from "../auth/authStore";
 import { useAuthStore, type CurrentUser } from "../auth/authStore";
 import { AssetActionsPanel } from "./AssetActionsPanel";
 
-const user: CurrentUser = { id: "1", username: "planner", email: "planner@example.com", displayName: "Planner", isActive: true, isLocked: false, roles: ["planificador"], permissions: ["activos.lecturas.registrar", "activos.lecturas.corregir", "activos.cambiar_faena"], faenas: [] };
+const user: CurrentUser = { id: "1", username: "planner", email: "planner@example.com", displayName: "Planner", isActive: true, isLocked: false, roles: ["planificador"], permissions: ["activos.lecturas.registrar", "activos.lecturas.corregir", "activos.cambiar_faena", "activos.administrar"], faenas: [] };
 const renderUi = () => render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><AssetActionsPanel code="AC-1" measurementType="HORAS" unit="h" lastReading={100} readings={[{ id: "read-1", valor: 100, unidad: "h", fechaLecturaUtc: "2026-01-01T00:00:00Z" }]} locationType="FAENA" faenaCode="F001" currentStateCode="OPERATIVO" /></QueryClientProvider>);
 
 beforeEach(() => { useAuthStore.setState({ user }); vi.spyOn(auth, "apiFetch").mockImplementation((path: string) => Promise.resolve(path === "/api/assets/catalog" ? { estadosOperacionales: [] } : []) as never); });

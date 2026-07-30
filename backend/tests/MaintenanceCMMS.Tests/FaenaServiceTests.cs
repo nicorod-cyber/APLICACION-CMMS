@@ -1,6 +1,7 @@
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Domain.Common;
+using MaintenanceCMMS.Infrastructure.Auditing;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
 using MaintenanceCMMS.Infrastructure.Faenas;
@@ -387,7 +388,7 @@ public sealed class FaenaServiceTests
         private Fixture(PostgreSqlWorkTestFixture database)
         {
             _database = database;
-            Service = new FaenaService(database.DbContext, new AuthorizationPolicyService());
+            Service = new FaenaService(database.DbContext, new AuthorizationPolicyService(), new PostgreSqlAuditService(database.DbContext, new AuditContextAccessor()));
         }
 
         public CmmsDbContext Db => _database.DbContext;

@@ -1,4 +1,5 @@
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
@@ -11,13 +12,16 @@ public sealed class FaenaService : IFaenaService
 {
     private readonly CmmsDbContext _dbContext;
     private readonly IAuthorizationPolicyService _authorizationPolicyService;
+    private readonly IAuditService _auditService;
 
     public FaenaService(
         CmmsDbContext dbContext,
-        IAuthorizationPolicyService authorizationPolicyService)
+        IAuthorizationPolicyService authorizationPolicyService,
+        IAuditService auditService)
     {
         _dbContext = dbContext;
         _authorizationPolicyService = authorizationPolicyService;
+        _auditService = auditService;
     }
 
     public async Task<IReadOnlyCollection<FaenaResponse>> ListAsync(
@@ -80,6 +84,13 @@ public sealed class FaenaService : IFaenaService
         return ToResponse(faena);
     }
 
+    public async Task<IReadOnlyCollection<FaenaResponsibleUserOption>> ListResponsibleUserOptionsAsync(CancellationToken cancellationToken) => await _dbContext.Users
+        .AsNoTracking()
+        .Where(user => user.IsActive && !user.IsLocked)
+        .OrderBy(user => user.DisplayName).ThenBy(user => user.Username)
+        .Select(user => new FaenaResponsibleUserOption(user.Id, user.DisplayName, user.Username))
+        .ToArrayAsync(cancellationToken);
+
     public async Task<FaenaResponse> CreateAsync(
         UpsertFaenaRequest request,
         UserAccessContext user,
@@ -97,6 +108,14 @@ public sealed class FaenaService : IFaenaService
         await ApplyAsync(entity, request, cancellationToken);
         _dbContext.Faenas.Add(entity);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        if (user.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase) && Guid.TryParse(user.UserId, out var creatorId))
+        {
+            var assignment = await _dbContext.UserFaenas.SingleOrDefaultAsync(item => item.UserId == creatorId && item.FaenaId == entity.Id, cancellationToken);
+            if (assignment is null) _dbContext.UserFaenas.Add(new UserFaenaEntity { UserId = creatorId, FaenaId = entity.Id, IsActive = true, AssignedByUserId = user.UserId });
+            else { assignment.IsActive = true; assignment.UnassignedAtUtc = null; }
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        await _auditService.RecordAsync(new AuditEventRequest(user.UserId, "faena.created", AuditModules.Configuration, "Faena", entity.Code, FaenaCodigo: entity.Code, Severity: AuditSeverity.Medium), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return ToResponse(entity);
     }

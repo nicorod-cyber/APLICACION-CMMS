@@ -200,16 +200,41 @@ builder.Services.AddAuthorization(options =>
             context.User.HasClaim("permission", AuthPermissions.CloseWorkOrders));
     });
 
+    options.AddPolicy("AdministrarActivos", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context =>
+            context.User.IsInRole(AuthRoles.Admin) ||
+            context.User.HasClaim("permission", AuthPermissions.ManageAssets));
+    });
+
+    options.AddPolicy("CambiarFaenaActivos", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context =>
+            context.User.IsInRole(AuthRoles.Admin) ||
+            context.User.HasClaim("permission", AuthPermissions.ChangeAssetFaena));
+    });
+
+    options.AddPolicy("GestionarResponsablesFaena", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context =>
+            context.User.IsInRole(AuthRoles.Admin) ||
+            context.User.HasClaim("permission", AuthPermissions.CreateFaenas) ||
+            context.User.HasClaim("permission", AuthPermissions.EditFaenas));
+    });
+
     options.AddPolicy("RegistrarLecturasActivos", policy =>
     {
         policy.RequireAuthenticatedUser();
-        policy.RequireClaim("permission", AuthPermissions.RegisterAssetReadings);
+        policy.RequireAssertion(context => context.User.IsInRole(AuthRoles.Planner) || context.User.HasClaim("permission", AuthPermissions.RegisterAssetReadings));
     });
 
     options.AddPolicy("CorregirLecturasActivos", policy =>
     {
         policy.RequireAuthenticatedUser();
-        policy.RequireClaim("permission", AuthPermissions.CorrectAssetReadings);
+        policy.RequireAssertion(context => context.User.IsInRole(AuthRoles.Planner) || context.User.HasClaim("permission", AuthPermissions.CorrectAssetReadings));
     });
 
     options.AddPolicy("VerUnidadesOperativas", policy =>
@@ -316,6 +341,12 @@ await using (var structuralBootstrapScope = app.Services.CreateAsyncScope())
     var structuralBootstrap = structuralBootstrapScope.ServiceProvider.GetRequiredService<IPostgreSqlStructuralBootstrap>();
     await structuralBootstrap.BootstrapAsync(CancellationToken.None);
 }
+
+await using (var identitySeedScope = app.Services.CreateAsyncScope())
+{
+    var identitySeedService = identitySeedScope.ServiceProvider.GetRequiredService<IIdentitySeedService>();
+    await identitySeedService.SeedAsync(CancellationToken.None);
+}
 if (app.Environment.IsDevelopment() && builder.Configuration.GetValue("Database:SeedDemoData", false))
 {
     await using var developmentDemoScope = app.Services.CreateAsyncScope();
@@ -387,6 +418,14 @@ api.MapPost("/auth/login", async (LoginRequest request, IAuthService authService
     })
     .AllowAnonymous()
     .WithName("Login");
+
+api.MapPost("/auth/refresh", async (ClaimsPrincipal user, IAuthService authService, CancellationToken cancellationToken) =>
+    {
+        try { return Results.Ok(await authService.RefreshAsync(user, cancellationToken)); }
+        catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
+    })
+    .RequireAuthorization()
+    .WithName("RefreshAuth");
 
 api.MapPost("/auth/change-password", async (
         ChangePasswordRequest request,
@@ -485,6 +524,11 @@ api.MapGet("/faenas", async (
     })
     .RequireAuthorization("VerFaenas")
     .WithName("ListFaenas");
+
+api.MapGet("/faenas/responsible-user-options", async (IFaenaService faenaService, CancellationToken cancellationToken) =>
+        Results.Ok(await faenaService.ListResponsibleUserOptionsAsync(cancellationToken)))
+    .RequireAuthorization("GestionarResponsablesFaena")
+    .WithName("ListFaenaResponsibleUserOptions");
 
 api.MapGet("/faenas/{code}", async (
         string code,
@@ -807,6 +851,7 @@ assetsApi.MapPost("/", async (
             return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
         }
     })
+    .RequireAuthorization("AdministrarActivos")
     .WithName("CreateAsset");
 
 assetsApi.MapPut("/{id}", async (
@@ -830,6 +875,7 @@ assetsApi.MapPut("/{id}", async (
             return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
         }
     })
+    .RequireAuthorization("AdministrarActivos")
     .WithName("UpdateAsset");
 
 assetsApi.MapGet("/{id}/state-event-antecedents", async (
@@ -877,6 +923,7 @@ assetsApi.MapPost("/{id}/state-events", async (
             return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
         }
     })
+    .RequireAuthorization("AdministrarActivos")
     .WithName("CreateAssetStateEvent");
 
 assetsApi.MapPost("/{id}/transfers", async (
@@ -886,6 +933,7 @@ assetsApi.MapPost("/{id}/transfers", async (
         catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
         catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
     })
+    .RequireAuthorization("CambiarFaenaActivos")
     .WithName("TransferAsset");
 
 assetsApi.MapGet("/{id}/history", async (
@@ -965,8 +1013,8 @@ assetsApi.MapPost("/{id}/documents", async (
     .WithName("UploadAssetDocument");
 assetsApi.MapGet("/{id}/physical-location", async (string id, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { var result = await service.GetPhysicalLocationAsync(id, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).WithName("GetAssetPhysicalLocation");
 assetsApi.MapGet("/{id}/physical-location-history", async (string id, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.GetPhysicalLocationHistoryAsync(id, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).WithName("GetAssetPhysicalLocationHistory");
-assetsApi.MapPost("/{id}/physical-location/workshop-entry", async (string id, RegisterWorkshopEntryRequest request, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.RegisterWorkshopEntryAsync(id, request, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).RequireAuthorization().WithName("RegisterAssetWorkshopEntry");
-assetsApi.MapPost("/{id}/physical-location/return-to-site", async (string id, RegisterReturnToSiteRequest request, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.RegisterReturnToSiteAsync(id, request, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).RequireAuthorization().WithName("RegisterAssetReturnToSite");
+assetsApi.MapPost("/{id}/physical-location/workshop-entry", async (string id, RegisterWorkshopEntryRequest request, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.RegisterWorkshopEntryAsync(id, request, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).RequireAuthorization("AdministrarActivos").WithName("RegisterAssetWorkshopEntry");
+assetsApi.MapPost("/{id}/physical-location/return-to-site", async (string id, RegisterReturnToSiteRequest request, ClaimsPrincipal user, IAssetService service, CancellationToken ct) => { try { return Results.Ok(await service.RegisterReturnToSiteAsync(id, request, UserAccessContext.FromClaims(user), ct)); } catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); } catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); } }).RequireAuthorization("AdministrarActivos").WithName("RegisterAssetReturnToSite");
 assetsApi.MapGet("/{id}/readings", async (
         string id, ClaimsPrincipal user, IAssetService assetService, CancellationToken cancellationToken) =>
     {
