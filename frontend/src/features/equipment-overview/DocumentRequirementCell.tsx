@@ -54,7 +54,7 @@ export function DocumentRequirementCell({ value }: { value?: DocumentRequirement
   const date = value ? dateLabel(value) : null;
   const days = value?.applies === true ? daysLabel(value.daysUntilExpiration) : null;
   const title = [label, date, days].filter(Boolean).join(" \u00b7 ");
-  return <div data-state={state} className={`inline-flex min-w-[112px] max-w-[145px] flex-col rounded px-2 py-1 text-xs leading-4 ${visualClasses[state]}`} title={title}>
+  return <div data-state={state} className={`flex w-full min-w-0 max-w-none break-words flex-col rounded px-2 py-1 text-xs leading-4 ${visualClasses[state]}`} title={title}>
     <span className="font-medium">{label}</span>
     {date ? <span className="text-[11px] opacity-90">{date}</span> : null}
     {days ? <span className="text-[11px] opacity-90">{days}</span> : null}

@@ -1,6 +1,6 @@
 import { KeyRound, LogOut, Menu, Search, UserCircle } from "lucide-react";
 import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { getVisibleNavigationItems } from "../../app/navigation";
 import { useAuthStore } from "../../features/auth/authStore";
 import { ChangePasswordDialog } from "../../features/auth/ChangePasswordDialog";
@@ -11,6 +11,8 @@ export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const isEquipmentOverview = location.pathname === "/equipos";
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
   const navigationItems = getVisibleNavigationItems(user);
@@ -107,7 +109,7 @@ export function AppLayout() {
           </button>
         </header>
 
-        <main className="mx-auto max-w-7xl px-4 py-6 md:px-6">
+        <main className={isEquipmentOverview ? "w-full max-w-none px-4 py-6 md:px-6 2xl:px-8" : "mx-auto max-w-7xl px-4 py-6 md:px-6"}>
           <Outlet />
           {passwordDialogOpen ? <ChangePasswordDialog onClose={() => setPasswordDialogOpen(false)} /> : null}
         </main>
