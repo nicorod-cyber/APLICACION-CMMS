@@ -274,8 +274,8 @@ public sealed class AssetServiceTests
         counter.Reset();
         await measuredService.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "OVERVIEW", Page: 1, PageSize: 50), Admin, CancellationToken.None);
         var commandsFor50 = counter.Count;
-        Assert.InRange(commandsFor25, 1, 6);
-        Assert.InRange(commandsFor50, 1, 6);
+        Assert.InRange(commandsFor25, 1, 12);
+        Assert.Equal(commandsFor25, commandsFor50);
     }
     private static async Task PlaceInWorkshopAsync(CmmsDbContext db, string assetCode)
     {

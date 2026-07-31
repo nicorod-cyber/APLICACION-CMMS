@@ -171,7 +171,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
         // No preventive or regulatory-document status is currently reliable as a unified projection.
         // A requested status therefore has no matching rows rather than presenting inferred information.
-        if (!string.IsNullOrWhiteSpace(query.EstadoPreventivo) || !string.IsNullOrWhiteSpace(query.EstadoDocumental))
+        if (!string.IsNullOrWhiteSpace(query.EstadoPreventivo) && string.IsNullOrWhiteSpace(query.EstadoDocumental))
         {
             assets = assets.Where(_ => false);
             units = units.Where(_ => false);
@@ -199,19 +199,22 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         });
         var keys = assetKeys.Concat(unitKeys);
 
-        var total = await keys.CountAsync(ct);
-        var pageKeys = await keys
-            .OrderBy(x => x.Name)
-            .ThenBy(x => x.Code)
-            .ThenBy(x => x.RowType)
-            .ThenBy(x => x.AssetId)
-            .ThenBy(x => x.OperationalUnitId)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToArrayAsync(ct);
-
+        var allKeys = await keys.OrderBy(x => x.Name).ThenBy(x => x.Code).ThenBy(x => x.RowType).ThenBy(x => x.AssetId).ThenBy(x => x.OperationalUnitId).ToArrayAsync(ct);
+        EquipmentOverviewDocumentProjection? documentProjection = null;
+        var matchingKeys = allKeys;
+        if (!string.IsNullOrWhiteSpace(query.EstadoDocumental))
+        {
+            var requestedStatus = NormalizeDocumentStatus(query.EstadoDocumental);
+            var allAssetIds = allKeys.Where(x => x.AssetId.HasValue).Select(x => x.AssetId!.Value).ToArray();
+            var allUnitIds = allKeys.Where(x => x.OperationalUnitId.HasValue).Select(x => x.OperationalUnitId!.Value).ToArray();
+            documentProjection = await new EquipmentOverviewDocumentProjectionService(_db).ProjectAsync(allAssetIds, allUnitIds, ct);
+            matchingKeys = allKeys.Where(key => documentProjection.Matches(key.AssetId, key.OperationalUnitId, requestedStatus)).ToArray();
+        }
+        var total = matchingKeys.Length;
+        var pageKeys = matchingKeys.Skip((page - 1) * pageSize).Take(pageSize).ToArray();
         var assetIds = pageKeys.Where(x => x.AssetId.HasValue).Select(x => x.AssetId!.Value).ToArray();
         var unitIds = pageKeys.Where(x => x.OperationalUnitId.HasValue).Select(x => x.OperationalUnitId!.Value).ToArray();
+        documentProjection ??= await new EquipmentOverviewDocumentProjectionService(_db).ProjectAsync(assetIds, unitIds, ct);
 
         var assetRows = await _db.Assets.AsNoTracking()
             .Where(x => assetIds.Contains(x.Id))
@@ -289,9 +292,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                 null))
             .ToArrayAsync(ct);
 
-        var componentLocations = unitIds.Length == 0
-            ? []
-            : await (from component in _db.OperationalUnitComponents.AsNoTracking()
+        var componentLocations = await (from component in _db.OperationalUnitComponents.AsNoTracking()
                    join period in _db.AssetPhysicalLocationPeriods.AsNoTracking() on component.AssetId equals period.AssetId
                    where unitIds.Contains(component.OperationalUnitId) && component.RemovedAtUtc == null && period.ValidToUtc == null
                    select new
@@ -334,9 +335,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
             };
         }).ToArray();
 
-        var componentsByUnit = unitIds.Length == 0
-            ? new Dictionary<Guid, IReadOnlyCollection<string>>()
-            : (await _db.OperationalUnitComponents.AsNoTracking()
+        var componentsByUnit = (await _db.OperationalUnitComponents.AsNoTracking()
                 .Where(x => unitIds.Contains(x.OperationalUnitId) && x.RemovedAtUtc == null)
                 .OrderBy(x => x.ComponentRole.Code)
                 .ThenBy(x => x.Asset.Code)
@@ -350,9 +349,8 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         {
             var rowId = key.AssetId?.ToString("D") ?? key.OperationalUnitId!.Value.ToString("D");
             var row = rowsById[rowId];
-            return key.OperationalUnitId.HasValue && componentsByUnit.TryGetValue(key.OperationalUnitId.Value, out var components)
-                ? row with { Components = components }
-                : row;
+            row = key.AssetId.HasValue ? row with { TechnicalReview = documentProjection.ForAsset(key.AssetId.Value, RegulatoryDocumentCategory.TechnicalReview), Sernageomin = documentProjection.ForAsset(key.AssetId.Value, RegulatoryDocumentCategory.Sernageomin), Dgmn = documentProjection.ForAsset(key.AssetId.Value, RegulatoryDocumentCategory.Dgmn), FireSuppression = documentProjection.ForAsset(key.AssetId.Value, RegulatoryDocumentCategory.FireSuppression) } : row with { TechnicalReview = documentProjection.ForUnit(key.OperationalUnitId!.Value, RegulatoryDocumentCategory.TechnicalReview), Sernageomin = documentProjection.ForUnit(key.OperationalUnitId!.Value, RegulatoryDocumentCategory.Sernageomin), Dgmn = documentProjection.ForUnit(key.OperationalUnitId!.Value, RegulatoryDocumentCategory.Dgmn), FireSuppression = documentProjection.ForUnit(key.OperationalUnitId!.Value, RegulatoryDocumentCategory.FireSuppression) };
+            return key.OperationalUnitId.HasValue && componentsByUnit.TryGetValue(key.OperationalUnitId.Value, out var components) ? row with { Components = components } : row;
         }).ToArray();
 
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
@@ -951,6 +949,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         : value;
     private static bool Same(string? a, string? b) => string.Equals(a?.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);
     private static string Code(string? v) => v?.Trim().ToUpperInvariant() ?? string.Empty;
+    private static string NormalizeDocumentStatus(string value) => Code(value).Replace(" ", "_").Replace("-", "_");
     private static string? Empty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
     private static void Require(string? v, string name) { if (string.IsNullOrWhiteSpace(v)) throw new DomainException($"{name} es obligatorio."); }
 }
