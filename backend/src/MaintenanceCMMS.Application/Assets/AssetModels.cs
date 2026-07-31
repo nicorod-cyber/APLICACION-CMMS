@@ -25,6 +25,8 @@ public sealed record EquipmentOverviewQuery(
     int Page = 1,
     int PageSize = 25);
 
+public sealed record EquipmentOverviewSummary(int Total, int NonOperational, int ExpiringDocuments);
+
 public sealed record EquipmentDocumentRequirementStatus(
     string Code,
     string? Status,

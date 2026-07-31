@@ -76,7 +76,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     public async Task<PagedResponse<AssetSummary>> ListPageAsync(AssetListQuery query, UserAccessContext user, CancellationToken ct)
     {
         if (query.FaenaCodigo is not null && !_authorization.CanViewFaena(user, query.FaenaCodigo)) throw new UnauthorizedAccessException("No tiene acceso a la faena solicitada.");
-        var page = Math.Max(1, query.Page); var pageSize = query.PageSize is 25 or 50 or 100 ? query.PageSize : 25;
+        var page = Math.Max(1, query.Page); var pageSize = query.PageSize == int.MaxValue ? int.MaxValue : query.PageSize is 25 or 50 or 100 ? query.PageSize : 25;
         var canViewAll = user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase) || user.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase);
         var authorizedFaenas = user.Faenas.Select(Code).Distinct().ToArray();
         IQueryable<AssetEntity> source = _db.Assets.AsNoTracking();
@@ -96,7 +96,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     public async Task<PagedResponse<EquipmentOverviewRow>> ListEquipmentOverviewAsync(EquipmentOverviewQuery query, UserAccessContext user, CancellationToken ct)
     {
         var page = Math.Max(1, query.Page);
-        var pageSize = query.PageSize is 25 or 50 or 100 ? query.PageSize : 25;
+        var pageSize = query.PageSize == int.MaxValue ? int.MaxValue : query.PageSize is 25 or 50 or 100 ? query.PageSize : 25;
         var canViewAll = user.Roles.Contains(AuthRoles.Admin, StringComparer.OrdinalIgnoreCase)
             || user.Roles.Contains(AuthRoles.Management, StringComparer.OrdinalIgnoreCase);
         var authorizedFaenas = user.Faenas.Select(Code).Distinct().ToArray();
@@ -292,6 +292,15 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                 null))
             .ToArrayAsync(ct);
 
+        var chassisByUnit = (await _db.OperationalUnitComponents.AsNoTracking()
+            .Where(component => unitIds.Contains(component.OperationalUnitId) && component.RemovedAtUtc == null && component.ComponentRole.Code == "CHASIS")
+            .Select(component => new { component.OperationalUnitId, component.Asset.Brand, component.Asset.ManufacturingYear })
+            .ToArrayAsync(ct))
+            .GroupBy(component => component.OperationalUnitId)
+            .ToDictionary(group => group.Key, group => group.First());
+        unitRows = unitRows.Select(row => Guid.TryParse(row.OperationalUnitId, out var unitId) && chassisByUnit.TryGetValue(unitId, out var chassis)
+            ? row with { Brand = chassis.Brand, ManufacturingYear = chassis.ManufacturingYear }
+            : row).ToArray();
         var componentLocations = await (from component in _db.OperationalUnitComponents.AsNoTracking()
                    join period in _db.AssetPhysicalLocationPeriods.AsNoTracking() on component.AssetId equals period.AssetId
                    where unitIds.Contains(component.OperationalUnitId) && component.RemovedAtUtc == null && period.ValidToUtc == null
@@ -355,6 +364,19 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
         return new PagedResponse<EquipmentOverviewRow>(items, page, pageSize, total, totalPages, page < totalPages, page > 1);
+    }
+    public async Task<EquipmentOverviewSummary> GetEquipmentOverviewSummaryAsync(EquipmentOverviewQuery query, UserAccessContext user, CancellationToken ct)
+    {
+        var overview = await ListEquipmentOverviewAsync(query with { Page = 1, PageSize = int.MaxValue }, user, ct);
+        var nonOperational = overview.Items.Count(row => !AssetOperationalPolicy.IsAvailable(row.OperationalStateCode) && !AssetOperationalPolicy.IsExcludedFromOperationalUniverse(row.OperationalStateCode));
+        var directAssetIds = overview.Items.Where(row => Guid.TryParse(row.AssetId, out _)).Select(row => Guid.Parse(row.AssetId!)).ToArray();
+        var unitIds = overview.Items.Where(row => Guid.TryParse(row.OperationalUnitId, out _)).Select(row => Guid.Parse(row.OperationalUnitId!)).ToArray();
+        var componentAssetIds = unitIds.Length == 0 ? [] : await _db.OperationalUnitComponents.AsNoTracking().Where(component => unitIds.Contains(component.OperationalUnitId) && component.RemovedAtUtc == null).Select(component => component.AssetId).Distinct().ToArrayAsync(ct);
+        var visibleAssetIds = directAssetIds.Concat(componentAssetIds).Distinct().ToArray();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var documents = visibleAssetIds.Length == 0 ? [] : await _db.DocumentAssets.AsNoTracking().Where(link => link.IsActive && visibleAssetIds.Contains(link.AssetId)).Include(link => link.Document).ThenInclude(document => document.DocumentType).Include(link => link.Document).ThenInclude(document => document.RequirementMatrixItem).Include(link => link.Document).ThenInclude(document => document.Versions).ThenInclude(version => version.File).Select(link => link.Document).Distinct().ToArrayAsync(ct);
+        var expiring = documents.Count(document => document.IsCurrent && !document.IsHistorical && !document.IsAnnulled && !Same(document.Status, nameof(DocumentLifecycleStatus.Anulado)) && !Same(document.Status, nameof(DocumentLifecycleStatus.Reemplazado)) && DocumentComplianceCalculator.Evaluate(document.Status, document.Versions.SingleOrDefault(version => version.IsCurrent)?.ExpiresOn ?? document.ExpiresOn, document.RequirementMatrixItem?.AlertDays ?? document.DocumentType.AlertDays, document.Versions.Any(version => version.IsCurrent), document.BlocksAvailability, today).Status == DocumentLifecycleStatus.PorVencer);
+        return new EquipmentOverviewSummary(overview.TotalCount, nonOperational, expiring);
     }
     public async Task<AssetDetail?> GetByIdAsync(string codigo, UserAccessContext user, CancellationToken ct)
     {

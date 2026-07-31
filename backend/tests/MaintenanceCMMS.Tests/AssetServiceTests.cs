@@ -277,6 +277,53 @@ public sealed class AssetServiceTests
         Assert.InRange(commandsFor25, 1, 12);
         Assert.Equal(commandsFor25, commandsFor50);
     }
+    [Fact]
+    public async Task EquipmentOverview_ProjectsMountedChassisBrandYearAndSummarizesUnifiedRows()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var db = fixture.DbContext;
+        var assetType = await db.AssetTypes.SingleAsync(x => x.Code == "CAMION");
+        var faena = await db.Faenas.SingleAsync(x => x.Code == "F001");
+        var operating = await db.AssetOperationalStates.SingleAsync(x => x.Code == "OPERATIVO");
+        var corrective = await db.AssetOperationalStates.SingleAsync(x => x.Code == "CORRECTIVO");
+        var unitType = new OperationalUnitTypeEntity { Code = "RESUMEN_CAMION", Name = "Camion resumen", IsActive = true };
+        var chassisRole = new OperationalUnitComponentRoleEntity { Code = "CHASIS", Name = "Chasis", IsActive = true };
+        var factoryRole = new OperationalUnitComponentRoleEntity { Code = "FABRICA", Name = "Fabrica", IsActive = true };
+        db.AddRange(unitType, chassisRole, factoryRole);
+        await db.SaveChangesAsync();
+
+        var direct = new AssetEntity { Code = "SUMMARY-DIRECT", Name = "Directo resumen", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = corrective.Id, Brand = "Directa", ManufacturingYear = 2020 };
+        var chassis = new AssetEntity { Code = "SUMMARY-CHASIS-1", Name = "Chasis actual", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = "Marca chasis", ManufacturingYear = 2021 };
+        var factory = new AssetEntity { Code = "SUMMARY-FABRICA", Name = "Fabrica", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = "No debe usarse", ManufacturingYear = 1999 };
+        var unit = new OperationalUnitEntity { Code = "SUMMARY-UNIDAD", Name = "Unidad resumen", OperationalUnitTypeId = unitType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id };
+        db.AddRange(direct, chassis, factory, unit);
+        await db.SaveChangesAsync();
+        db.OperationalUnitComponents.AddRange(
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = chassis.Id, ComponentRoleId = chassisRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" },
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = factory.Id, ComponentRoleId = factoryRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" });
+        await db.SaveChangesAsync();
+
+        var page = await fixture.Service.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "SUMMARY"), Admin, CancellationToken.None);
+        var summary = await fixture.Service.GetEquipmentOverviewSummaryAsync(new EquipmentOverviewQuery(Search: "SUMMARY"), Admin, CancellationToken.None);
+        var projectedUnit = Assert.Single(page.Items.Where(item => item.Code == unit.Code));
+        Assert.Equal("Marca chasis", projectedUnit.Brand);
+        Assert.Equal((short)2021, projectedUnit.ManufacturingYear);
+        Assert.Equal(page.TotalCount, summary.Total);
+        Assert.Equal(1, summary.NonOperational);
+        Assert.Equal(0, summary.ExpiringDocuments);
+
+        var currentChassis = await db.OperationalUnitComponents.SingleAsync(component => component.AssetId == chassis.Id);
+        currentChassis.RemovedAtUtc = DateTimeOffset.UtcNow;
+        var replacement = new AssetEntity { Code = "SUMMARY-CHASIS-2", Name = "Chasis reemplazo", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = null, ManufacturingYear = null };
+        db.Assets.Add(replacement);
+        await db.SaveChangesAsync();
+        db.OperationalUnitComponents.Add(new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = replacement.Id, ComponentRoleId = chassisRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" });
+        await db.SaveChangesAsync();
+
+        projectedUnit = Assert.Single((await fixture.Service.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "SUMMARY-UNIDAD"), Admin, CancellationToken.None)).Items);
+        Assert.Null(projectedUnit.Brand);
+        Assert.Null(projectedUnit.ManufacturingYear);
+    }
     private static async Task PlaceInWorkshopAsync(CmmsDbContext db, string assetCode)
     {
         var asset = await db.Assets.SingleAsync(x => x.Code == assetCode);

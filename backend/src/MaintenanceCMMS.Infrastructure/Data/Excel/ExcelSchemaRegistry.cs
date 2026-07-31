@@ -97,6 +97,7 @@ public sealed class ExcelSchemaRegistry : IExcelSchemaRegistry
             RequiredText("EstadoOperacionalCodigo"),
             OptionalText("FaenaCodigo"),
             OptionalText("Marca"),
+            OptionalNumber("AnioFabricacion"),
             OptionalText("Modelo"),
             OptionalText("NumeroSerie"),
             OptionalText("Criticidad"),

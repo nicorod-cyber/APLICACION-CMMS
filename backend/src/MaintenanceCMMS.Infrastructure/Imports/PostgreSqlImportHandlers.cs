@@ -496,6 +496,8 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             if (!stateCodes.Contains(requestedStateCode)) errors.Add(Error(row, "EstadoOperacionalCodigo", "El estado operacional no existe."));
             var criticality = Empty(Value(row.Values, "Criticidad"));
             if (criticality is not null && !criticalities.Any(item => string.Equals(item.Code, criticality, StringComparison.OrdinalIgnoreCase) || string.Equals(item.Name, criticality, StringComparison.OrdinalIgnoreCase))) errors.Add(Error(row, "Criticidad", $"La criticidad '{criticality}' no existe en el catalogo WorkNotificationCriticality."));
+            var manufacturingYear = Value(row.Values, "AnioFabricacion");
+            if (manufacturingYear.Length > 0 && (!short.TryParse(manufacturingYear, NumberStyles.Integer, CultureInfo.InvariantCulture, out var year) || year < 1900 || year > DateTime.UtcNow.Year + 2)) errors.Add(Error(row, "AnioFabricacion", $"El año de fabricación debe estar entre 1900 y {DateTime.UtcNow.Year + 2}."));
             var faenaCode = Code(row.Values, "FaenaCodigo");
             if (faenaCode.Length > 0)
             {
@@ -545,6 +547,7 @@ public sealed class AssetPostgreSqlImportHandler(CmmsDbContext db) : PostgreSqlI
             entity.AssetTypeId = requestedTypeId;
             if (isNew) { entity.OperationalStateId = requestedStateId; entity.FaenaId = faena?.Id; Db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = entity.Id, FaenaId = faena?.Id, ValidFromUtc = entity.CreatedAtUtc }); if (faena is not null) Db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = entity.Id, LocationType = "FAENA", FaenaId = faena.Id, ValidFromUtc = entity.CreatedAtUtc, RegisteredByUserId = appliedBy, Reason = "Ubicacion inicial importada" }); }
             entity.Brand = Empty(Value(row.Values, "Marca"));
+            if (row.Values.ContainsKey("AnioFabricacion") && !string.IsNullOrWhiteSpace(RawValue(row.Values, "AnioFabricacion"))) entity.ManufacturingYear = short.Parse(Value(row.Values, "AnioFabricacion"), CultureInfo.InvariantCulture);
             entity.Model = Empty(Value(row.Values, "Modelo"));
             var nextSerial = Empty(Value(row.Values, "NumeroSerie"));
             if (!string.Equals(entity.SerialNumber, nextSerial, StringComparison.OrdinalIgnoreCase))
