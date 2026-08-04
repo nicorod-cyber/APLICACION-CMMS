@@ -227,7 +227,7 @@ public sealed class OperationalUnitServiceTests
                 new TechnicalLocationEntity
                 {
                     Code = "UT-F001",
-                    Name = "UbicaciÃ³n tÃ©cnica Faena",
+                    Name = "Ubicación ténica Faena",
                     FaenaId = faena.Id,
                     Faena = faena,
                     IsObsolete = false

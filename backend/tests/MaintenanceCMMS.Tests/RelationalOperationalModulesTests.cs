@@ -152,8 +152,8 @@ public sealed class RelationalOperationalModulesTests
         var service = new SchedulingService(db);
         await service.UpsertWorkshopAsync(new("TAL-REL", "Taller relacional", 4, "Antofagasta", PostgreSqlWorkTestFixture.SupervisorUserId.ToString("D")), Admin, CancellationToken.None);
         var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(8), TimeSpan.Zero);
-        await service.ScheduleWorkOrderAsync("OT-REL-1", new("TAL-REL", start, start.AddHours(2), 2, "PlanificaciÃ³n"), Admin, CancellationToken.None);
-        await service.ScheduleWorkOrderAsync("OT-REL-2", new("TAL-REL", start.AddHours(3), start.AddHours(5), 2, "PlanificaciÃ³n"), Admin, CancellationToken.None);
+        await service.ScheduleWorkOrderAsync("OT-REL-1", new("TAL-REL", start, start.AddHours(2), 2, "Planificación"), Admin, CancellationToken.None);
+        await service.ScheduleWorkOrderAsync("OT-REL-2", new("TAL-REL", start.AddHours(3), start.AddHours(5), 2, "Planificación"), Admin, CancellationToken.None);
         await service.AddDependencyAsync(new("OT-REL-1", "OT-REL-2"), Admin, CancellationToken.None);
 
         await Assert.ThrowsAsync<MaintenanceCMMS.Domain.Common.DomainException>(() => service.AddDependencyAsync(new("OT-REL-1", "OT-REL-2"), Admin, CancellationToken.None));
@@ -172,7 +172,7 @@ public sealed class RelationalOperationalModulesTests
         var service = new ProcurementService(fixture.DbContext, inventory, audit);
 
         await service.CreateSupplierAsync(new("76.123.456-7", "Proveedor relacional"), Admin, CancellationToken.None);
-        var request = await service.CreateRequestAsync(new("Filtro hidrÃ¡ulico", 2, "UN", "ReposiciÃ³n", FaenaCodigo: "FAE-1"), Admin, CancellationToken.None);
+        var request = await service.CreateRequestAsync(new("Filtro hidrílico", 2, "UN", "Reposición", FaenaCodigo: "FAE-1"), Admin, CancellationToken.None);
         var linked = await service.LinkPurchaseOrderAsync(request.SolicitudId, new("OC-REL-1", "76.123.456-7", DateTimeOffset.UtcNow.AddDays(7), "Compra aprobada"), Admin, CancellationToken.None);
 
         Assert.NotNull(linked);
