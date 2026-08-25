@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   CalendarClock,
@@ -20,6 +20,7 @@ import {
 import { AUTH_ROLES, apiFetch, useAuthStore } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
 import { MaintenanceTargetSelect, type MaintenanceTargetReference } from "../maintenance-targets/MaintenanceTargetSelect";
+import { Dialog } from "../../shared/ui/Dialog";
 
 type WorkOrderStatus =
   | "OTCreada"
@@ -257,13 +258,16 @@ const emptyTaskForm = {
 export function WorkOrdersPage() {
   const currentUser = useAuthStore((state) => state.user);
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { numeroOT } = useParams();
   const targetCode = searchParams.get("targetCode");
   const targetType = searchParams.get("targetType");
   const [orders, setOrders] = useState<WorkOrderSummary[]>([]);
   const [assets, setAssets] = useState<AssetSummary[]>([]);
   const [operationalUnits, setOperationalUnits] = useState<OperationalUnitSummary[]>([]);
   const [spareParts, setSpareParts] = useState<SparePartSummary[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(numeroOT ?? "");
+  const [createOpen, setCreateOpen] = useState(Boolean(searchParams.get("targetCode")));
   const [detail, setDetail] = useState<WorkOrderDetail | null>(null);
   const [filters, setFilters] = useState({ status: "", faenaCodigo: "", technicianId: "", activoCodigo: "", unidadOperativaCodigo: "", includeClosed: false });
   const [orderForm, setOrderForm] = useState(emptyOrderForm);
@@ -292,6 +296,10 @@ export function WorkOrdersPage() {
   }, [filters.status, filters.faenaCodigo, filters.technicianId, filters.activoCodigo, filters.unidadOperativaCodigo, filters.includeClosed]);
 
   useEffect(() => {
+    setSelectedId(numeroOT ?? "");
+  }, [numeroOT]);
+
+  useEffect(() => {
     if (selectedId) {
       void loadDetail(selectedId);
     }
@@ -316,7 +324,7 @@ export function WorkOrdersPage() {
       })
       .catch(error => setError(error instanceof Error ? error.message : "No fue posible preseleccionar el objetivo."));
   }, [targetCode, targetType]);
-  const selected = detail?.summary ?? orders.find((item) => item.numeroOT === selectedId) ?? orders[0] ?? null;
+  const selected = detail?.summary ?? orders.find((item) => item.numeroOT === selectedId) ?? null;
   const byStatus = useMemo(() => {
     return kanbanColumns.map((status) => ({
       status,
@@ -346,9 +354,7 @@ export function WorkOrdersPage() {
       setAssets(assetResult);
       setSpareParts(spareResult);
       setOperationalUnits(unitResult);
-      if (!selectedId && orderResult[0]) {
-        setSelectedId(orderResult[0].numeroOT);
-      }
+
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "No fue posible cargar las OT.");
     } finally {
@@ -396,7 +402,9 @@ export function WorkOrdersPage() {
         : await apiFetch<WorkOrderDetail>("/api/work-orders", { method: "POST", body: JSON.stringify(body) });
       setOrderForm(emptyOrderForm);
       setSelectedId(created.summary.numeroOT);
+      setCreateOpen(false);
       setMessage(`OT ${created.summary.numeroOT} creada.`);
+      navigate(`/ot/${encodeURIComponent(created.summary.numeroOT)}`);
     });
   }
 
@@ -624,9 +632,12 @@ export function WorkOrdersPage() {
           <h1>Ordenes de trabajo</h1>
           <p>OT, tareas internas, tecnicos, HH, evidencias, repuestos, checklist y firma.</p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => void loadAll()}>
-          <RefreshCw size={18} /> Actualizar
-        </button>
+        <div className="toolbar">
+          {!numeroOT ? <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}><Plus size={18} /> Nueva OT</button> : <button className="secondary-button" type="button" onClick={() => navigate("/ot")}>Volver a OT</button>}
+          <button className="secondary-button" type="button" onClick={() => void loadAll()}>
+            <RefreshCw size={18} /> Actualizar
+          </button>
+        </div>
       </header>
 
       <section className="kpi-grid xl:grid-cols-4">
@@ -639,8 +650,13 @@ export function WorkOrdersPage() {
       {message ? <div className="success-banner">{message}</div> : null}
       {error ? <div className="error-banner">{error}</div> : null}
 
+      {!numeroOT ? <>
       <div className="two-column-layout">
-        <form className="panel stack" onSubmit={createOrder}>
+        <section className="panel stack">
+          <p className="text-sm text-slate-600 dark:text-slate-300">Cree una orden desde el diálogo y abra una fila para ver su operación completa.</p>
+          <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}><Plus size={18} /> Nueva OT</button>
+          <Dialog open={createOpen} title="Nueva OT" onClose={() => setCreateOpen(false)} busy={isSaving} className="max-w-5xl">
+        <form className="stack" onSubmit={createOrder}>
           <div className="section-heading">
             <h2>Nueva OT</h2>
           </div>
@@ -713,6 +729,8 @@ export function WorkOrdersPage() {
             <Save size={18} /> Crear OT
           </button>
         </form>
+          </Dialog>
+        </section>
 
         <section className="panel stack">
           <div className="section-heading">
@@ -756,7 +774,7 @@ export function WorkOrdersPage() {
               </thead>
               <tbody>
                 {orders.map((item) => (
-                  <tr key={item.numeroOT} className={selected?.numeroOT === item.numeroOT ? "selected-row" : ""} onClick={() => setSelectedId(item.numeroOT)}>
+                  <tr key={item.numeroOT} className={selected?.numeroOT === item.numeroOT ? "selected-row" : ""} onClick={() => navigate(`/ot/${encodeURIComponent(item.numeroOT)}`)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); navigate(`/ot/${encodeURIComponent(item.numeroOT)}`); } }} tabIndex={0} aria-label={`Abrir OT ${item.numeroOT}`}>
                     <td>
                       <strong>{item.numeroOT}</strong>
                       <small>{item.descripcion}</small>
@@ -792,7 +810,7 @@ export function WorkOrdersPage() {
               <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">{statusLabels[column.status]}</h3>
               <div className="mt-3 space-y-2">
                 {column.items.map((item) => (
-                  <button key={item.numeroOT} className="w-full rounded-md border border-slate-200 bg-white p-3 text-left text-sm dark:border-slate-800 dark:bg-slate-900" type="button" onClick={() => setSelectedId(item.numeroOT)}>
+                  <button key={item.numeroOT} className="w-full rounded-md border border-slate-200 bg-white p-3 text-left text-sm dark:border-slate-800 dark:bg-slate-900" type="button" onClick={() => navigate(`/ot/${encodeURIComponent(item.numeroOT)}`)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); navigate(`/ot/${encodeURIComponent(item.numeroOT)}`); } }} tabIndex={0} aria-label={`Abrir OT ${item.numeroOT}`}>
                     <strong className="block text-slate-900 dark:text-slate-100">{item.numeroOT}</strong>
                     <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{targetLabel(item)}</span>
                   </button>
@@ -802,8 +820,9 @@ export function WorkOrdersPage() {
           ))}
         </div>
       </section>
+      </> : null}
 
-      {detail ? (
+      {numeroOT && detail ? (
         <section className="panel stack">
           <div className="section-heading">
             <div>

@@ -1,9 +1,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, Bell, CheckCircle2, ClipboardList, RefreshCw, Send, Wrench, XCircle } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
 import { MaintenanceTargetSelect, type MaintenanceTargetReference } from "../maintenance-targets/MaintenanceTargetSelect";
+import { Dialog } from "../../shared/ui/Dialog";
 
 type WorkNotificationType =
   | "Falla"
@@ -133,12 +134,15 @@ const closedStatuses: WorkNotificationStatus[] = ["Rechazado", "ConvertidoOT", "
 
 export function WorkNotificationsPage() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { avisoId } = useParams();
   const targetCode = searchParams.get("targetCode");
   const targetType = searchParams.get("targetType");
   const [notifications, setNotifications] = useState<WorkNotification[]>([]);
   const [assets, setAssets] = useState<AssetSummary[]>([]);
   const [operationalUnits, setOperationalUnits] = useState<OperationalUnitSummary[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(avisoId ?? "");
+  const [createOpen, setCreateOpen] = useState(Boolean(searchParams.get("targetCode")));
   const [form, setForm] = useState<NotificationForm>(emptyForm);
   const [filters, setFilters] = useState({ status: "", type: "", priority: "", faenaCodigo: "", includeClosed: false, supervisorInbox: true });
   const [reason, setReason] = useState("");
@@ -151,6 +155,17 @@ export function WorkNotificationsPage() {
   useEffect(() => {
     void loadAll();
   }, [filters.status, filters.type, filters.priority, filters.faenaCodigo, filters.includeClosed, filters.supervisorInbox]);
+
+  useEffect(() => {
+    setSelectedId(avisoId ?? "");
+  }, [avisoId]);
+
+  useEffect(() => {
+    if (!avisoId) return;
+    void apiFetch<WorkNotification>(`/api/work-notifications/${encodeURIComponent(avisoId)}`)
+      .then((notification) => setNotifications((current) => [...current.filter((item) => item.avisoId !== notification.avisoId), notification]))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "No fue posible cargar el aviso solicitado."));
+  }, [avisoId]);
 
   useEffect(() => {
     if (!targetCode || (targetType !== "Asset" && targetType !== "OperationalUnit")) return;
@@ -174,7 +189,7 @@ export function WorkNotificationsPage() {
   }, [targetCode, targetType]);
   const assetByCode = useMemo(() => new Map(assets.map((item) => [item.codigo, item])), [assets]);
   const unitByCode = useMemo(() => new Map(operationalUnits.map((item) => [item.codigo, item])), [operationalUnits]);
-  const selected = useMemo(() => notifications.find((item) => item.avisoId === selectedId) ?? notifications[0] ?? null, [notifications, selectedId]);
+  const selected = useMemo(() => notifications.find((item) => item.avisoId === selectedId) ?? null, [notifications, selectedId]);
   const asset = selected?.activoCodigo ? assetByCode.get(selected.activoCodigo) : null;
   const operationalUnit = selected?.unidadOperativaCodigo ? unitByCode.get(selected.unidadOperativaCodigo) : null;
 
@@ -207,9 +222,7 @@ export function WorkNotificationsPage() {
       setNotifications(notificationResult);
       setAssets(assetResult);
       setOperationalUnits(unitResult);
-      if (!selectedId && notificationResult[0]) {
-        setSelectedId(notificationResult[0].avisoId);
-      }
+
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "No fue posible cargar avisos.");
     } finally {
@@ -240,7 +253,9 @@ export function WorkNotificationsPage() {
       });
       setForm(emptyForm);
       setSelectedId(created.avisoId);
+      setCreateOpen(false);
       setMessage(`Aviso ${created.avisoId} creado.`);
+      navigate(`/avisos/${encodeURIComponent(created.avisoId)}`);
     });
   }
 
@@ -312,9 +327,12 @@ export function WorkNotificationsPage() {
           <h1>Avisos de trabajo</h1>
           <p>Registro, evaluacion y conversion de condiciones detectadas a ordenes de trabajo.</p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => void loadAll()}>
-          <RefreshCw size={18} /> Actualizar
-        </button>
+        <div className="toolbar">
+          {!avisoId ? <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}><Bell size={18} /> Nuevo aviso</button> : <button className="secondary-button" type="button" onClick={() => navigate("/avisos")}>Volver a avisos</button>}
+          <button className="secondary-button" type="button" onClick={() => void loadAll()}>
+            <RefreshCw size={18} /> Actualizar
+          </button>
+        </div>
       </header>
 
       <section className="kpi-grid xl:grid-cols-4">
@@ -327,8 +345,12 @@ export function WorkNotificationsPage() {
       {message ? <div className="success-banner">{message}</div> : null}
       {error ? <div className="error-banner">{error}</div> : null}
 
-      <div className="two-column-layout">
-        <form className="panel stack" onSubmit={submitNotification}>
+      {!avisoId ? <div className="two-column-layout">
+        <section className="panel stack">
+          <p className="text-sm text-slate-600 dark:text-slate-300">Cree avisos desde una ventana emergente para mantener el listado enfocado en consulta.</p>
+          <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}><Bell size={18} /> Nuevo aviso</button>
+          <Dialog open={createOpen} title="Nuevo aviso" onClose={() => setCreateOpen(false)} busy={isSaving} className="max-w-5xl">
+        <form className="stack" onSubmit={submitNotification}>
           <div className="section-heading">
             <h2>Crear aviso</h2>
           </div>
@@ -409,6 +431,8 @@ export function WorkNotificationsPage() {
             <Send size={18} /> Crear aviso
           </button>
         </form>
+          </Dialog>
+        </section>
 
         <section className="panel stack">
           <div className="section-heading">
@@ -468,7 +492,7 @@ export function WorkNotificationsPage() {
                   const rowAsset = item.activoCodigo ? assetByCode.get(item.activoCodigo) : null;
                   const rowUnit = item.unidadOperativaCodigo ? unitByCode.get(item.unidadOperativaCodigo) : null;
                   return (
-                    <tr key={item.avisoId} className={selected?.avisoId === item.avisoId ? "selected-row" : ""} onClick={() => setSelectedId(item.avisoId)}>
+                    <tr key={item.avisoId} className={selected?.avisoId === item.avisoId ? "selected-row" : ""} onClick={() => navigate(`/avisos/${encodeURIComponent(item.avisoId)}`)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); navigate(`/avisos/${encodeURIComponent(item.avisoId)}`); } }} tabIndex={0} aria-label={`Abrir aviso ${item.avisoId}`}>
                       <td>
                         <strong>{item.avisoId}</strong>
                         <small>{item.descripcion}</small>
@@ -494,13 +518,13 @@ export function WorkNotificationsPage() {
             </table>
           </div>
         </section>
-      </div>
+      </div> : null}
 
-      {selected ? (
+      {avisoId && selected ? (
         <section className="panel stack">
           <div className="section-heading">
             <div>
-              <h2>{selected.avisoId} - {typeLabels[selected.tipo]}</h2>
+              <div><p className="eyebrow">Avisos / {selected.avisoId}</p><h2>{selected.avisoId} - {typeLabels[selected.tipo]}</h2></div>
               <p>{selected.descripcion}</p>
             </div>
             <span className={`status-pill ${selected.estado === "ConvertidoOT" ? "success" : closedStatuses.includes(selected.estado) ? "danger" : ""}`}>
@@ -510,8 +534,8 @@ export function WorkNotificationsPage() {
 
           <div className="detail-grid">
             <Info label="Faena" value={selected.faenaCodigo || "-"} />
-            <Info label="Activo" value={asset ? `${asset.nombre} (${asset.codigo})` : selected.activoCodigo ?? "-"} />
-            <Info label="Unidad operativa" value={operationalUnit ? `${operationalUnit.nombre} (${operationalUnit.codigo})` : selected.unidadOperativaCodigo ?? "-"} />
+            {selected.activoCodigo ? <Link className="text-sm font-medium text-teal-700 underline dark:text-teal-300" to={`/equipos/activos/${encodeURIComponent(selected.activoCodigo)}`}>{asset ? `${asset.nombre} (${asset.codigo})` : selected.activoCodigo}</Link> : <Info label="Activo" value="-" />}
+            {selected.unidadOperativaCodigo ? <Link className="text-sm font-medium text-teal-700 underline dark:text-teal-300" to={`/equipos/unidades/${encodeURIComponent(selected.unidadOperativaCodigo)}`}>{operationalUnit ? `${operationalUnit.nombre} (${operationalUnit.codigo})` : selected.unidadOperativaCodigo}</Link> : <Info label="Unidad operativa" value="-" />}
             <Info label="Ubicacion tecnica" value={asset?.ubicacionTecnicaCodigo ?? "-"} />
             <Info label="Sistema" value={[selected.sistema, selected.subsistema, selected.componente].filter(Boolean).join(" / ") || "-"} />
             <Info label="Prioridad" value={selected.prioridad} />
@@ -522,6 +546,7 @@ export function WorkNotificationsPage() {
             <Info label="Evidencia" value={selected.evidenciaInicial ?? "-"} />
             <Info label="Aprobado por" value={selected.aprobadoPor ?? "-"} />
             <Info label="OT generada" value={selected.numeroOT ?? "-"} />
+            {selected.numeroOT ? <Link className="text-sm font-medium text-teal-700 underline dark:text-teal-300" to={`/ot/${encodeURIComponent(selected.numeroOT)}`}>Abrir OT {selected.numeroOT}</Link> : null}
           </div>
 
           <div className="form-grid">

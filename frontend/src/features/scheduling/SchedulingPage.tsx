@@ -1,4 +1,5 @@
 import { FormEvent, DragEvent, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { AlertTriangle, CalendarDays, GitBranch, KanbanSquare, RefreshCw, Save, Wrench } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
@@ -128,11 +129,13 @@ const emptySchedule = {
   overrideCapacity: false
 };
 
-export function SchedulingPage() {
+export function SchedulingPage({ activeView }: { activeView?: string }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [board, setBoard] = useState<ScheduleBoard | null>(null);
   const [orders, setOrders] = useState<WorkOrderSummary[]>([]);
   const [supervisors, setSupervisors] = useState<WorkshopSupervisor[]>([]);
-  const [filters, setFilters] = useState({ view: "Semanal" as ScheduleViewMode, faenaCodigo: "", tallerCodigo: "", from: "", to: "", includeClosed: false });
+  const [filters, setFilters] = useState({ view: (searchParams.get("view") as ScheduleViewMode) || "Semanal", faenaCodigo: searchParams.get("faenaCodigo") || "", tallerCodigo: searchParams.get("tallerCodigo") || "", from: searchParams.get("from") || "", to: searchParams.get("to") || "", includeClosed: searchParams.get("includeClosed") === "true" });
+  useEffect(() => { const next = new URLSearchParams(); next.set("view", filters.view); if (filters.faenaCodigo) next.set("faenaCodigo", filters.faenaCodigo); if (filters.tallerCodigo) next.set("tallerCodigo", filters.tallerCodigo); if (filters.from) next.set("from", filters.from); if (filters.to) next.set("to", filters.to); if (filters.includeClosed) next.set("includeClosed", "true"); setSearchParams(next, { replace: true }); }, [filters, setSearchParams]);
   const [workshopForm, setWorkshopForm] = useState(emptyWorkshop);
   const [scheduleForm, setScheduleForm] = useState(emptySchedule);
   const [dependencyForm, setDependencyForm] = useState({ predecessorNumeroOT: "", successorNumeroOT: "", motivo: "" });
@@ -279,7 +282,7 @@ export function SchedulingPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Planificacion</p>
-          <h1>Programacion</h1>
+          <h1>Programacion{activeView ? ` / ${activeView}` : ""}</h1>
           <p>Calendario, Kanban, Gantt, talleres, capacidad y alertas operativas.</p>
         </div>
         <button className="secondary-button" type="button" onClick={() => void load()}>
@@ -308,7 +311,7 @@ export function SchedulingPage() {
           <input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} />
           <select value={filters.tallerCodigo} onChange={(event) => setFilters({ ...filters, tallerCodigo: event.target.value })}>
             <option value="">Todos los talleres</option>
-            {(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre} — {item.comuna ?? "sin comuna"}</option>)}
+            {(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre} - {item.comuna ?? "sin comuna"}</option>)}
           </select>
           <label className="check-row"><input type="checkbox" checked={filters.includeClosed} onChange={(event) => setFilters({ ...filters, includeClosed: event.target.checked })} />Cerradas</label>
         </div>
@@ -331,7 +334,7 @@ export function SchedulingPage() {
           <div className="section-heading"><h2>Programar OT</h2></div>
           <div className="form-grid">
             <label>OT<select value={scheduleForm.numeroOT} onChange={(event) => setScheduleForm({ ...scheduleForm, numeroOT: event.target.value })} required><option value="">Selecciona OT</option>{orders.map((item) => <option key={item.numeroOT} value={item.numeroOT}>{item.numeroOT} - {workOrderTargetLabel(item)}</option>)}</select></label>
-            <label>Taller<select value={scheduleForm.tallerCodigo} onChange={(event) => setScheduleForm({ ...scheduleForm, tallerCodigo: event.target.value })} required><option value="">Selecciona taller</option>{(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre} — {item.comuna ?? "sin comuna"}</option>)}</select></label>
+            <label>Taller<select value={scheduleForm.tallerCodigo} onChange={(event) => setScheduleForm({ ...scheduleForm, tallerCodigo: event.target.value })} required><option value="">Selecciona taller</option>{(board?.workshops ?? []).map((item) => <option key={item.tallerCodigo} value={item.tallerCodigo}>{item.nombre} - {item.comuna ?? "sin comuna"}</option>)}</select></label>
             <label>Inicio<input type="datetime-local" value={scheduleForm.fechaInicio} onChange={(event) => setScheduleForm({ ...scheduleForm, fechaInicio: event.target.value })} required /></label>
             <label>Fin<input type="datetime-local" value={scheduleForm.fechaFin} onChange={(event) => setScheduleForm({ ...scheduleForm, fechaFin: event.target.value })} required /></label>
             <label>HH estimadas<input type="number" min="0.1" step="0.1" value={scheduleForm.hhEstimadas} onChange={(event) => setScheduleForm({ ...scheduleForm, hhEstimadas: event.target.value })} required /></label>
@@ -405,7 +408,7 @@ export function SchedulingPage() {
 function ScheduleCard({ item, onDragStart }: { item: ScheduleItem; onDragStart: () => void }) {
   return (
     <article draggable className="rounded-md border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-900" onDragStart={onDragStart}>
-      <strong className="block text-slate-900 dark:text-slate-100">{item.numeroOT}</strong>
+      <Link className="block font-semibold text-teal-700 underline dark:text-teal-300" to={`/ot/${encodeURIComponent(item.numeroOT)}`}>{item.numeroOT}</Link>
       <span className="block text-xs text-slate-500 dark:text-slate-400">{scheduleTargetLabel(item)}</span>
       <span className="mt-2 block">{item.tallerNombre}</span>
       <span className="block text-xs">{formatDateTime(item.fechaInicio)} - {formatDateTime(item.fechaFin)}</span>

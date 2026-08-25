@@ -1,463 +1,54 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CalendarDays, Clock, Gauge, PlayCircle, RefreshCw, Save, Wrench } from "lucide-react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { AlertTriangle, Gauge, PlayCircle, Plus, RefreshCw } from "lucide-react";
 import { apiFetch } from "../auth/authStore";
 import { FaenaSelect } from "../faenas/FaenaSelect";
+import { Dialog } from "../../shared/ui/Dialog";
 
-type PreventiveStatus = "Vigente" | "ProximoAVencer" | "EnVentana" | "Vencido" | "OTGenerada" | "Ejecutado" | "Reprogramado";
-type PreventiveFrequencyType = "Horas" | "Kilometros" | "Calendario" | "Mixta";
+type Status = "Vigente" | "ProximoAVencer" | "EnVentana" | "Vencido" | "OTGenerada" | "Ejecutado" | "Reprogramado";
+type Asset = { codigo: string; nombre: string; faenaCodigo?: string | null };
+type Plan = { codigo: string; nombre: string; activoCodigo?: string | null; activoNombre?: string | null; faenaCodigo?: string | null; familiaEquipo?: string | null; marca?: string | null; modelo?: string | null; tipoFrecuencia: string; frecuenciaHoras?: number | null; frecuenciaKm?: number | null; frecuenciaDias?: number | null; toleranciaHoras: number; toleranciaKm: number; toleranciaDias: number; checklistCodigo?: string | null; repuestosSugeridos?: string | null; hhEstimadas: number; proximaFecha?: string | null; proximaHora?: number | null; proximoKm?: number | null; estado: Status; activo: boolean };
+type Due = { planCodigo: string; nombre: string; activoCodigo: string; activoNombre?: string | null; faenaCodigo: string; estado: Status; numeroOT?: string | null; mensaje: string };
+type Reading = { id: string; activoCodigo: string; activoNombre?: string | null; faenaCodigo?: string | null; fechaLecturaUtc: string; valor: number; unidad: string; esCorreccion: boolean; esAnomala: boolean; mensajeValidacion?: string | null };
+type Calendar = { planCodigo: string; nombre: string; activoCodigo: string; activoNombre?: string | null; faenaCodigo: string; fecha: string; estado: Status; numeroOT?: string | null };
+type History = { historyId: string; planCodigo: string; activoCodigo: string; estadoAnterior: Status; estadoNuevo: Status; fechaUtc: string; usuarioId: string; motivo: string; numeroOT?: string | null };
+type Dashboard = { plans: Plan[]; dueItems: Due[]; calendar: Calendar[]; history: History[] };
+type View = "overview" | "detail" | "calendar" | "readings";
+const status: Record<Status, string> = { Vigente: "Vigente", ProximoAVencer: "Proximo", EnVentana: "En ventana", Vencido: "Vencido", OTGenerada: "OT generada", Ejecutado: "Ejecutado", Reprogramado: "Reprogramado" };
+const newPlan = () => ({ codigo: "", nombre: "", activoCodigo: "", familiaEquipo: "", marca: "", modelo: "", frecuenciaHoras: "", frecuenciaKm: "", frecuenciaDias: "", toleranciaHoras: "0", toleranciaKm: "0", toleranciaDias: "0", checklistCodigo: "", repuestosSugeridos: "", hhEstimadas: "2", reason: "Configuracion preventivo" });
+const newReading = () => ({ activoCodigo: "", valor: "", fechaLectura: new Date().toISOString().slice(0, 16), evidencia: "", autorizarCorreccion: false, motivoCorreccion: "" });
 
-type AssetSummary = {
-  codigo: string;
-  nombre: string;
-  faenaCodigo?: string | null;
-  tipoMedicionUso?: "HOROMETRO" | "KILOMETRAJE" | null;
-  ultimaLectura?: number | null;
-  unidadLectura?: string | null;
-};
-
-type PreventivePlan = {
-  codigo: string;
-  nombre: string;
-  activoCodigo?: string | null;
-  activoNombre?: string | null;
-  faenaCodigo?: string | null;
-  familiaEquipo?: string | null;
-  marca?: string | null;
-  modelo?: string | null;
-  tipoFrecuencia: PreventiveFrequencyType;
-  frecuenciaHoras?: number | null;
-  frecuenciaKm?: number | null;
-  frecuenciaDias?: number | null;
-  toleranciaHoras: number;
-  toleranciaKm: number;
-  toleranciaDias: number;
-  checklistCodigo?: string | null;
-  repuestosSugeridos?: string | null;
-  hhEstimadas: number;
-  proximaFecha?: string | null;
-  proximaHora?: number | null;
-  proximoKm?: number | null;
-  estado: PreventiveStatus;
-  activo: boolean;
-};
-
-type PreventiveDue = {
-  planCodigo: string;
-  nombre: string;
-  activoCodigo: string;
-  activoNombre?: string | null;
-  faenaCodigo: string;
-  estado: PreventiveStatus;
-  horasRestantes?: number | null;
-  kmRestantes?: number | null;
-  diasRestantes?: number | null;
-  fechaVencimientoEstimada?: string | null;
-  numeroOT?: string | null;
-  mensaje: string;
-};
-
-type PreventiveReading = {
-  id: string;
-  activoCodigo: string;
-  activoNombre?: string | null;
-  faenaCodigo?: string | null;
-  fechaLecturaUtc: string;
-  valor: number;
-  unidad: string;
-  esCorreccion: boolean;
-  esAnomala: boolean;
-  mensajeValidacion?: string | null;
-};
-
-type PreventiveCalendarItem = {
-  planCodigo: string;
-  nombre: string;
-  activoCodigo: string;
-  activoNombre?: string | null;
-  faenaCodigo: string;
-  fecha: string;
-  estado: PreventiveStatus;
-  numeroOT?: string | null;
-};
-
-type PreventiveHistory = {
-  historyId: string;
-  planCodigo: string;
-  activoCodigo: string;
-  estadoAnterior: PreventiveStatus;
-  estadoNuevo: PreventiveStatus;
-  fechaUtc: string;
-  usuarioId: string;
-  motivo: string;
-  numeroOT?: string | null;
-};
-
-type PreventiveDashboard = {
-  plans: PreventivePlan[];
-  dueItems: PreventiveDue[];
-  calendar: PreventiveCalendarItem[];
-  history: PreventiveHistory[];
-};
-
-const emptyPlan = {
-  codigo: "",
-  nombre: "",
-  activoCodigo: "",
-  familiaEquipo: "",
-  marca: "",
-  modelo: "",
-  frecuenciaHoras: "",
-  frecuenciaKm: "",
-  frecuenciaDias: "",
-  toleranciaHoras: "0",
-  toleranciaKm: "0",
-  toleranciaDias: "0",
-  checklistCodigo: "",
-  repuestosSugeridos: "",
-  hhEstimadas: "2",
-  reason: "Configuracion preventivo"
-};
-
-const emptyReading = {
-  activoCodigo: "",
-  valor: "",
-  fechaLectura: new Date().toISOString().slice(0, 16),
-  evidencia: "",
-  autorizarCorreccion: false,
-  motivoCorreccion: ""
-};
-
-const statusLabels: Record<PreventiveStatus, string> = {
-  Vigente: "Vigente",
-  ProximoAVencer: "Proximo",
-  EnVentana: "En ventana",
-  Vencido: "Vencido",
-  OTGenerada: "OT generada",
-  Ejecutado: "Ejecutado",
-  Reprogramado: "Reprogramado"
-};
-
-export function PreventiveMaintenancePage() {
-  const [dashboard, setDashboard] = useState<PreventiveDashboard | null>(null);
-  const [readings, setReadings] = useState<PreventiveReading[]>([]);
-  const [assets, setAssets] = useState<AssetSummary[]>([]);
-  const [filters, setFilters] = useState({ faenaCodigo: "", activoCodigo: "" });
-  const [planForm, setPlanForm] = useState(emptyPlan);
-  const [readingForm, setReadingForm] = useState(emptyReading);
-  const [reprogramForm, setReprogramForm] = useState({ planCode: "", proximaFecha: "", proximaHora: "", proximoKm: "", reason: "" });
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    void load();
-  }, [filters.faenaCodigo, filters.activoCodigo]);
-
-  const counters = useMemo(() => {
-    const due = dashboard?.dueItems ?? [];
-    return {
-      plans: dashboard?.plans.length ?? 0,
-      window: due.filter((item) => item.estado === "EnVentana").length,
-      overdue: due.filter((item) => item.estado === "Vencido").length,
-      generated: due.filter((item) => item.estado === "OTGenerada").length
-    };
-  }, [dashboard]);
-
-  async function load() {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const query = new URLSearchParams();
-      if (filters.faenaCodigo) query.set("faenaCodigo", filters.faenaCodigo);
-      if (filters.activoCodigo) query.set("activoCodigo", filters.activoCodigo);
-      const [dashboardResult, assetResult] = await Promise.all([
-        apiFetch<PreventiveDashboard>(`/api/preventive/dashboard?${query}`),
-        apiFetch<{ items: AssetSummary[] }>(filters.faenaCodigo ? `/api/assets?faenaCodigo=${encodeURIComponent(filters.faenaCodigo)}&page=1&pageSize=100` : "/api/assets?page=1&pageSize=100").then((page) => page.items)
-      ]);
-      const selectedAssets = filters.activoCodigo ? assetResult.filter((asset) => asset.codigo === filters.activoCodigo) : assetResult;
-      const readingGroups = await Promise.all(selectedAssets.map(async (asset) => {
-        const rows = await apiFetch<Array<{ id: string; fechaLecturaUtc: string; valor: number; unidad: string; esCorreccion: boolean; esAnomala: boolean; mensajeValidacion?: string | null }>>(`/api/assets/${encodeURIComponent(asset.codigo)}/readings`);
-        return rows.map((row) => ({ ...row, activoCodigo: asset.codigo, activoNombre: asset.nombre, faenaCodigo: asset.faenaCodigo }));
-      }));
-      setDashboard(dashboardResult);
-      setReadings(readingGroups.flat().sort((a, b) => b.fechaLecturaUtc.localeCompare(a.fechaLecturaUtc)));
-      setAssets(assetResult);
-      setPlanForm((current) => ({ ...current, activoCodigo: current.activoCodigo || filters.activoCodigo }));
-      setReadingForm((current) => ({ ...current, activoCodigo: current.activoCodigo || filters.activoCodigo }));
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "No fue posible cargar preventivos.");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function savePlan(event: FormEvent) {
-    event.preventDefault();
-    await save(async () => {
-      await apiFetch<PreventivePlan>("/api/preventive/plans", {
-        method: "POST",
-        body: JSON.stringify({
-          codigo: planForm.codigo,
-          nombre: planForm.nombre,
-          activoCodigo: emptyToNull(planForm.activoCodigo),
-          familiaEquipo: emptyToNull(planForm.familiaEquipo),
-          marca: emptyToNull(planForm.marca),
-          modelo: emptyToNull(planForm.modelo),
-          frecuenciaHoras: numberOrNull(planForm.frecuenciaHoras),
-          frecuenciaKm: numberOrNull(planForm.frecuenciaKm),
-          frecuenciaDias: integerOrNull(planForm.frecuenciaDias),
-          toleranciaHoras: Number(planForm.toleranciaHoras || 0),
-          toleranciaKm: Number(planForm.toleranciaKm || 0),
-          toleranciaDias: Number(planForm.toleranciaDias || 0),
-          checklistCodigo: emptyToNull(planForm.checklistCodigo),
-          repuestosSugeridos: emptyToNull(planForm.repuestosSugeridos),
-          hhEstimadas: Number(planForm.hhEstimadas || 1),
-          activo: true,
-          reason: planForm.reason
-        })
-      });
-      setPlanForm(emptyPlan);
-      setMessage("Plan preventivo guardado.");
-    });
-  }
-
-  async function saveReading(event: FormEvent) {
-    event.preventDefault();
-    await save(async () => {
-      const reading = await apiFetch<{ esAnomala: boolean; mensajeValidacion?: string | null }>(`/api/assets/${encodeURIComponent(readingForm.activoCodigo)}/readings`, {
-        method: "POST",
-        body: JSON.stringify({ valor: Number(readingForm.valor), fechaLecturaUtc: new Date(readingForm.fechaLectura).toISOString(), origen: "MANUAL", evidenciaReferencia: emptyToNull(readingForm.evidencia) })
-      });
-      setReadingForm(emptyReading);
-      setMessage(reading.esAnomala ? reading.mensajeValidacion ?? "Lectura guardada con alerta de salto." : "Lectura guardada.");
-    });
-  }
-
-  async function runEngine() {
-    await save(async () => {
-      const result = await apiFetch<{ evaluated: number; generatedWorkOrders: number; alertsGenerated: number; warnings: string[] }>("/api/preventive/run", { method: "POST" });
-      setMessage(`Motor ejecutado: ${result.evaluated} evaluados, ${result.generatedWorkOrders} OT y ${result.alertsGenerated} alertas.`);
-    });
-  }
-
-  async function generateOt(item: PreventiveDue) {
-    await save(async () => {
-      const result = await apiFetch<{ numeroOT: string; warnings: string[] }>(`/api/preventive/plans/${encodeURIComponent(item.planCodigo)}/generate-ot`, {
-        method: "POST",
-        body: JSON.stringify({ activoCodigo: item.activoCodigo, reason: "Generacion manual desde preventivos" })
-      });
-      setMessage(result.warnings.length ? `${result.numeroOT}: ${result.warnings.join(" ")}` : `OT ${result.numeroOT} generada.`);
-    });
-  }
-
-  async function reprogram(event: FormEvent) {
-    event.preventDefault();
-    await save(async () => {
-      await apiFetch(`/api/preventive/plans/${encodeURIComponent(reprogramForm.planCode)}/reprogram`, {
-        method: "POST",
-        body: JSON.stringify({
-          proximaFecha: reprogramForm.proximaFecha ? new Date(reprogramForm.proximaFecha).toISOString() : null,
-          proximaHora: numberOrNull(reprogramForm.proximaHora),
-          proximoKm: numberOrNull(reprogramForm.proximoKm),
-          reason: reprogramForm.reason
-        })
-      });
-      setReprogramForm({ planCode: "", proximaFecha: "", proximaHora: "", proximoKm: "", reason: "" });
-      setMessage("Preventivo reprogramado.");
-    });
-  }
-
-  async function save(action: () => Promise<void>) {
-    setIsSaving(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await action();
-      await load();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "No fue posible guardar.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  return (
-    <section className="stack">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">Mantenimiento</p>
-          <h1>Preventivos</h1>
-          <p>Planes automaticos, lecturas, vencimientos, OT generadas y calendario preventivo.</p>
-        </div>
-        <div className="toolbar">
-          <button className="secondary-button" type="button" onClick={() => void load()}><RefreshCw size={18} /> Actualizar</button>
-          <button className="primary-button" type="button" disabled={isSaving} onClick={() => void runEngine()}><PlayCircle size={18} /> Ejecutar motor</button>
-        </div>
-      </header>
-
-      <section className="kpi-grid xl:grid-cols-4">
-        <Metric icon={<Wrench size={18} />} label="Planes" value={counters.plans} />
-        <Metric icon={<Clock size={18} />} label="En ventana" value={counters.window} />
-        <Metric icon={<AlertTriangle size={18} />} label="Vencidos" value={counters.overdue} />
-        <Metric icon={<CalendarDays size={18} />} label="OT generadas" value={counters.generated} />
-      </section>
-
-      {message ? <div className="success-banner">{message}</div> : null}
-      {error ? <div className="error-banner">{error}</div> : null}
-
-      <section className="panel stack">
-        <div className="toolbar">
-          <FaenaSelect value={filters.faenaCodigo} onChange={(value) => setFilters({ ...filters, faenaCodigo: value, activoCodigo: "" })} />
-          <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
-            Activo
-            <select className="mt-2 h-10 rounded-md border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950" value={filters.activoCodigo} onChange={(event) => setFilters({ ...filters, activoCodigo: event.target.value })}>
-              <option value="">Todos</option>
-              {assets.map((asset) => <option key={asset.codigo} value={asset.codigo}>{asset.nombre} - {asset.codigo}</option>)}
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <form className="panel stack" onSubmit={savePlan}>
-          <div className="section-heading"><h2>Plan preventivo</h2><span>Horas, km y calendario</span></div>
-          <div className="form-grid">
-            <label>Codigo<input value={planForm.codigo} onChange={(event) => setPlanForm({ ...planForm, codigo: event.target.value })} required /></label>
-            <label>Nombre<input value={planForm.nombre} onChange={(event) => setPlanForm({ ...planForm, nombre: event.target.value })} required /></label>
-            <label>Activo<select value={planForm.activoCodigo} onChange={(event) => setPlanForm({ ...planForm, activoCodigo: event.target.value })}><option value="">Por familia</option>{assets.map((asset) => <option key={asset.codigo} value={asset.codigo}>{asset.nombre} - {asset.codigo}</option>)}</select></label>
-            <label>Familia<input value={planForm.familiaEquipo} onChange={(event) => setPlanForm({ ...planForm, familiaEquipo: event.target.value })} /></label>
-            <label>Marca<input value={planForm.marca} onChange={(event) => setPlanForm({ ...planForm, marca: event.target.value })} /></label>
-            <label>Modelo<input value={planForm.modelo} onChange={(event) => setPlanForm({ ...planForm, modelo: event.target.value })} /></label>
-            <label>Frecuencia horas<input type="number" min="0" step="1" value={planForm.frecuenciaHoras} onChange={(event) => setPlanForm({ ...planForm, frecuenciaHoras: event.target.value })} /></label>
-            <label>Tolerancia horas<input type="number" min="0" step="1" value={planForm.toleranciaHoras} onChange={(event) => setPlanForm({ ...planForm, toleranciaHoras: event.target.value })} /></label>
-            <label>Frecuencia km<input type="number" min="0" step="1" value={planForm.frecuenciaKm} onChange={(event) => setPlanForm({ ...planForm, frecuenciaKm: event.target.value })} /></label>
-            <label>Tolerancia km<input type="number" min="0" step="1" value={planForm.toleranciaKm} onChange={(event) => setPlanForm({ ...planForm, toleranciaKm: event.target.value })} /></label>
-            <label>Frecuencia dias<input type="number" min="0" step="1" value={planForm.frecuenciaDias} onChange={(event) => setPlanForm({ ...planForm, frecuenciaDias: event.target.value })} /></label>
-            <label>Tolerancia dias<input type="number" min="0" step="1" value={planForm.toleranciaDias} onChange={(event) => setPlanForm({ ...planForm, toleranciaDias: event.target.value })} /></label>
-            <label>Checklist<input value={planForm.checklistCodigo} onChange={(event) => setPlanForm({ ...planForm, checklistCodigo: event.target.value })} /></label>
-            <label>HH estimadas<input type="number" min="0.1" step="0.5" value={planForm.hhEstimadas} onChange={(event) => setPlanForm({ ...planForm, hhEstimadas: event.target.value })} /></label>
-            <label className="span-2">Repuestos sugeridos<input placeholder="REP-001:1:UN;REP-002:2:UN" value={planForm.repuestosSugeridos} onChange={(event) => setPlanForm({ ...planForm, repuestosSugeridos: event.target.value })} /></label>
-            <label className="span-2">Motivo<input value={planForm.reason} onChange={(event) => setPlanForm({ ...planForm, reason: event.target.value })} required /></label>
-          </div>
-          <button className="primary-button" type="submit" disabled={isSaving}><Save size={18} /> Guardar plan</button>
-        </form>
-
-        <form className="panel stack" onSubmit={saveReading}>
-          <div className="section-heading"><h2>Lectura</h2><span>Un único valor; la unidad proviene del activo</span></div>
-          <div className="form-grid xl:grid-cols-2">
-            <label>Activo<select value={readingForm.activoCodigo} onChange={(event) => setReadingForm({ ...readingForm, activoCodigo: event.target.value })} required><option value="">Selecciona activo</option>{assets.map((asset) => <option key={asset.codigo} value={asset.codigo}>{asset.nombre} - {asset.codigo}</option>)}</select></label>
-            <label>Fecha<input type="datetime-local" value={readingForm.fechaLectura} onChange={(event) => setReadingForm({ ...readingForm, fechaLectura: event.target.value })} required /></label>
-            <label>Valor<input type="number" min="0" step="0.1" value={readingForm.valor} onChange={(event) => setReadingForm({ ...readingForm, valor: event.target.value })} required /></label>
-            <label className="span-2">Evidencia<input value={readingForm.evidencia} onChange={(event) => setReadingForm({ ...readingForm, evidencia: event.target.value })} /></label>
-            <small className="span-2">Las correcciones se registran desde el historial del activo; no se edita una lectura existente.</small>
-          </div>
-          <button className="primary-button" type="submit" disabled={isSaving}><Gauge size={18} /> Registrar lectura</button>
-        </form>
-      </section>
-
-      <section className="panel stack">
-        <div className="section-heading"><h2>Vencimientos</h2><span>{isLoading ? "Cargando..." : `${dashboard?.dueItems.length ?? 0} preventivos`}</span></div>
-        <div className="data-table">
-          <table>
-            <thead><tr><th>Preventivo</th><th>Activo</th><th>Estado</th><th>Restante</th><th>Fecha</th><th>OT</th><th></th></tr></thead>
-            <tbody>
-              {(dashboard?.dueItems ?? []).map((item) => (
-                <tr key={`${item.planCodigo}-${item.activoCodigo}`}>
-                  <td><strong>{item.nombre}</strong><small>{item.planCodigo}</small></td>
-                  <td><strong>{item.activoNombre ?? item.activoCodigo}</strong><small>{item.faenaCodigo}</small></td>
-                  <td><span className={`status-pill ${item.estado === "Vencido" ? "danger" : item.estado === "OTGenerada" ? "success" : ""}`}>{statusLabels[item.estado]}</span></td>
-                  <td>{formatRemaining(item)}</td>
-                  <td>{item.fechaVencimientoEstimada ? formatDate(item.fechaVencimientoEstimada) : "-"}</td>
-                  <td>{item.numeroOT ?? "-"}</td>
-                  <td><button className="secondary-button" type="button" disabled={isSaving || Boolean(item.numeroOT)} onClick={() => void generateOt(item)}>Generar OT</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-2">
-        <section className="panel stack">
-          <div className="section-heading"><h2>Calendario preventivo</h2><span>{dashboard?.calendar.length ?? 0}</span></div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {(dashboard?.calendar ?? []).slice(0, 12).map((item) => (
-              <article className="panel-muted" key={`${item.planCodigo}-${item.activoCodigo}-${item.fecha}`}>
-                <div className="section-heading"><h3>{formatDate(item.fecha)}</h3><span className="status-pill">{statusLabels[item.estado]}</span></div>
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{item.nombre}</p>
-                <small className="text-xs text-slate-500">{item.activoNombre ?? item.activoCodigo} - {item.faenaCodigo}</small>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <form className="panel stack" onSubmit={reprogram}>
-          <div className="section-heading"><h2>Reprogramar</h2><span>requiere motivo</span></div>
-          <div className="form-grid xl:grid-cols-2">
-            <label>Plan<select value={reprogramForm.planCode} onChange={(event) => setReprogramForm({ ...reprogramForm, planCode: event.target.value })} required><option value="">Selecciona plan</option>{(dashboard?.plans ?? []).map((plan) => <option key={plan.codigo} value={plan.codigo}>{plan.nombre}</option>)}</select></label>
-            <label>Proxima fecha<input type="datetime-local" value={reprogramForm.proximaFecha} onChange={(event) => setReprogramForm({ ...reprogramForm, proximaFecha: event.target.value })} /></label>
-            <label>Proxima hora<input type="number" min="0" step="0.1" value={reprogramForm.proximaHora} onChange={(event) => setReprogramForm({ ...reprogramForm, proximaHora: event.target.value })} /></label>
-            <label>Proximo km<input type="number" min="0" step="0.1" value={reprogramForm.proximoKm} onChange={(event) => setReprogramForm({ ...reprogramForm, proximoKm: event.target.value })} /></label>
-            <label className="span-2">Motivo<input value={reprogramForm.reason} onChange={(event) => setReprogramForm({ ...reprogramForm, reason: event.target.value })} required /></label>
-          </div>
-          <button className="secondary-button" type="submit" disabled={isSaving}>Reprogramar</button>
-        </form>
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-2">
-        <section className="panel stack">
-          <div className="section-heading"><h2>Lecturas recientes</h2><span>{readings.length}</span></div>
-          <div className="data-table">
-            <table>
-              <thead><tr><th>Activo</th><th>Fecha</th><th>Valor</th><th>Unidad</th><th>Validación</th></tr></thead>
-              <tbody>{readings.slice(0, 12).map((item) => <tr key={item.id}><td><strong>{item.activoNombre ?? item.activoCodigo}</strong><small>{item.faenaCodigo}</small></td><td>{formatDateTime(item.fechaLecturaUtc)}</td><td>{item.valor}</td><td>{item.unidad}</td><td>{item.esAnomala ? item.mensajeValidacion : item.esCorreccion ? "Corrección" : "OK"}</td></tr>)}</tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="panel stack">
-          <div className="section-heading"><h2>Historial</h2><span>{dashboard?.history.length ?? 0}</span></div>
-          <div className="data-table">
-            <table>
-              <thead><tr><th>Plan</th><th>Activo</th><th>Cambio</th><th>Usuario</th></tr></thead>
-              <tbody>{(dashboard?.history ?? []).slice(0, 12).map((item) => <tr key={item.historyId}><td>{item.planCodigo}</td><td>{item.activoCodigo}</td><td>{statusLabels[item.estadoAnterior]} -&gt; {statusLabels[item.estadoNuevo]}<small>{item.motivo}</small></td><td>{item.usuarioId}<small>{formatDateTime(item.fechaUtc)}</small></td></tr>)}</tbody>
-            </table>
-          </div>
-        </section>
-      </section>
-    </section>
-  );
+export function PreventiveMaintenancePage({ view = "overview" }: { view?: View }) {
+  const { planCode } = useParams(); const navigate = useNavigate();
+  const [dashboard, setDashboard] = useState<Dashboard | null>(null); const [assets, setAssets] = useState<Asset[]>([]); const [readings, setReadings] = useState<Reading[]>([]);
+  const [filters, setFilters] = useState({ faenaCodigo: "", activoCodigo: "", search: "" }); const [dialog, setDialog] = useState<"plan" | "reading" | "engine" | "generate" | "reprogram" | null>(null);
+  const [planForm, setPlanForm] = useState(newPlan); const [readingForm, setReadingForm] = useState(newReading); const [reprogram, setReprogram] = useState({ proximaFecha: "", proximaHora: "", proximoKm: "", reason: "" }); const [due, setDue] = useState<Due | null>(null);
+  const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [message, setMessage] = useState<string | null>(null); const [error, setError] = useState<string | null>(null);
+  useEffect(() => { void load(); }, [filters.faenaCodigo, filters.activoCodigo]);
+  const plan = useMemo(() => dashboard?.plans.find(item => item.codigo === planCode) ?? null, [dashboard, planCode]);
+  const plans = useMemo(() => (dashboard?.plans ?? []).filter(item => match(filters.search, item.codigo, item.nombre, item.activoNombre, item.activoCodigo, item.familiaEquipo, item.marca, item.modelo)), [dashboard, filters.search]);
+  async function load() { setLoading(true); setError(null); try { const query = new URLSearchParams(); if (filters.faenaCodigo) query.set("faenaCodigo", filters.faenaCodigo); if (filters.activoCodigo) query.set("activoCodigo", filters.activoCodigo); const [data, page] = await Promise.all([apiFetch<Dashboard>(`/api/preventive/dashboard?${query}`), apiFetch<{ items: Asset[] }>(filters.faenaCodigo ? `/api/assets?faenaCodigo=${encodeURIComponent(filters.faenaCodigo)}&page=1&pageSize=100` : "/api/assets?page=1&pageSize=100")]); const scoped = filters.activoCodigo ? page.items.filter(item => item.codigo === filters.activoCodigo) : page.items; const groups = await Promise.all(scoped.map(async asset => (await apiFetch<Omit<Reading, "activoCodigo" | "activoNombre" | "faenaCodigo">[]>(`/api/assets/${encodeURIComponent(asset.codigo)}/readings`)).map(row => ({ ...row, activoCodigo: asset.codigo, activoNombre: asset.nombre, faenaCodigo: asset.faenaCodigo })))); setDashboard(data); setAssets(page.items); setReadings(groups.flat().sort((a,b) => b.fechaLecturaUtc.localeCompare(a.fechaLecturaUtc))); } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible cargar preventivos."); } finally { setLoading(false); } }
+  async function save(action: () => Promise<void>) { setSaving(true); setError(null); setMessage(null); try { await action(); await load(); setDialog(null); } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible guardar."); } finally { setSaving(false); } }
+  async function createPlan(event: FormEvent) { event.preventDefault(); await save(async () => { const created = await apiFetch<Plan>("/api/preventive/plans", { method: "POST", body: JSON.stringify({ ...planForm, activoCodigo: nil(planForm.activoCodigo), familiaEquipo: nil(planForm.familiaEquipo), marca: nil(planForm.marca), modelo: nil(planForm.modelo), frecuenciaHoras: num(planForm.frecuenciaHoras), frecuenciaKm: num(planForm.frecuenciaKm), frecuenciaDias: num(planForm.frecuenciaDias), toleranciaHoras: Number(planForm.toleranciaHoras), toleranciaKm: Number(planForm.toleranciaKm), toleranciaDias: Number(planForm.toleranciaDias), checklistCodigo: nil(planForm.checklistCodigo), repuestosSugeridos: nil(planForm.repuestosSugeridos), hhEstimadas: Number(planForm.hhEstimadas), activo: true }) }); setPlanForm(newPlan()); setMessage("Plan preventivo guardado."); navigate(`/preventivos/planes/${encodeURIComponent(created.codigo)}`); }); }
+  async function createReading(event: FormEvent) { event.preventDefault(); await save(async () => { const result = await apiFetch<{ esAnomala: boolean; mensajeValidacion?: string | null }>(`/api/assets/${encodeURIComponent(readingForm.activoCodigo)}/readings`, { method: "POST", body: JSON.stringify({ valor: Number(readingForm.valor), fechaLecturaUtc: new Date(readingForm.fechaLectura).toISOString(), origen: "MANUAL", evidenciaReferencia: nil(readingForm.evidencia), autorizarCorreccion: readingForm.autorizarCorreccion, motivoCorreccion: nil(readingForm.motivoCorreccion) }) }); setReadingForm(newReading()); setMessage(result.esAnomala ? result.mensajeValidacion ?? "Lectura guardada con alerta." : "Lectura guardada."); }); }
+  async function engine() { await save(async () => { const result = await apiFetch<{ evaluated: number; generatedWorkOrders: number; alertsGenerated: number; warnings: string[] }>("/api/preventive/run", { method: "POST" }); setMessage(`Motor ejecutado: ${result.evaluated} evaluados, ${result.generatedWorkOrders} OT y ${result.alertsGenerated} alertas. ${result.warnings.join(" ")}`); }); }
+  async function generate() { if (!due) return; await save(async () => { const result = await apiFetch<{ numeroOT: string; warnings: string[] }>(`/api/preventive/plans/${encodeURIComponent(due.planCodigo)}/generate-ot`, { method: "POST", body: JSON.stringify({ activoCodigo: due.activoCodigo, reason: "Generacion manual desde preventivos" }) }); setMessage(`OT ${result.numeroOT} generada. ${result.warnings.join(" ")}`); }); }
+  async function reprogramPlan(event: FormEvent) { event.preventDefault(); if (!plan) return; await save(async () => { await apiFetch(`/api/preventive/plans/${encodeURIComponent(plan.codigo)}/reprogram`, { method: "POST", body: JSON.stringify({ proximaFecha: reprogram.proximaFecha ? new Date(reprogram.proximaFecha).toISOString() : null, proximaHora: num(reprogram.proximaHora), proximoKm: num(reprogram.proximoKm), reason: reprogram.reason }) }); setMessage("Preventivo reprogramado."); }); }
+  const openReading = () => { setReadingForm(form => ({ ...form, activoCodigo: form.activoCodigo || filters.activoCodigo || plan?.activoCodigo || "" })); setDialog("reading"); };
+  const counters = { plans: dashboard?.plans.length ?? 0, window: dashboard?.dueItems.filter(item => item.estado === "EnVentana").length ?? 0, overdue: dashboard?.dueItems.filter(item => item.estado === "Vencido").length ?? 0, generated: dashboard?.dueItems.filter(item => item.estado === "OTGenerada").length ?? 0 };
+  return <section className="stack"><header className="page-header"><div><p className="eyebrow">Mantenimiento</p><h1>{view === "detail" ? plan ? `${plan.codigo} - ${plan.nombre}` : "Plan no encontrado" : view === "calendar" ? "Calendario preventivo" : view === "readings" ? "Lecturas" : "Preventivos"}</h1><p>Planes, vencimientos, lecturas y ordenes preventivas.</p></div><div className="toolbar"><button className="secondary-button" type="button" onClick={() => void load()}><RefreshCw size={18}/>Actualizar</button>{view === "overview" ? <><button className="secondary-button" type="button" onClick={openReading}><Gauge size={18}/>Registrar lectura</button><button className="primary-button" type="button" onClick={() => setDialog("plan")}><Plus size={18}/>Nuevo plan</button></> : view === "detail" ? <button className="secondary-button" type="button" onClick={() => navigate("/preventivos")}>Volver a planes</button> : <button className="secondary-button" type="button" onClick={openReading}>Registrar lectura</button>}</div></header>{message ? <div className="success-banner" role="status">{message}</div> : null}{error ? <div className="error-banner" role="alert">{error}</div> : null}
+    {view !== "detail" ? <><section className="kpi-grid xl:grid-cols-4"><Metric label="Planes" value={counters.plans}/><Metric label="En ventana" value={counters.window}/><Metric label="Vencidos" value={counters.overdue} danger/><Metric label="OT generadas" value={counters.generated}/></section><section className="panel"><div className="grid gap-3 md:grid-cols-3"><FaenaSelect value={filters.faenaCodigo} onChange={faenaCodigo => setFilters({ ...filters, faenaCodigo, activoCodigo: "" })}/><label>Activo<select value={filters.activoCodigo} onChange={event => setFilters({ ...filters, activoCodigo: event.target.value })}><option value="">Todos</option>{assets.map(asset => <option key={asset.codigo} value={asset.codigo}>{asset.nombre} - {asset.codigo}</option>)}</select></label>{view === "overview" ? <label>Buscar<input aria-label="Buscar planes" value={filters.search} onChange={event => setFilters({ ...filters, search: event.target.value })}/></label> : null}</div></section></> : null}
+    {view === "overview" ? <><div className="toolbar"><Link className="secondary-button" to="/preventivos/calendario">Calendario</Link><Link className="secondary-button" to="/preventivos/lecturas">Lecturas</Link><button className="secondary-button" type="button" onClick={() => setDialog("engine")}><PlayCircle size={18}/>Ejecutar evaluacion</button></div><Plans rows={plans} loading={loading}/></> : null}
+    {view === "calendar" ? <CalendarTable rows={dashboard?.calendar ?? []} loading={loading}/> : null}{view === "readings" ? <Readings rows={readings} loading={loading}/> : null}
+    {view === "detail" ? !loading && !plan ? <section className="panel"><h2>Registro no encontrado</h2></section> : plan ? <PlanDetail plan={plan} due={dashboard?.dueItems.filter(item => item.planCodigo === plan.codigo) ?? []} calendar={dashboard?.calendar.filter(item => item.planCodigo === plan.codigo) ?? []} history={dashboard?.history.filter(item => item.planCodigo === plan.codigo) ?? []} generate={item => { setDue(item); setDialog("generate"); }} reprogram={() => setDialog("reprogram")} reading={openReading}/> : null : null}
+    <Dialog open={dialog === "plan"} title="Nuevo plan preventivo" busy={saving} onClose={() => setDialog(null)} className="max-w-5xl"><PlanForm form={planForm} assets={assets} setForm={setPlanForm} submit={createPlan} saving={saving}/></Dialog><Dialog open={dialog === "reading"} title="Registrar lectura" busy={saving} onClose={() => setDialog(null)}><ReadingForm form={readingForm} assets={assets} setForm={setReadingForm} submit={createReading} saving={saving}/></Dialog><Dialog open={dialog === "engine"} title="Ejecutar evaluacion preventiva" busy={saving} onClose={() => setDialog(null)} footer={<div className="toolbar"><button className="secondary-button" type="button" onClick={() => setDialog(null)} disabled={saving}>Cancelar</button><button className="primary-button" type="button" onClick={() => void engine()} disabled={saving}>Ejecutar motor</button></div>}><p>Se ejecutara el motor preventivo y se mostraran sus conteos y advertencias.</p></Dialog><Dialog open={dialog === "generate"} title="Generar OT preventiva" busy={saving} onClose={() => setDialog(null)} footer={<div className="toolbar"><button className="secondary-button" type="button" onClick={() => setDialog(null)} disabled={saving}>Cancelar</button><button className="primary-button" type="button" onClick={() => void generate()} disabled={saving}>Generar OT</button></div>}><p>{due ? `Se generara una OT para ${due.nombre}.` : ""}</p></Dialog><Dialog open={dialog === "reprogram"} title="Reprogramar preventivo" busy={saving} onClose={() => setDialog(null)}><form className="stack" onSubmit={reprogramPlan}><div className="form-grid"><label>Proxima fecha<input type="date" value={reprogram.proximaFecha} onChange={event => setReprogram({ ...reprogram, proximaFecha: event.target.value })}/></label><label>Proxima hora<input type="number" min="0" value={reprogram.proximaHora} onChange={event => setReprogram({ ...reprogram, proximaHora: event.target.value })}/></label><label>Proximo km<input type="number" min="0" value={reprogram.proximoKm} onChange={event => setReprogram({ ...reprogram, proximoKm: event.target.value })}/></label><label>Motivo<input required value={reprogram.reason} onChange={event => setReprogram({ ...reprogram, reason: event.target.value })}/></label></div><button className="primary-button" disabled={saving}>Reprogramar</button></form></Dialog></section>;
 }
-
-function Metric({ icon, label, value }: { icon: JSX.Element; label: string; value: number }) {
-  return <article className="metric-card">{icon}<span>{label}</span><strong>{value}</strong></article>;
-}
-
-function emptyToNull(value: string) {
-  return value.trim() ? value.trim() : null;
-}
-
-function numberOrNull(value: string) {
-  return value.trim() ? Number(value) : null;
-}
-
-function integerOrNull(value: string) {
-  return value.trim() ? Number.parseInt(value, 10) : null;
-}
-
-function formatRemaining(item: PreventiveDue) {
-  const parts = [];
-  if (item.horasRestantes !== null && item.horasRestantes !== undefined) parts.push(`${item.horasRestantes} h`);
-  if (item.kmRestantes !== null && item.kmRestantes !== undefined) parts.push(`${item.kmRestantes} km`);
-  if (item.diasRestantes !== null && item.diasRestantes !== undefined) parts.push(`${item.diasRestantes} d`);
-  return parts.length ? parts.join(" - ") : "-";
-}
-
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString();
-}
-
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
-}
+function Plans({ rows, loading }: { rows: Plan[]; loading: boolean }) { const navigate = useNavigate(); return <section className="panel overflow-hidden"><div className="overflow-x-auto"><table className="data-table min-w-[900px]"><thead><tr><th>Estado</th><th>Codigo y nombre</th><th>Alcance</th><th>Faena</th><th>Frecuencia</th><th>Proximo vencimiento</th><th>HH</th></tr></thead><tbody>{loading ? <tr><td colSpan={7}>Cargando planes...</td></tr> : rows.length === 0 ? <tr><td colSpan={7}>No hay planes para los filtros seleccionados.</td></tr> : rows.map(item => <tr key={item.codigo} className="cursor-pointer hover:bg-teal-50 focus-within:bg-teal-50 dark:hover:bg-teal-950/30" tabIndex={0} aria-label={`Abrir plan ${item.codigo}`} onClick={() => navigate(`/preventivos/planes/${encodeURIComponent(item.codigo)}`)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); navigate(`/preventivos/planes/${encodeURIComponent(item.codigo)}`); } }}><td><Badge value={item.estado}/></td><td><strong>{item.codigo}</strong><small>{item.nombre}</small></td><td>{item.activoNombre ?? item.activoCodigo ?? ([item.familiaEquipo,item.marca,item.modelo].filter(Boolean).join(" / ") || "Familia")}</td><td>{item.faenaCodigo ?? "-"}</td><td>{frequency(item)}</td><td>{date(item.proximaFecha)}</td><td>{item.hhEstimadas}</td></tr>)}</tbody></table></div></section>; }
+function PlanDetail({ plan, due, calendar, history, generate, reprogram, reading }: { plan: Plan; due: Due[]; calendar: Calendar[]; history: History[]; generate: (item: Due) => void; reprogram: () => void; reading: () => void }) { const [tab,setTab]=useState("summary"); return <><nav className="flex gap-2 overflow-x-auto border-b border-slate-200 pb-2 dark:border-slate-800" aria-label="Secciones del plan">{[["summary","Resumen"],["due","Vencimientos"],["calendar","Calendario"],["history","Historial"]].map(([id,label])=><button className={tab===id?"primary-button":"secondary-button"} key={id} type="button" onClick={()=>setTab(id)}>{label}</button>)}</nav><section className="grid gap-4 xl:grid-cols-[1fr_280px]"><section className="panel stack">{tab==="summary"?<div className="detail-grid"><Info label="Alcance" value={plan.activoNombre ?? plan.activoCodigo ?? [plan.familiaEquipo,plan.marca,plan.modelo].filter(Boolean).join(" / ")}/><Info label="Faena" value={plan.faenaCodigo}/><Info label="Frecuencia" value={frequency(plan)}/><Info label="Proximo vencimiento" value={date(plan.proximaFecha)}/><Info label="HH estimadas" value={String(plan.hhEstimadas)}/><Info label="Checklist" value={plan.checklistCodigo}/><Info label="Repuestos sugeridos" value={plan.repuestosSugeridos}/></div>:null}{tab==="due"?<DueRows rows={due} generate={generate}/>:null}{tab==="calendar"?<CalendarTable rows={calendar} loading={false}/>:null}{tab==="history"?<HistoryRows rows={history}/>:null}</section><aside className="panel stack"><h2>Acciones</h2><button className="primary-button" type="button" disabled={!due.length} onClick={()=>due[0]&&generate(due[0])}>Generar OT</button><button className="secondary-button" type="button" onClick={reprogram}>Reprogramar</button>{plan.activoCodigo?<button className="secondary-button" type="button" onClick={reading}>Registrar lectura</button>:null}</aside></section></>; }
+function CalendarTable({ rows,loading }: { rows: Calendar[]; loading: boolean }) { return <section className="panel overflow-hidden"><div className="overflow-x-auto"><table className="data-table"><thead><tr><th>Fecha</th><th>Estado</th><th>Plan</th><th>Activo</th><th>Faena</th><th>OT</th></tr></thead><tbody>{loading?<tr><td colSpan={6}>Cargando calendario...</td></tr>:rows.length===0?<tr><td colSpan={6}>No hay vencimientos.</td></tr>:rows.map(item=><tr key={`${item.planCodigo}-${item.activoCodigo}-${item.fecha}`}><td>{date(item.fecha)}</td><td><Badge value={item.estado}/></td><td>{item.nombre}</td><td>{item.activoNombre??item.activoCodigo}</td><td>{item.faenaCodigo}</td><td>{item.numeroOT?<Link to={`/ot/${encodeURIComponent(item.numeroOT)}`}>{item.numeroOT}</Link>:"-"}</td></tr>)}</tbody></table></div></section>; }
+function Readings({ rows,loading }: { rows: Reading[]; loading: boolean }) { return <section className="panel overflow-hidden"><div className="overflow-x-auto"><table className="data-table"><thead><tr><th>Fecha</th><th>Activo</th><th>Valor</th><th>Unidad</th><th>Correccion</th><th>Anomalia</th><th>Validacion</th></tr></thead><tbody>{loading?<tr><td colSpan={7}>Cargando lecturas...</td></tr>:rows.length===0?<tr><td colSpan={7}>No hay lecturas disponibles.</td></tr>:rows.map(item=><tr key={item.id}><td>{date(item.fechaLecturaUtc)}</td><td>{item.activoNombre??item.activoCodigo}</td><td>{item.valor}</td><td>{item.unidad}</td><td>{item.esCorreccion?"Si":"No"}</td><td>{item.esAnomala?"Si":"No"}</td><td>{item.mensajeValidacion??"-"}</td></tr>)}</tbody></table></div></section>; }
+function DueRows({ rows,generate }: { rows: Due[]; generate:(item:Due)=>void }) { return <table className="data-table"><tbody>{rows.length===0?<tr><td>Sin vencimientos.</td></tr>:rows.map(item=><tr key={item.activoCodigo}><td><Badge value={item.estado}/></td><td>{item.activoNombre??item.activoCodigo}</td><td>{item.mensaje}</td><td>{item.numeroOT?<Link to={`/ot/${encodeURIComponent(item.numeroOT)}`}>{item.numeroOT}</Link>:<button className="secondary-button" type="button" onClick={()=>generate(item)}>Generar OT</button>}</td></tr>)}</tbody></table>; }
+function HistoryRows({ rows }: { rows: History[] }) { return <table className="data-table"><tbody>{rows.length===0?<tr><td>Sin historial.</td></tr>:rows.map(item=><tr key={item.historyId}><td>{date(item.fechaUtc)}</td><td>{item.activoCodigo}</td><td>{status[item.estadoAnterior]} a {status[item.estadoNuevo]}</td><td>{item.motivo}</td><td>{item.numeroOT?<Link to={`/ot/${encodeURIComponent(item.numeroOT)}`}>{item.numeroOT}</Link>:"-"}</td></tr>)}</tbody></table>; }
+function PlanForm({form,assets,setForm,submit,saving}:{form:ReturnType<typeof newPlan>;assets:Asset[];setForm:(value:ReturnType<typeof newPlan>)=>void;submit:(event:FormEvent)=>void;saving:boolean}) { return <form className="stack" onSubmit={submit}><div className="form-grid"><label>Codigo<input required value={form.codigo} onChange={e=>setForm({...form,codigo:e.target.value})}/></label><label>Nombre<input required value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})}/></label><label>Activo<select value={form.activoCodigo} onChange={e=>setForm({...form,activoCodigo:e.target.value})}><option value="">Por familia</option>{assets.map(item=><option key={item.codigo} value={item.codigo}>{item.nombre}</option>)}</select></label>{(["familiaEquipo","marca","modelo","frecuenciaHoras","toleranciaHoras","frecuenciaKm","toleranciaKm","frecuenciaDias","toleranciaDias","checklistCodigo","repuestosSugeridos","hhEstimadas","reason"] as const).map(key=><label key={key}>{key==="reason"?"Motivo":key}<input required={key==="reason"} type={key.includes("frecuencia")||key.includes("tolerancia")||key==="hhEstimadas"?"number":"text"} value={form[key]} onChange={e=>setForm({...form,[key]:e.target.value})}/></label>)}</div><button className="primary-button" disabled={saving}>Guardar plan</button></form>; }
+function ReadingForm({form,assets,setForm,submit,saving}:{form:ReturnType<typeof newReading>;assets:Asset[];setForm:(value:ReturnType<typeof newReading>)=>void;submit:(event:FormEvent)=>void;saving:boolean}) { return <form className="stack" onSubmit={submit}><div className="form-grid"><label>Activo<select required value={form.activoCodigo} onChange={e=>setForm({...form,activoCodigo:e.target.value})}><option value="">Selecciona activo</option>{assets.map(item=><option key={item.codigo} value={item.codigo}>{item.nombre}</option>)}</select></label><label>Valor<input required type="number" min="0" value={form.valor} onChange={e=>setForm({...form,valor:e.target.value})}/></label><label>Fecha<input required type="datetime-local" value={form.fechaLectura} onChange={e=>setForm({...form,fechaLectura:e.target.value})}/></label><label>Evidencia<input value={form.evidencia} onChange={e=>setForm({...form,evidencia:e.target.value})}/></label><label className="check-row"><input type="checkbox" checked={form.autorizarCorreccion} onChange={e=>setForm({...form,autorizarCorreccion:e.target.checked})}/>Autorizar correccion</label><label>Motivo<input disabled={!form.autorizarCorreccion} value={form.motivoCorreccion} onChange={e=>setForm({...form,motivoCorreccion:e.target.value})}/></label></div><button className="primary-button" disabled={saving}>Guardar lectura</button></form>; }
+function Metric({label,value,danger}:{label:string;value:number;danger?:boolean}) { return <article className="metric-card"><AlertTriangle size={18} className={danger?"text-red-600":"text-teal-600"}/><span>{label}</span><strong>{value}</strong></article>; } function Badge({value}:{value:string}) { return <span className={`status-pill ${value==="Vencido"?"danger":value==="Vigente"||value==="Ejecutado"?"success":""}`}>{status[value as Status]??value}</span>; } function Info({label,value}:{label:string;value?:string|null}) { return <div className="info-item"><span>{label}</span><strong>{value||"-"}</strong></div>; } function nil(value:string){return value.trim()||null;} function num(value:string){return value.trim()?Number(value):null;} function date(value?:string|null){return value?new Date(value).toLocaleDateString():"-";} function frequency(plan:Plan){return [[plan.frecuenciaHoras,"h"],[plan.frecuenciaKm,"km"],[plan.frecuenciaDias,"dias"]].filter(([value])=>value!=null).map(([value,unit])=>`${value} ${unit}`).join(" / ")||plan.tipoFrecuencia;} function match(search:string,...values:Array<string|null|undefined>){const value=search.trim().toLocaleLowerCase();return !value||values.some(item=>item?.toLocaleLowerCase().includes(value));}

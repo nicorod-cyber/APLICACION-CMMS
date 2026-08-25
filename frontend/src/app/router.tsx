@@ -19,16 +19,32 @@ import { CostsPage } from "../features/costs/CostsPage";
 import { ImportsPage } from "../features/imports/ImportsPage";
 import { InventoryPage } from "../features/inventory/InventoryPage";
 import { MaterialRequestsPage } from "../features/material-requests/MaterialRequestsPage";
-import { PreventiveMaintenancePage } from "../features/preventive/PreventiveMaintenancePage";
+import { PreventivePlansOverviewPage } from "../features/preventive/PreventivePlansOverviewPage";
+import { PreventivePlanDetailPage } from "../features/preventive/PreventivePlanDetailPage";
+import { PreventiveCalendarPage } from "../features/preventive/PreventiveCalendarPage";
+import { PreventiveReadingsPage } from "../features/preventive/PreventiveReadingsPage";
 import { ProcurementPage } from "../features/procurement/ProcurementPage";
-import { SchedulingPage } from "../features/scheduling/SchedulingPage";
+import { SchedulingLayoutPage } from "../features/scheduling/SchedulingLayoutPage";
 import { SparePartsPage } from "../features/inventory/SparePartsPage";
 import { TechnicalHierarchyPage } from "../features/technical-hierarchy/TechnicalHierarchyPage";
-import { WorkNotificationsPage } from "../features/work-notifications/WorkNotificationsPage";
-import { WorkOrdersPage } from "../features/work-orders/WorkOrdersPage";
+import { WorkNotificationsOverviewPage } from "../features/work-notifications/WorkNotificationsOverviewPage";
+import { WorkNotificationDetailPage } from "../features/work-notifications/WorkNotificationDetailPage";
+import { WorkOrdersOverviewPage } from "../features/work-orders/WorkOrdersOverviewPage";
+import { WorkOrderDetailPage } from "../features/work-orders/WorkOrderDetailPage";
 import { ModulePage } from "../features/placeholders/ModulePage";
 import { AppLayout } from "../shared/layout/AppLayout";
 import { navigationItems } from "./navigation";
+
+const protectedModule = (path: string) => {
+  const item = navigationItems.find((navigationItem) => navigationItem.path === path);
+  if (!item) throw new Error("Missing navigation configuration for " + path);
+  return item;
+};
+
+const notificationNavigation = protectedModule("/avisos");
+const workOrderNavigation = protectedModule("/ot");
+const preventiveNavigation = protectedModule("/preventivos");
+const schedulingNavigation = protectedModule("/programacion");
 
 export const router = createBrowserRouter([
   {
@@ -57,8 +73,18 @@ export const router = createBrowserRouter([
       { path: "equipos-operacionales", element: <ProtectedRoute roles={[AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.management, AUTH_ROLES.faenaViewer]}><MaintenanceTargetsPage /></ProtectedRoute> },
       { path: "unidades-operativas", element: <ProtectedRoute permissions={[AUTH_PERMISSIONS.viewOperationalUnits]}><OperationalUnitsPage /></ProtectedRoute> },
       { path: "jerarquia-tecnica", element: <ProtectedRoute roles={[AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.faenaViewer]}><TechnicalHierarchyPage /></ProtectedRoute> },
+      { path: "avisos", element: <ProtectedRoute roles={notificationNavigation.roles} permissions={notificationNavigation.permissions}><WorkNotificationsOverviewPage /></ProtectedRoute> },
+      { path: "avisos/:avisoId", element: <ProtectedRoute roles={notificationNavigation.roles} permissions={notificationNavigation.permissions}><WorkNotificationDetailPage /></ProtectedRoute> },
+      { path: "ot", element: <ProtectedRoute roles={workOrderNavigation.roles} permissions={workOrderNavigation.permissions}><WorkOrdersOverviewPage /></ProtectedRoute> },
+      { path: "ot/:numeroOT", element: <ProtectedRoute roles={workOrderNavigation.roles} permissions={workOrderNavigation.permissions}><WorkOrderDetailPage /></ProtectedRoute> },
+      { path: "preventivos", element: <ProtectedRoute roles={preventiveNavigation.roles} permissions={preventiveNavigation.permissions}><PreventivePlansOverviewPage /></ProtectedRoute> },
+      { path: "preventivos/planes/:planCode", element: <ProtectedRoute roles={preventiveNavigation.roles} permissions={preventiveNavigation.permissions}><PreventivePlanDetailPage /></ProtectedRoute> },
+      { path: "preventivos/calendario", element: <ProtectedRoute roles={preventiveNavigation.roles} permissions={preventiveNavigation.permissions}><PreventiveCalendarPage /></ProtectedRoute> },
+      { path: "preventivos/lecturas", element: <ProtectedRoute roles={preventiveNavigation.roles} permissions={preventiveNavigation.permissions}><PreventiveReadingsPage /></ProtectedRoute> },
+      { path: "programacion", element: <ProtectedRoute roles={schedulingNavigation.roles} permissions={schedulingNavigation.permissions}><Navigate to="/programacion/calendario" replace /></ProtectedRoute> },
+      { path: "programacion/:view", element: <ProtectedRoute roles={schedulingNavigation.roles} permissions={schedulingNavigation.permissions}><SchedulingLayoutPage /></ProtectedRoute> },
       ...navigationItems
-        .filter((item) => item.path !== "/dashboard")
+        .filter((item) => !["/dashboard", "/avisos", "/ot", "/preventivos", "/programacion"].includes(item.path))
         .map((item) => ({
           path: item.path.replace("/", ""),
           element:
@@ -117,28 +143,12 @@ export const router = createBrowserRouter([
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <ProcurementPage />
               </ProtectedRoute>
-            ) : item.path === "/avisos" ? (
-              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
-                <WorkNotificationsPage />
-              </ProtectedRoute>
-            ) : item.path === "/ot" ? (
-              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
-                <WorkOrdersPage />
-              </ProtectedRoute>
-            ) : item.path === "/preventivos" ? (
-              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
-                <PreventiveMaintenancePage />
-              </ProtectedRoute>
             ) : item.path === "/disponibilidad" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}>
                 <AvailabilityPage />
               </ProtectedRoute>
             ) : item.path === "/costos" ? (
               <ProtectedRoute roles={item.roles} permissions={item.permissions}><CostsPage /></ProtectedRoute>
-            ) : item.path === "/programacion" ? (
-              <ProtectedRoute roles={item.roles} permissions={item.permissions}>
-                <SchedulingPage />
-              </ProtectedRoute>
             ) : (
               <ModulePage title={item.label} accent={item.accent} Icon={item.icon} />
             )
