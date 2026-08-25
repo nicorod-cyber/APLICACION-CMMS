@@ -1,6 +1,7 @@
 using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Assets;
 using MaintenanceCMMS.Infrastructure.Auditing;
@@ -172,6 +173,229 @@ public sealed class AssetServiceTests
     }
 
     [Fact]
+    public async Task WorkshopEntry_WithStateChange_PersistsPhysicalLocationAndStateEvent()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-WORKSHOP"), Admin, CancellationToken.None);
+        var workshop = await CreateWorkshopAsync(fixture.DbContext, "TALLER-RIO-LOA");
+        var effectiveAt = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var movements = await fixture.Service.RegisterWorkshopEntryAsync(asset.Resumen.Codigo, new RegisterWorkshopEntryRequest(workshop.Code, effectiveAt, "CORRECTIVO", Motivo: "Ingreso correctivo"), Admin, CancellationToken.None);
+        var persisted = await fixture.DbContext.Assets.Include(item => item.OperationalState).SingleAsync(item => item.Code == asset.Resumen.Codigo);
+        var activeLocation = await fixture.DbContext.AssetPhysicalLocationPeriods.Include(item => item.Workshop).SingleAsync(item => item.AssetId == persisted.Id && item.ValidToUtc == null);
+        var events = await fixture.DbContext.AssetStateEvents.Where(item => item.AssetId == persisted.Id).ToArrayAsync();
+        var locations = await fixture.DbContext.AssetPhysicalLocationPeriods.Where(item => item.AssetId == persisted.Id).OrderBy(item => item.ValidFromUtc).ToArrayAsync();
+
+        Assert.Single(movements);
+        Assert.Equal("CORRECTIVO", persisted.OperationalState.Code);
+        Assert.Equal("TALLER", activeLocation.LocationType);
+        Assert.Equal(workshop.Id, activeLocation.WorkshopId);
+        var stateEvent = Assert.Single(events);
+        Assert.Equal("Ingreso correctivo", stateEvent.Reason);
+        Assert.Equal(effectiveAt, stateEvent.OccurredAtUtc);
+        Assert.Equal("UBICACION_FISICA", stateEvent.ReferenceType);
+        Assert.Single(locations.Where(item => item.ValidToUtc is null));
+        Assert.Equal(effectiveAt, locations.Single(item => item.ValidToUtc.HasValue).ValidToUtc);
+    }
+
+    [Fact]
+    public async Task ReturnToSite_WithStateChange_PersistsPhysicalHistoryAndStateEvent()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-RETURN"), Admin, CancellationToken.None);
+        var workshop = await CreateWorkshopAsync(fixture.DbContext, "TALLER-RETURN");
+        var entryAt = DateTimeOffset.UtcNow.AddMinutes(1);
+        var returnAt = entryAt.AddMinutes(1);
+        await fixture.Service.RegisterWorkshopEntryAsync(asset.Resumen.Codigo, new RegisterWorkshopEntryRequest(workshop.Code, entryAt, "CORRECTIVO", Motivo: "Diagnóstico"), Admin, CancellationToken.None);
+
+        await fixture.Service.RegisterReturnToSiteAsync(asset.Resumen.Codigo, new RegisterReturnToSiteRequest(returnAt, "OPERATIVO", Motivo: "Reparación terminada"), Admin, CancellationToken.None);
+        var persisted = await fixture.DbContext.Assets.Include(item => item.OperationalState).SingleAsync(item => item.Code == asset.Resumen.Codigo);
+        var activeLocation = await fixture.DbContext.AssetPhysicalLocationPeriods.SingleAsync(item => item.AssetId == persisted.Id && item.ValidToUtc == null);
+        var events = await fixture.DbContext.AssetStateEvents.Include(item => item.PreviousState).Include(item => item.NewState).Where(item => item.AssetId == persisted.Id).OrderBy(item => item.OccurredAtUtc).ToArrayAsync();
+
+        Assert.Equal("OPERATIVO", persisted.OperationalState.Code);
+        Assert.Equal("FAENA", activeLocation.LocationType);
+        Assert.Equal(2, events.Length);
+        Assert.Equal("CORRECTIVO", events[1].PreviousState!.Code);
+        Assert.Equal("OPERATIVO", events[1].NewState.Code);
+        Assert.Equal("Reparación terminada", events[1].Reason);
+    }
+
+    [Fact]
+    public async Task Transfer_WithStateChange_PersistsTransferAndStateEvent()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-TRANSFER-STATE"), Admin, CancellationToken.None);
+        var effectiveAt = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var transfers = await fixture.Service.TransferAsync(asset.Resumen.Codigo, new TransferAssetRequest("F002", effectiveAt, "Preparación para traslado", EstadoOperacionalDestinoCodigo: "PREPARACION"), Admin, CancellationToken.None);
+        var persisted = await fixture.DbContext.Assets.Include(item => item.Faena).Include(item => item.OperationalState).SingleAsync(item => item.Code == asset.Resumen.Codigo);
+        var transfer = Assert.Single(await fixture.DbContext.AssetTransfers.Where(item => item.AssetId == persisted.Id).ToArrayAsync());
+        var stateEvent = Assert.Single(await fixture.DbContext.AssetStateEvents.Include(item => item.PreviousState).Include(item => item.NewState).Where(item => item.AssetId == persisted.Id).ToArrayAsync());
+
+        Assert.Single(transfers);
+        Assert.Equal("F002", persisted.Faena!.Code);
+        Assert.Equal("PREPARACION", persisted.OperationalState.Code);
+        Assert.Equal(transfer.Id.ToString("D"), stateEvent.ReferenceId);
+        Assert.Equal("TRANSFER", stateEvent.ReferenceType);
+        Assert.Equal("OPERATIVO", stateEvent.PreviousState!.Code);
+        Assert.Equal("PREPARACION", stateEvent.NewState.Code);
+    }
+
+    [Fact]
+    public async Task WorkshopEntry_ForTruckFactory_CorrelatesAllStateEventsInOneTransaction()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var first = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-CFA-1"), Admin, CancellationToken.None);
+        var second = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-CFA-2"), Admin, CancellationToken.None);
+        var db = fixture.DbContext;
+        var faena = await db.Faenas.SingleAsync(item => item.Code == "F001");
+        var operating = await db.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO");
+        var unitType = new OperationalUnitTypeEntity { Code = "CFA", Name = "Camión fábrica", IsActive = true };
+        var role = new OperationalUnitComponentRoleEntity { Code = "COMPONENTE", Name = "Componente", IsActive = true };
+        var unit = new OperationalUnitEntity { Code = "CFA-TEST", Name = "Camión fábrica de prueba", OperationalUnitType = unitType, FaenaId = faena.Id, OperationalStateId = operating.Id };
+        db.AddRange(unitType, role, unit);
+        await db.SaveChangesAsync();
+        var firstEntity = await db.Assets.SingleAsync(item => item.Code == first.Resumen.Codigo);
+        var secondEntity = await db.Assets.SingleAsync(item => item.Code == second.Resumen.Codigo);
+        db.OperationalUnitComponents.AddRange(
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = firstEntity.Id, ComponentRoleId = role.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" },
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = secondEntity.Id, ComponentRoleId = role.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" });
+        await db.SaveChangesAsync();
+        var workshop = await CreateWorkshopAsync(db, "TALLER-CFA");
+
+        await fixture.Service.RegisterWorkshopEntryAsync(first.Resumen.Codigo, new RegisterWorkshopEntryRequest(workshop.Code, DateTimeOffset.UtcNow.AddMinutes(1), "CORRECTIVO", Motivo: "Ingreso conjunto"), Admin, CancellationToken.None);
+        var affectedIds = new[] { firstEntity.Id, secondEntity.Id };
+        var states = await db.Assets.Include(item => item.OperationalState).Where(item => affectedIds.Contains(item.Id)).ToArrayAsync();
+        var locations = await db.AssetPhysicalLocationPeriods.Where(item => affectedIds.Contains(item.AssetId) && item.ValidToUtc == null).ToArrayAsync();
+        var events = await db.AssetStateEvents.Where(item => affectedIds.Contains(item.AssetId)).ToArrayAsync();
+
+        Assert.Equal(2, states.Length);
+        Assert.All(states, item => Assert.Equal("CORRECTIVO", item.OperationalState.Code));
+        Assert.Equal(2, locations.Length);
+        Assert.All(locations, item => Assert.Equal("TALLER", item.LocationType));
+        Assert.Equal(2, events.Length);
+        Assert.Equal(2, events.Select(item => item.AssetId).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task DirectOperationalStateUpdate_RemainsRejectedByPostgreSqlTrigger()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-DIRECT-STATE"), Admin, CancellationToken.None);
+        var entity = await fixture.DbContext.Assets.SingleAsync(item => item.Code == asset.Resumen.Codigo);
+        var corrective = await fixture.DbContext.AssetOperationalStates.SingleAsync(item => item.Code == "CORRECTIVO");
+        await using var transaction = await fixture.DbContext.Database.BeginTransactionAsync();
+        entity.OperationalStateId = corrective.Id;
+        await fixture.DbContext.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => transaction.CommitAsync());
+
+        Assert.Equal("23514", exception.SqlState);
+        Assert.Contains("El estado operacional solo puede cambiar mediante un evento de estado", exception.MessageText);
+    }
+    [Fact]
+    public async Task Transfer_ValidPhysicalAndTerritorialPeriods_PersistsBothHistories()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-TRANSFER-PERIODS"), Admin, CancellationToken.None);
+        var assetEntity = await fixture.DbContext.Assets.SingleAsync(item => item.Code == asset.Resumen.Codigo);
+        var physicalBefore = await fixture.DbContext.AssetPhysicalLocationPeriods.SingleAsync(item => item.AssetId == assetEntity.Id && item.ValidToUtc == null);
+        var effectiveAt = physicalBefore.ValidFromUtc.AddMinutes(1);
+
+        var transfers = await fixture.Service.TransferAsync(asset.Resumen.Codigo, new TransferAssetRequest("F002", effectiveAt, "Traslado con vigencias válidas"), Admin, CancellationToken.None);
+        var persisted = await fixture.DbContext.Assets.Include(item => item.Faena).SingleAsync(item => item.Id == assetEntity.Id);
+        var territorial = await fixture.DbContext.AssetLocationPeriods.Where(item => item.AssetId == assetEntity.Id).OrderBy(item => item.ValidFromUtc).ToArrayAsync();
+        var physical = await fixture.DbContext.AssetPhysicalLocationPeriods.Where(item => item.AssetId == assetEntity.Id).OrderBy(item => item.ValidFromUtc).ToArrayAsync();
+
+        Assert.Single(transfers);
+        Assert.Equal("F002", persisted.Faena!.Code);
+        Assert.Equal(2, territorial.Length);
+        Assert.Equal(effectiveAt, territorial[0].ValidToUtc);
+        Assert.Null(territorial[1].ValidToUtc);
+        Assert.Equal(2, physical.Length);
+        Assert.Equal(effectiveAt, physical[0].ValidToUtc);
+        Assert.Null(physical[1].ValidToUtc);
+        Assert.Equal("FAENA", physical[1].LocationType);
+    }
+
+    [Fact]
+    public async Task Transfer_BeforeCurrentPhysicalPeriodStart_IsRejectedBeforePersistence()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-TRANSFER-PHYSICAL-BEFORE"), Admin, CancellationToken.None);
+        var assetEntity = await fixture.DbContext.Assets.SingleAsync(item => item.Code == asset.Resumen.Codigo);
+        var territorial = await fixture.DbContext.AssetLocationPeriods.SingleAsync(item => item.AssetId == assetEntity.Id && item.ValidToUtc == null);
+        var physical = await fixture.DbContext.AssetPhysicalLocationPeriods.SingleAsync(item => item.AssetId == assetEntity.Id && item.ValidToUtc == null);
+        var physicalStart = DateTimeOffset.UtcNow.AddMinutes(-10);
+        territorial.ValidFromUtc = physicalStart.AddMinutes(-10);
+        physical.ValidFromUtc = physicalStart;
+        await fixture.DbContext.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.TransferAsync(asset.Resumen.Codigo, new TransferAssetRequest("F002", physicalStart.AddMinutes(-1), "Fecha física inválida"), Admin, CancellationToken.None));
+
+        Assert.Contains("ubicación física vigente", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("F001", (await fixture.DbContext.Assets.Include(item => item.Faena).SingleAsync(item => item.Id == assetEntity.Id)).Faena!.Code);
+        Assert.Empty(await fixture.DbContext.AssetTransfers.Where(item => item.AssetId == assetEntity.Id).ToArrayAsync());
+        Assert.Equal(physicalStart, (await fixture.DbContext.AssetPhysicalLocationPeriods.SingleAsync(item => item.AssetId == assetEntity.Id && item.ValidToUtc == null)).ValidFromUtc);
+    }
+
+    [Fact]
+    public async Task Transfer_AtCurrentPhysicalPeriodStart_IsRejected()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-TRANSFER-PHYSICAL-EQUAL"), Admin, CancellationToken.None);
+        var assetEntity = await fixture.DbContext.Assets.SingleAsync(item => item.Code == asset.Resumen.Codigo);
+        var territorial = await fixture.DbContext.AssetLocationPeriods.SingleAsync(item => item.AssetId == assetEntity.Id && item.ValidToUtc == null);
+        var physical = await fixture.DbContext.AssetPhysicalLocationPeriods.SingleAsync(item => item.AssetId == assetEntity.Id && item.ValidToUtc == null);
+        var physicalStart = DateTimeOffset.UtcNow.AddMinutes(-10);
+        territorial.ValidFromUtc = physicalStart.AddMinutes(-10);
+        physical.ValidFromUtc = physicalStart;
+        await fixture.DbContext.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.TransferAsync(asset.Resumen.Codigo, new TransferAssetRequest("F002", physicalStart, "Fecha física igual"), Admin, CancellationToken.None));
+
+        Assert.Equal("F001", (await fixture.DbContext.Assets.Include(item => item.Faena).SingleAsync(item => item.Id == assetEntity.Id)).Faena!.Code);
+        Assert.Empty(await fixture.DbContext.AssetTransfers.Where(item => item.AssetId == assetEntity.Id).ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task Transfer_DocumentaryFailureAfterCommit_RemainsSuccessful()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-TRANSFER-DOCUMENTARY"), Admin, CancellationToken.None);
+        var documentary = new ThrowingDocumentaryWorkOrderService();
+        var service = new AssetService(fixture.DbContext, new PostgreSqlAuditService(fixture.DbContext, new AuditContextAccessor()), new AuthorizationPolicyService(), documentary);
+        var effectiveAt = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var transfers = await service.TransferAsync(asset.Resumen.Codigo, new TransferAssetRequest("F002", effectiveAt, "Traslado pese a error documental"), Admin, CancellationToken.None);
+        var assetEntity = await fixture.DbContext.Assets.Include(item => item.Faena).SingleAsync(item => item.Code == asset.Resumen.Codigo);
+        var territorial = await fixture.DbContext.AssetLocationPeriods.Where(item => item.AssetId == assetEntity.Id).ToArrayAsync();
+        var physical = await fixture.DbContext.AssetPhysicalLocationPeriods.Where(item => item.AssetId == assetEntity.Id).ToArrayAsync();
+
+        Assert.True(documentary.WasCalled);
+        Assert.Single(transfers);
+        Assert.Equal("F002", assetEntity.Faena!.Code);
+        Assert.Single(await fixture.DbContext.AssetTransfers.Where(item => item.AssetId == assetEntity.Id).ToArrayAsync());
+        Assert.Single(territorial.Where(item => item.ValidToUtc == null));
+        Assert.Single(physical.Where(item => item.ValidToUtc == null));
+    }
+
+    [Fact]
+    public async Task Transfer_PreCommitDomainError_IsPropagatedWithoutPartialPersistence()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-TRANSFER-PRECOMMIT"), Admin, CancellationToken.None);
+        var assetEntity = await fixture.DbContext.Assets.SingleAsync(item => item.Code == asset.Resumen.Codigo);
+
+        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.TransferAsync(asset.Resumen.Codigo, new TransferAssetRequest("FAENA-INEXISTENTE", DateTimeOffset.UtcNow.AddMinutes(1), "Destino inválido"), Admin, CancellationToken.None));
+
+        Assert.Equal("F001", (await fixture.DbContext.Assets.Include(item => item.Faena).SingleAsync(item => item.Id == assetEntity.Id)).Faena!.Code);
+        Assert.Empty(await fixture.DbContext.AssetTransfers.Where(item => item.AssetId == assetEntity.Id).ToArrayAsync());
+        Assert.Single(await fixture.DbContext.AssetLocationPeriods.Where(item => item.AssetId == assetEntity.Id && item.ValidToUtc == null).ToArrayAsync());
+        Assert.Single(await fixture.DbContext.AssetPhysicalLocationPeriods.Where(item => item.AssetId == assetEntity.Id && item.ValidToUtc == null).ToArrayAsync());
+    }
+    [Fact]
     public async Task ListPageAsync_PaginatesInStableOrderAndRespectsFaenaAccess()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -324,6 +548,26 @@ public sealed class AssetServiceTests
         Assert.Null(projectedUnit.Brand);
         Assert.Null(projectedUnit.ManufacturingYear);
     }
+    private sealed class ThrowingDocumentaryWorkOrderService : IDocumentaryWorkOrderService
+    {
+        public bool WasCalled { get; private set; }
+
+        public Task<DocumentaryEngineRunResponse> RunAsync(DateOnly fechaReferencia, string ejecutadoPor, CancellationToken cancellationToken)
+        {
+            WasCalled = true;
+            throw new InvalidOperationException("Fallo documental simulado después del commit.");
+        }
+    }
+    private static async Task<WorkshopEntity> CreateWorkshopAsync(CmmsDbContext db, string code)
+    {
+        var supervisor = new AppUserEntity { Username = $"supervisor-{Guid.NewGuid():N}", Email = $"supervisor-{Guid.NewGuid():N}@example.test", DisplayName = "Supervisor de taller", PasswordHash = "test-hash", IsActive = true };
+        var workshop = new WorkshopEntity { Code = code, Name = code, EquipmentCapacity = 10, Commune = "Antofagasta", SupervisorUser = supervisor, IsActive = true, CreatedByUserId = "admin" };
+        db.Add(supervisor);
+        db.Workshops.Add(workshop);
+        await db.SaveChangesAsync();
+        return workshop;
+    }
+
     private static async Task PlaceInWorkshopAsync(CmmsDbContext db, string assetCode)
     {
         var asset = await db.Assets.SingleAsync(x => x.Code == assetCode);
@@ -411,7 +655,8 @@ public sealed class AssetServiceTests
         dbContext.WorkCatalogs.AddRange(new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Baja", Name = "Baja", SortOrder = 1 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Media", Name = "Media", SortOrder = 2 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Alta", Name = "Alta", SortOrder = 3 }, new WorkCatalogEntity { Category = "WorkNotificationCriticality", Code = "Critica", Name = "Critica", SortOrder = 4 });
         dbContext.AssetOperationalStates.AddRange(
             new AssetOperationalStateEntity { Code = "OPERATIVO", Name = "Operativo", IsActive = true },
-            new AssetOperationalStateEntity { Code = "CORRECTIVO", Name = "Correctivo", Severity = 100, IsActive = true });
+            new AssetOperationalStateEntity { Code = "CORRECTIVO", Name = "Correctivo", Severity = 100, IsActive = true },
+            new AssetOperationalStateEntity { Code = "PREPARACION", Name = "Preparación", Severity = 50, IsActive = true });
         await dbContext.SaveChangesAsync();
         dbContext.EquipmentFamilies.Add(new EquipmentFamilyEntity { Code = "CAMIONES", Name = "Camiones", AssetTypeId = type.Id, IsActive = true });
         dbContext.AssetAttributeDefinitions.Add(new AssetAttributeDefinitionEntity { AssetTypeId = type.Id, Code = "IDENTIFICADOR", Name = "Identificador", DataType = "TEXTO", IsRequired = true, IsIdentifier = true, IsUnique = true, IsActive = true });
