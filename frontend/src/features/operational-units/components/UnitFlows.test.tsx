@@ -25,7 +25,7 @@ describe("UnitTransferDialog", () => {
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "F002" } });
     fireEvent.change(screen.getByLabelText("Motivo"), { target: { value: "Cambio de contrato" } });
     fireEvent.click(screen.getByRole("button", { name: "Confirmar traslado" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/api/assets/CH-1/transfers", expect.objectContaining({ method: "POST" })));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/api/operational-units/CFA-1/transfers", expect.objectContaining({ method: "POST" })));
     expect(request.mock.calls.filter(call => String(call[0]).includes("/transfers")).length).toBe(1);
   });
 
@@ -83,4 +83,3 @@ describe("UnitMaintenanceActions", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("/ot?targetType=OperationalUnit&targetCode=CFA-1");
   });
 });
-

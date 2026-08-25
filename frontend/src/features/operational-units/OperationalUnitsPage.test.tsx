@@ -69,7 +69,7 @@ describe("OperationalUnitsPage shared actions", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Faena destino" }), { target: { value: "F002" } });
     fireEvent.change(screen.getByLabelText("Motivo"), { target: { value: "Cambio de contrato" } });
     fireEvent.click(screen.getByRole("button", { name: "Confirmar traslado" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/api/assets/CH-1/transfers", expect.objectContaining({ method: "POST" })));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/api/operational-units/CFA-1/transfers", expect.objectContaining({ method: "POST" })));
     expect(request.mock.calls.filter(call => String(call[0]).includes("/transfers")).length).toBe(1);
     expect(request.mock.calls.some(call => String(call[0]).includes("/assets/FB-1/transfers"))).toBe(false);
   });
@@ -140,4 +140,3 @@ describe("OperationalUnitsPage shared actions", () => {
     expect(request.mock.calls.filter(call => ["POST", "PUT", "DELETE"].includes(String((call[1] as RequestInit | undefined)?.method))).length).toBe(0);
   });
 });
-

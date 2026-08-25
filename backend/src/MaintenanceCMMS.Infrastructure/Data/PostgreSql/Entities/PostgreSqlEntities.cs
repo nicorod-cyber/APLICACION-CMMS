@@ -460,6 +460,10 @@ public sealed class AssetReadingEntity : PostgreSqlEntity
     public string Source { get; set; } = "MANUAL";
     public Guid? WorkOrderId { get; set; }
     public WorkOrderEntity? WorkOrder { get; set; }
+    public Guid? OperationalUnitId { get; set; }
+    public Guid? OperationalUnitReadingOperationId { get; set; }
+    public OperationalUnitEntity? OperationalUnit { get; set; }
+    public bool IsCompositionSynchronization { get; set; }
     public string? RegisteredByUserId { get; set; }
     public string? EvidenceReference { get; set; }
     public string? Observations { get; set; }
@@ -605,6 +609,3 @@ public sealed class OperationalUnitComponentEntity : PostgreSqlEntity
     public string? CriticalRoleCode { get; set; }
     public string? Observations { get; set; }
 }
-
-
-

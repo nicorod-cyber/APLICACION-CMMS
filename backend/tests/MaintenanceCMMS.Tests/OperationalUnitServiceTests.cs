@@ -66,14 +66,11 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.MountAsync("CFA-STATE", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje controlado"), Admin, CancellationToken.None);
 
         var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
-        await assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("CORRECTIVO", "Falla critica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-TEST"), Admin, CancellationToken.None);
+        await Assert.ThrowsAsync<DomainException>(() => assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("CORRECTIVO", "Falla critica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-TEST"), Admin, CancellationToken.None));
         var unit = await fixture.Service.GetAsync("CFA-STATE", Admin, CancellationToken.None);
 
         Assert.NotNull(unit);
-        Assert.Equal("CORRECTIVO", unit!.EstadoOperacionalCodigo);
-        Assert.Equal("CORRECTIVO", unit.EstadoDerivado!.EstadoCodigo);
-        Assert.Equal("CHF-TWCK41", unit.EstadoDerivado.ActivoRestrictivoCodigo);
-        Assert.Equal("CHASIS", unit.EstadoDerivado.RolRestrictivoCodigo);
+        Assert.Equal("OPERATIVO", unit!.EstadoOperacionalCodigo);
     }
     [Fact]
     public async Task CriticalRoles_RejectInvalidMaximumDuplicateSlotsAndCrossUnitAsset()
@@ -120,14 +117,9 @@ public sealed class OperationalUnitServiceTests
         var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
 
         await Assert.ThrowsAsync<DomainException>(() => assetService.TransferAsync("AUGER-1000", new TransferAssetRequest("F002", DateTimeOffset.UtcNow.AddMinutes(1), "Traslado aislado"), Admin, CancellationToken.None));
-        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("CORRECTIVO", "Falla de fabrica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None);
-        var restricted = await fixture.Service.GetAsync("CFA-TRANSFER", Admin, CancellationToken.None);
-        Assert.Equal("CORRECTIVO", restricted!.EstadoOperacionalCodigo);
-        Assert.Equal("FABRICA", restricted.EstadoDerivado!.RolRestrictivoCodigo);
-
-        await assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("OPERATIVO", "Reparacion terminada", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None);
-        var recovered = await fixture.Service.GetAsync("CFA-TRANSFER", Admin, CancellationToken.None);
-        Assert.Equal("OPERATIVO", recovered!.EstadoOperacionalCodigo);
+        await Assert.ThrowsAsync<DomainException>(() => assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("CORRECTIVO", "Falla de fabrica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None));
+        var unit = await fixture.Service.GetAsync("CFA-TRANSFER", Admin, CancellationToken.None);
+        Assert.Equal("OPERATIVO", unit!.EstadoOperacionalCodigo);
     }
 
     [Fact]
@@ -208,6 +200,70 @@ public sealed class OperationalUnitServiceTests
 
         Assert.Equal(4, commandsFor25);
         Assert.Equal(commandsFor25, commandsFor50);
+    }
+    [Fact]
+    public async Task CompleteUnit_RegistersReadingsAndStateAtomically_AndRejectsIndividualComponentOperations()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var operationalUser = new UserAccessContext("operator", [AuthRoles.Admin], [AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition, AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings, AuthPermissions.ManageAssets], ["F001"]);
+        await fixture.Service.CreateTypeAsync(new OperationalUnitTypeRequest("CFA", "Camión fábrica"), operationalUser, CancellationToken.None);
+        await fixture.Service.CreateRoleAsync(new OperationalUnitRoleRequest("CHASIS", "Chasis"), operationalUser, CancellationToken.None);
+        await fixture.Service.CreateRoleAsync(new OperationalUnitRoleRequest("FABRICA", "Fábrica"), operationalUser, CancellationToken.None);
+        var permitted = new[] { new AllowedComponentRequest("MONTABLE") };
+        await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "CHASIS", 1, 1, true, permitted), operationalUser, CancellationToken.None);
+        await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 1, 1, true, permitted), operationalUser, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-OPS", "CFA operaciones", "CFA", "F001", "OPERATIVO"), operationalUser, CancellationToken.None);
+        var faena = await fixture.Db.Faenas.SingleAsync(item => item.Code == "F001");
+        var assets = await fixture.Db.Assets.Where(item => item.Code == "CHF-TWCK41" || item.Code == "AUGER-1000").ToArrayAsync();
+        foreach (var asset in assets)
+        {
+            asset.UsageMeasurementType = "HOROMETRO";
+            fixture.Db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, FaenaId = faena.Id, LocationType = "FAENA", ValidFromUtc = DateTimeOffset.UtcNow.AddDays(-1), RegisteredByUserId = "seed" });
+        }
+        await fixture.Db.SaveChangesAsync();
+        await fixture.Service.MountAsync("CFA-OPS", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje inicial"), operationalUser, CancellationToken.None);
+        await fixture.Service.MountAsync("CFA-OPS", new MountOperationalUnitComponentRequest("AUGER-1000", "FABRICA", Motivo: "Montaje inicial"), operationalUser, CancellationToken.None);
+
+        // PostgreSQL/Testcontainers regression: GET before and after each synchronous unit-reading operation must map without lazy-loading Asset.
+        var beforeReading = await fixture.Service.GetAsync("CFA-OPS", operationalUser, CancellationToken.None);
+        Assert.NotNull(beforeReading);
+        Assert.Null(beforeReading!.UltimaLectura);
+
+        var readAt = DateTimeOffset.UtcNow;
+        var reading = await fixture.Service.AddReadingAsync("CFA-OPS", new CreateAssetReadingRequest(34000m, readAt), operationalUser, CancellationToken.None);
+        Assert.Equal(2, reading.Lecturas.Count);
+        Assert.All(reading.Lecturas, item => Assert.Equal(34000m, item.Valor));
+        Assert.Equal(2, await fixture.Db.AssetReadings.CountAsync(item => item.OperationalUnitId != null));
+
+var afterReading = await fixture.Service.GetAsync("CFA-OPS", operationalUser, CancellationToken.None);
+        Assert.NotNull(afterReading);
+        Assert.Equal(34000m, afterReading!.UltimaLectura);
+        Assert.True(afterReading.PuedeCorregirLectura);
+
+        await fixture.Service.AddReadingAsync("CFA-OPS", new CreateAssetReadingRequest(34444m, readAt.AddMinutes(1)), operationalUser, CancellationToken.None);
+        await fixture.Service.AddReadingAsync("CFA-OPS", new CreateAssetReadingRequest(35000m, readAt.AddMinutes(2)), operationalUser, CancellationToken.None);
+        var candidates = await fixture.Service.GetCorrectableReadingsAsync("CFA-OPS", operationalUser, CancellationToken.None);
+        Assert.Equal(new decimal[] { 35000m, 34444m, 34000m }, candidates.Select(item => item.Valor).ToArray());
+        var selected = Assert.Single(candidates.Where(item => item.Valor == 34444m));
+        var correction = await fixture.Service.CorrectReadingAsync("CFA-OPS", new CorrectOperationalUnitReadingRequest(selected.Id, 34500m, "Ajuste validado"), operationalUser, CancellationToken.None);
+        Assert.Equal(2, correction.Lecturas.Count);
+        var afterCorrection = await fixture.Service.GetAsync("CFA-OPS", operationalUser, CancellationToken.None);
+        Assert.NotNull(afterCorrection);
+        Assert.Equal(35000m, afterCorrection!.UltimaLectura);
+        var remaining = await fixture.Service.GetCorrectableReadingsAsync("CFA-OPS", operationalUser, CancellationToken.None);
+        Assert.Equal(new decimal[] { 35000m, 34000m }, remaining.Select(item => item.Valor).ToArray());
+        Assert.Equal(2, await fixture.Db.AssetReadings.CountAsync(item => item.IsCorrection));
+        fixture.Db.AssetOperationalStates.Add(new AssetOperationalStateEntity { Code = "CON_ALERTA", Name = "Con alerta", Severity = 25, IsActive = true });
+        await fixture.Db.SaveChangesAsync();
+        var state = await fixture.Service.AddStateEventAsync("CFA-OPS", new CreateAssetStateEventRequest("CON_ALERTA", "Falla de unidad"), operationalUser, CancellationToken.None);
+        Assert.Equal(2, state.Eventos.Count);
+        Assert.Equal(2, await fixture.Db.AssetStateEvents.CountAsync(item => item.ReferenceType == "OPERATIONAL_UNIT"));
+        var operationalCodes = await fixture.Db.Assets.Where(item => item.Code == "CHF-TWCK41" || item.Code == "AUGER-1000").Join(fixture.Db.AssetOperationalStates, asset => asset.OperationalStateId, state => state.Id, (asset, item) => item.Code).ToArrayAsync();
+        Assert.All(operationalCodes, item => Assert.Equal("CON_ALERTA", item));
+
+        var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
+        await Assert.ThrowsAsync<DomainException>(() => assetService.AddReadingAsync("CHF-TWCK41", new CreateAssetReadingRequest(12600m), operationalUser, CancellationToken.None));
+        await Assert.ThrowsAsync<DomainException>(() => assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("OPERATIVO", "Intento individual"), operationalUser, CancellationToken.None));
     }
     private sealed record Fixture(string DatabaseName, string AdminConnectionString, CmmsDbContext Db, IOperationalUnitService Service) : IAsyncDisposable
     {

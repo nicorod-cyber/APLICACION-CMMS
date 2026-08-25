@@ -1,0 +1,9 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as auth from "../../auth/authStore";
+import { useAuthStore, type CurrentUser } from "../../auth/authStore";
+import { UnitOperationalActions } from "./UnitOperationalActions";
+const user: CurrentUser = { id: "1", username: "planner", email: "planner@example.com", displayName: "Planner", isActive: true, isLocked: false, roles: ["planificador"], permissions: ["activos.lecturas.registrar", "activos.lecturas.corregir", "activos.administrar", "activos.cambiar_faena"], faenas: [] };
+beforeEach(() => { useAuthStore.setState({ user }); vi.spyOn(auth, "apiFetch").mockResolvedValue([] as never); }); afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+describe("UnitOperationalActions", () => { it("uses the asset-style reading dialog without date or observations", () => { render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><UnitOperationalActions unitCode="CFA-1" complete lastReading={34000} readingUnit="horas" canCorrectReading locationType="FAENA" /></QueryClientProvider>); fireEvent.click(screen.getByRole("button", { name: /^Registrar lectura/ })); expect(screen.getByText("HOROMETRAJE · horas")).toBeInTheDocument(); expect(screen.getByLabelText("Nueva lectura")).toBeInTheDocument(); expect(screen.queryByLabelText("Fecha efectiva")).not.toBeInTheDocument(); expect(screen.queryByLabelText("Observaciones")).not.toBeInTheDocument(); }); });

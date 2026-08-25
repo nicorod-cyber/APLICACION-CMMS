@@ -1,6 +1,7 @@
 using System.Data;
 using MaintenanceCMMS.Application.Abstractions.Pagination;
 using MaintenanceCMMS.Application.Auditing;
+using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.OperationalUnits;
 using MaintenanceCMMS.Domain.Common;
@@ -11,8 +12,20 @@ using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.OperationalUnits;
 
-public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit) : IOperationalUnitService
+public sealed class OperationalUnitService : IOperationalUnitService
 {
+    private readonly CmmsDbContext db;
+    private readonly IAuditService audit;
+    private readonly IAssetService? assetService;
+
+    public OperationalUnitService(CmmsDbContext db, IAuditService audit) : this(db, audit, null) { }
+
+    public OperationalUnitService(CmmsDbContext db, IAuditService audit, IAssetService? assetService)
+    {
+        this.db = db;
+        this.audit = audit;
+        this.assetService = assetService;
+    }
     private static readonly HashSet<string> CriticalRoleCodes = new(StringComparer.OrdinalIgnoreCase) { "FABRICA", "CHASIS" };
 
     public async Task<PagedResponse<OperationalUnitSummary>> ListPageAsync(OperationalUnitListQuery query, UserAccessContext user, CancellationToken ct)
@@ -172,8 +185,10 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         await LockCompositionAsync(ct);
         var unit = await FindUnitAsync(unidadCodigo, ct); if (unit is null) return null; EnsureView(u, unit);
-        await MountCoreAsync(unit, r.ActivoCodigo, r.RolComponenteCodigo, r.OrdenTrabajoNumero, r.FechaMontajeUtc ?? DateTimeOffset.UtcNow, r.Observaciones, r.Motivo, u, ct);
+        var mountedAt = r.FechaMontajeUtc ?? DateTimeOffset.UtcNow;
+        await MountCoreAsync(unit, r.ActivoCodigo, r.RolComponenteCodigo, r.OrdenTrabajoNumero, mountedAt, r.Observaciones, r.Motivo, u, ct);
         await SaveCompositionAsync(ct);
+        await SynchronizeCompositionReferenceAsync(unit, r.ActivoCodigo, r.RolComponenteCodigo, mountedAt, u, ct);
         await OperationalUnitStateCalculator.RecalculateAsync(db, unit, r.Motivo, ct);
         await SaveCompositionAsync(ct); await tx.CommitAsync(ct);
         await Audit(u, "operational_unit.component_mounted", unit.Code, unit.Faena?.Code, ct);
@@ -212,12 +227,183 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         await db.SaveChangesAsync(ct);
         await MountCoreAsync(unit, r.ActivoEntranteCodigo, r.RolComponenteCodigo, r.OrdenTrabajoNumero, date, r.Observaciones, r.Motivo, u, ct);
         await SaveCompositionAsync(ct);
+        await SynchronizeCompositionReferenceAsync(unit, r.ActivoEntranteCodigo, r.RolComponenteCodigo, date, u, ct);
         await OperationalUnitStateCalculator.RecalculateAsync(db, unit, r.Motivo, ct);
         await SaveCompositionAsync(ct); await tx.CommitAsync(ct);
         await Audit(u, "operational_unit.component_replaced", unit.Code, unit.Faena?.Code, ct);
         return await CompositionAsync(unit, ct);
     }
 
+    public async Task<OperationalUnitReadingResponse> AddReadingAsync(string codigo, CreateAssetReadingRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        RegisterReadings(user);
+        await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var (unit, chassis, factory) = await RequiredComponentsAsync(codigo, user, ct, true);
+        var readAt = request.FechaLecturaUtc ?? DateTimeOffset.UtcNow;
+        var operationId = Guid.NewGuid();
+        var readings = new List<AssetReadingEntity>();
+        foreach (var asset in new[] { chassis, factory })
+        {
+            AssetReadingPolicy.EnsureCanRegister(asset, request.Valor, request.FechaLecturaUtc, "nuevas lecturas de unidad");
+            var last = await LastValidReadingAsync(asset.Id, ct);
+            if (last is not null && request.Valor < last.Value) throw new DomainException($"La lectura de unidad no puede disminuir para {asset.Code}.");
+            var reading = new AssetReadingEntity { AssetId = asset.Id, OperationalUnitId = unit.Id, OperationalUnitReadingOperationId = operationId, ReadAtUtc = readAt, Value = request.Valor, Source = ReadingSource(request.Origen), RegisteredByUserId = user.UserId, EvidenceReference = Text(request.EvidenciaReferencia), Observations = UnitTrace(unit.Code, request.Observaciones) };
+            db.AssetReadings.Add(reading);
+            readings.Add(reading);
+        }
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await Audit(user, "operational_unit.reading_registered", unit.Code, unit.Faena?.Code, ct);
+        return new OperationalUnitReadingResponse(unit.Code, readings.Select(reading => ToReadingResponse(reading)).ToArray());
+    }
+
+    public async Task<IReadOnlyCollection<OperationalUnitCorrectableReadingResponse>> GetCorrectableReadingsAsync(string codigo, UserAccessContext user, CancellationToken ct)
+    {
+        CorrectReadings(user);
+        var (unit, chassis, factory) = await RequiredComponentsAsync(codigo, user, ct, true);
+        var readings = await db.AssetReadings.AsNoTracking().Where(item => item.AssetId == chassis.Id && item.OperationalUnitId == unit.Id && item.OperationalUnitReadingOperationId != null && !item.IsCompositionSynchronization && !item.IsCorrection).ToListAsync(ct);
+        var corrected = (await db.AssetReadings.AsNoTracking().Where(item => item.CorrectedReadingId != null).Select(item => item.CorrectedReadingId!.Value).ToListAsync(ct)).ToHashSet();
+        var factoryOperations = (await db.AssetReadings.AsNoTracking().Where(item => item.AssetId == factory.Id && item.OperationalUnitId == unit.Id && item.OperationalUnitReadingOperationId != null && !item.IsCompositionSynchronization && !item.IsCorrection && !corrected.Contains(item.Id)).Select(item => item.OperationalUnitReadingOperationId!.Value).ToListAsync(ct)).ToHashSet();
+        return readings.Where(item => !corrected.Contains(item.Id) && factoryOperations.Contains(item.OperationalUnitReadingOperationId!.Value)).OrderByDescending(item => item.ReadAtUtc).ThenByDescending(item => item.CreatedAtUtc).Select(item => new OperationalUnitCorrectableReadingResponse(item.Id.ToString("D"), item.Value, "horas", item.ReadAtUtc)).ToArray();
+    }
+
+    public async Task<OperationalUnitReadingResponse> CorrectReadingAsync(string codigo, CorrectOperationalUnitReadingRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        CorrectReadings(user);
+        Require(request.LecturaChasisId, nameof(request.LecturaChasisId));
+        Require(request.MotivoCorreccion, nameof(request.MotivoCorreccion));
+        if (!Guid.TryParse(request.LecturaChasisId, out var chassisReadingId)) throw new DomainException("Lectura de CHASIS inválida.");
+        await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var (unit, chassis, factory) = await RequiredComponentsAsync(codigo, user, ct, true);
+        var chassisReading = await db.AssetReadings.SingleOrDefaultAsync(item => item.Id == chassisReadingId && item.AssetId == chassis.Id && item.OperationalUnitId == unit.Id && item.OperationalUnitReadingOperationId != null && !item.IsCompositionSynchronization && !item.IsCorrection, ct) ?? throw new DomainException("La lectura seleccionada no es una lectura corregible de CHASIS de esta unidad.");
+        var operationId = chassisReading.OperationalUnitReadingOperationId!.Value;
+        var factoryReading = await db.AssetReadings.SingleOrDefaultAsync(item => item.AssetId == factory.Id && item.OperationalUnitId == unit.Id && item.OperationalUnitReadingOperationId == operationId && !item.IsCompositionSynchronization && !item.IsCorrection, ct) ?? throw new DomainException("No se pudo identificar de forma inequívoca la lectura de FÁBRICA asociada.");
+        if (await db.AssetReadings.AnyAsync(item => item.CorrectedReadingId == chassisReading.Id || item.CorrectedReadingId == factoryReading.Id, ct)) throw new DomainException("La lectura seleccionada ya fue corregida.");
+        AssetReadingPolicy.EnsureCanRegister(chassis, request.Valor, null, "correcciones de lectura de unidad");
+        AssetReadingPolicy.EnsureCanRegister(factory, request.Valor, null, "correcciones de lectura de unidad");
+        var correctionAt = DateTimeOffset.UtcNow;
+        var correctionOperationId = Guid.NewGuid();
+        var corrections = new[]
+        {
+            new AssetReadingEntity { AssetId = chassis.Id, OperationalUnitId = unit.Id, OperationalUnitReadingOperationId = correctionOperationId, ReadAtUtc = correctionAt, Value = request.Valor, Source = ReadingSource(request.Origen), RegisteredByUserId = user.UserId, EvidenceReference = Text(request.EvidenciaReferencia), Observations = UnitTrace(unit.Code, request.Observaciones), IsCorrection = true, CorrectedReadingId = chassisReading.Id, CorrectionReason = request.MotivoCorreccion.Trim(), AuthorizedByUserId = user.UserId },
+            new AssetReadingEntity { AssetId = factory.Id, OperationalUnitId = unit.Id, OperationalUnitReadingOperationId = correctionOperationId, ReadAtUtc = correctionAt, Value = request.Valor, Source = ReadingSource(request.Origen), RegisteredByUserId = user.UserId, EvidenceReference = Text(request.EvidenciaReferencia), Observations = UnitTrace(unit.Code, request.Observaciones), IsCorrection = true, CorrectedReadingId = factoryReading.Id, CorrectionReason = request.MotivoCorreccion.Trim(), AuthorizedByUserId = user.UserId }
+        };
+        db.AssetReadings.AddRange(corrections);
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await Audit(user, "operational_unit.reading_corrected", unit.Code, unit.Faena?.Code, ct);
+        return new OperationalUnitReadingResponse(unit.Code, corrections.Select(ToReadingResponse).ToArray());
+    }
+
+    public async Task<OperationalUnitReadingResponse> CorrectLatestReadingAsync(string codigo, CorrectAssetReadingRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        var candidates = await GetCorrectableReadingsAsync(codigo, user, ct);
+        var selected = candidates.FirstOrDefault() ?? throw new DomainException("No existe una lectura de unidad válida y corregible para CHASIS y FÁBRICA.");
+        return await CorrectReadingAsync(codigo, new CorrectOperationalUnitReadingRequest(selected.Id, request.Valor, request.MotivoCorreccion, request.Origen, request.EvidenciaReferencia, request.Observaciones), user, ct);
+    }
+    public async Task<OperationalUnitStateEventResponse> AddStateEventAsync(string codigo, CreateAssetStateEventRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        MaintainAssets(user);
+        Require(request.EstadoOperacionalCodigo, nameof(request.EstadoOperacionalCodigo));
+        Require(request.Motivo, nameof(request.Motivo));
+        await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var (unit, chassis, factory) = await RequiredComponentsAsync(codigo, user, ct);
+        var state = await db.AssetOperationalStates.SingleOrDefaultAsync(item => item.Code == Code(request.EstadoOperacionalCodigo) && item.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente.");
+        var occurred = request.FechaEventoUtc ?? DateTimeOffset.UtcNow;
+        var events = new List<AssetStateEventEntity>();
+        foreach (var asset in new[] { chassis, factory })
+        {
+            var location = await db.AssetPhysicalLocationPeriods.AsNoTracking().SingleOrDefaultAsync(item => item.AssetId == asset.Id && item.ValidToUtc == null, ct) ?? throw new DomainException($"El activo {asset.Code} no tiene ubicación física vigente.");
+            AssetOperationalPolicy.EnsureTransitionAllowed(asset.OperationalState.Code, state.Code);
+            AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, location.LocationType, state.Code, state.Name);
+            var previous = asset.OperationalState;
+            asset.OperationalStateId = state.Id;
+            asset.OperationalState = state;
+            asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            var item = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = occurred, UserId = user.UserId, Reason = request.Motivo.Trim(), ReferenceType = "OPERATIONAL_UNIT", ReferenceId = unit.Id.ToString("D"), ReferenceText = unit.Code };
+            db.AssetStateEvents.Add(item);
+            events.Add(item);
+        }
+        await SetAssetStateEventCorrelationAsync(events.Select(item => item.Id), ct);
+        await OperationalUnitStateCalculator.RecalculateAsync(db, unit, $"UNIDAD:{unit.Code} {request.Motivo}", ct);
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await Audit(user, "operational_unit.state_changed", unit.Code, unit.Faena?.Code, ct);
+        return new OperationalUnitStateEventResponse(unit.Code, events.Select(item => new AssetStateEventResponse(item.Id.ToString("D"), item.Asset.Code, item.PreviousStateId == null ? null : chassis.Id == item.AssetId ? chassis.OperationalState.Code : factory.OperationalState.Code, state.Code, item.OccurredAtUtc, item.Reason, user.UserId, item.ReferenceType, item.ReferenceId, item.ReferenceText)).ToArray());
+    }
+
+    public Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        if (assetService is null) throw new InvalidOperationException("El servicio de traslado de activos no está disponible.");
+        return TransferThroughAssetServiceAsync(codigo, request, user, ct);
+    }
+
+    private async Task<IReadOnlyCollection<AssetTransferResponse>> TransferThroughAssetServiceAsync(string codigo, TransferAssetRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        var (unit, _, _) = await RequiredComponentsAsync(codigo, user, ct);
+        var result = await assetService!.TransferOperationalUnitAsync(unit.Code, request, user, ct);
+        await Audit(user, "operational_unit.transferred", unit.Code, unit.Faena?.Code, ct);
+        return result;
+    }
+
+    public Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterWorkshopEntryAsync(string codigo, RegisterWorkshopEntryRequest request, UserAccessContext user, CancellationToken ct) => MovePhysicalLocationAsync(codigo, "TALLER", request.TallerCodigo, request.FechaEfectivaUtc, request.EstadoOperacionalDestinoCodigo, request.OrdenTrabajoId, request.Motivo, request.Observaciones, user, ct);
+    public Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterReturnToSiteAsync(string codigo, RegisterReturnToSiteRequest request, UserAccessContext user, CancellationToken ct) => MovePhysicalLocationAsync(codigo, "FAENA", null, request.FechaEfectivaUtc, request.EstadoOperacionalDestinoCodigo, request.OrdenTrabajoId, request.Motivo, request.Observaciones, user, ct);
+
+    private async Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> MovePhysicalLocationAsync(string codigo, string targetType, string? workshopCode, DateTimeOffset effectiveAt, string? destinationStateCode, string? workOrderNumber, string? reason, string? observations, UserAccessContext user, CancellationToken ct)
+    {
+        MaintainAssets(user);
+        if (effectiveAt == default) throw new DomainException("La fecha efectiva es obligatoria.");
+        await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("LOCK TABLE vigencias_ubicacion_fisica_activo IN SHARE ROW EXCLUSIVE MODE", ct);
+        var (unit, chassis, factory) = await RequiredComponentsAsync(codigo, user, ct);
+        WorkshopEntity? workshop = null;
+        FaenaEntity? faena = null;
+        if (targetType == "TALLER")
+        {
+            Require(workshopCode, nameof(workshopCode));
+            workshop = await db.Workshops.Include(item => item.SupervisorUser).SingleOrDefaultAsync(item => item.Code == Code(workshopCode) && item.IsActive, ct) ?? throw new DomainException("El taller no existe o está inactivo.");
+            if (string.IsNullOrWhiteSpace(workshop.Commune) || workshop.SupervisorUser is null) throw new DomainException("El taller no está habilitado operacionalmente: requiere comuna y supervisor.");
+        }
+        else faena = unit.Faena ?? throw new DomainException("La unidad no tiene faena asignada.");
+        var state = string.IsNullOrWhiteSpace(destinationStateCode)
+            ? throw new DomainException(targetType == "TALLER" ? "Debe seleccionar el estado operacional de destino para ingresar al taller." : "Debe seleccionar el estado operacional de destino para retornar a faena.")
+            : await db.AssetOperationalStates.SingleOrDefaultAsync(item => item.Code == Code(destinationStateCode) && item.IsActive, ct) ?? throw new DomainException("Estado operacional destino inexistente.");
+        var order = string.IsNullOrWhiteSpace(workOrderNumber) ? null : await db.WorkOrders.SingleOrDefaultAsync(item => item.WorkOrderNumber == Code(workOrderNumber), ct) ?? throw new DomainException("La OT asociada no existe.");
+        var components = new[] { chassis, factory };
+        var currentLocations = new List<AssetPhysicalLocationPeriodEntity>();
+        foreach (var asset in components)
+        {
+            var current = await db.AssetPhysicalLocationPeriods.SingleOrDefaultAsync(item => item.AssetId == asset.Id && item.ValidToUtc == null, ct) ?? throw new DomainException($"El activo {asset.Code} no tiene ubicación física vigente.");
+            if (effectiveAt <= current.ValidFromUtc) throw new DomainException($"La fecha efectiva debe ser posterior al inicio de la ubicación vigente de {asset.Code}.");
+            currentLocations.Add(current);
+        }
+        if (currentLocations.Select(item => item.LocationType + ":" + (item.WorkshopId?.ToString() ?? item.FaenaId?.ToString() ?? string.Empty)).Distinct().Count() != 1) throw new DomainException("La unidad tiene una inconsistencia física preexistente; no se puede registrar un nuevo movimiento.");
+        var stateEvents = new List<AssetStateEventEntity>();
+        foreach (var asset in components)
+        {
+            AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, targetType, state.Code, state.Name);
+            AssetOperationalPolicy.EnsureTransitionAllowed(asset.OperationalState.Code, state.Code);
+            var current = currentLocations.Single(item => item.AssetId == asset.Id);
+            current.ValidToUtc = effectiveAt;
+            db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, LocationType = targetType, FaenaId = faena?.Id, WorkshopId = workshop?.Id, ValidFromUtc = effectiveAt, Reason = Text(reason), RegisteredByUserId = user.UserId, WorkOrderId = order?.Id, OperationalUnitId = unit.Id, Observations = Text(observations) });
+            var previous = asset.OperationalState;
+            if (previous.Id != state.Id)
+            {
+                asset.OperationalStateId = state.Id;
+                asset.OperationalState = state;
+                var stateEvent = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = effectiveAt, UserId = user.UserId, Reason = Text(reason) ?? (targetType == "TALLER" ? "Ingreso efectivo a taller" : "Retorno efectivo a faena"), ReferenceType = "OPERATIONAL_UNIT", ReferenceId = unit.Id.ToString("D"), ReferenceText = unit.Code };
+                db.AssetStateEvents.Add(stateEvent);
+                stateEvents.Add(stateEvent);
+            }
+            asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+        await SetAssetStateEventCorrelationAsync(stateEvents.Select(item => item.Id), ct);
+        await OperationalUnitStateCalculator.RecalculateAsync(db, unit, $"UNIDAD:{unit.Code} UBICACION_FISICA:{targetType}", ct);
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await Audit(user, targetType == "TALLER" ? "operational_unit.workshop_entered" : "operational_unit.returned_to_site", unit.Code, unit.Faena?.Code, ct);
+        return components.Select(asset => new AssetPhysicalLocationResponse(asset.Code, targetType, targetType == "TALLER" ? workshop!.Name : faena!.Name, workshop?.Commune, effectiveAt, null, user.UserId, order?.WorkOrderNumber, Text(reason), Text(observations), unit.Code, components.Select(item => item.Code).ToArray())).ToArray();
+    }
     private async Task MountCoreAsync(OperationalUnitEntity unit, string assetCode, string roleCode, string? workOrder, DateTimeOffset mountedAt, string? observations, string? reason, UserAccessContext u, CancellationToken ct)
     {
         var role = await db.OperationalUnitComponentRoles.SingleOrDefaultAsync(x => x.Code == Code(roleCode) && x.IsActive, ct) ?? throw new DomainException("Rol de componente inexistente.");
@@ -242,6 +428,69 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
         db.OperationalUnitComponents.Add(new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = asset.Id, ComponentRoleId = role.Id, InstalledAtUtc = mountedAt, InstallationWorkOrderId = await WorkOrderIdAsync(workOrder, ct), InstalledByUserId = u.UserId, InstallationReason = Text(reason), CriticalRoleCode = role.IsCritical ? role.Code : null, Observations = Text(observations) });
     }
 
+    private async Task SynchronizeCompositionReferenceAsync(OperationalUnitEntity unit, string incomingAssetCode, string roleCode, DateTimeOffset occurredAt, UserAccessContext user, CancellationToken ct)
+    {
+        var components = await db.OperationalUnitComponents.Include(item => item.ComponentRole).Include(item => item.Asset)
+            .Where(item => item.OperationalUnitId == unit.Id && item.RemovedAtUtc == null).ToArrayAsync(ct);
+        var chassis = components.SingleOrDefault(item => Same(item.ComponentRole.Code, "CHASIS"))?.Asset;
+        var factory = components.SingleOrDefault(item => Same(item.ComponentRole.Code, "FABRICA"))?.Asset;
+        if (chassis is null || factory is null || !Same(chassis.UsageMeasurementType, "HOROMETRO") || !Same(factory.UsageMeasurementType, "HOROMETRO")) return;
+        var chassisReading = await LastValidReadingAsync(chassis.Id, ct);
+        if (chassisReading is null) return;
+        var target = Same(roleCode, "CHASIS") ? factory : factory.Code == Code(incomingAssetCode) ? factory : null;
+        if (target is null) return;
+        db.AssetReadings.Add(new AssetReadingEntity
+        {
+            AssetId = target.Id,
+            OperationalUnitId = unit.Id,
+            ReadAtUtc = occurredAt,
+            Value = chassisReading.Value,
+            Source = "MANUAL",
+            RegisteredByUserId = user.UserId,
+            IsCompositionSynchronization = true,
+            Observations = $"Sincronización de referencia operacional por cambio de composición en {unit.Code}; referencia CHASIS {chassis.Code}: {chassisReading.Value}."
+        });
+    }
+    private async Task<(OperationalUnitEntity Unit, AssetEntity Chassis, AssetEntity Factory)> RequiredComponentsAsync(string code, UserAccessContext user, CancellationToken ct, bool requireHourMeters = false)
+    {
+        var unit = await FindUnitAsync(code, ct) ?? throw new DomainException("Unidad operacional inexistente.");
+        EnsureView(user, unit);
+        var components = await db.OperationalUnitComponents
+            .Include(item => item.ComponentRole)
+            .Include(item => item.Asset).ThenInclude(asset => asset.OperationalState)
+            .Include(item => item.Asset).ThenInclude(asset => asset.Faena)
+            .Where(item => item.OperationalUnitId == unit.Id && item.RemovedAtUtc == null)
+            .ToArrayAsync(ct);
+        var chassis = components.SingleOrDefault(item => Same(item.ComponentRole.Code, "CHASIS"))?.Asset;
+        var factory = components.SingleOrDefault(item => Same(item.ComponentRole.Code, "FABRICA"))?.Asset;
+        if (chassis is null || factory is null) throw new DomainException("La unidad debe tener una composición completa con CHASIS y FABRICA vigentes para esta operación.");
+        if (requireHourMeters && (!Same(chassis.UsageMeasurementType, "HOROMETRO") || !Same(factory.UsageMeasurementType, "HOROMETRO")))
+        {
+            var missing = new[] { chassis, factory }.Where(asset => !Same(asset.UsageMeasurementType, "HOROMETRO")).Select(asset => asset.Code).ToArray();
+            throw new DomainException($"La operación de unidad requiere medidor de horas en ambos componentes. Sin medidor de horas: {string.Join(", ", missing)}.");
+        }
+        return (unit, chassis, factory);
+    }
+
+    private async Task<AssetReadingEntity?> LastValidReadingAsync(Guid assetId, CancellationToken ct)
+    {
+        var readings = await db.AssetReadings.Where(item => item.AssetId == assetId).ToListAsync(ct);
+        var replaced = readings.Where(item => item.CorrectedReadingId.HasValue).Select(item => item.CorrectedReadingId!.Value).ToHashSet();
+        return readings.Where(item => !replaced.Contains(item.Id)).OrderByDescending(item => item.ReadAtUtc).ThenByDescending(item => item.CreatedAtUtc).FirstOrDefault();
+    }
+
+    private static AssetReadingResponse ToReadingResponse(AssetReadingEntity reading) => new(reading.Id.ToString("D"), reading.ReadAtUtc, reading.Value, "horas", null, reading.Source, reading.IsCorrection, reading.CorrectedReadingId?.ToString("D"), reading.IsAnomalous, reading.ValidationMessage, reading.Observations);
+    private static string ReadingSource(string? value) => Code(value) switch { "ORDEN_TRABAJO" => "ORDEN_TRABAJO", "IMPORTACION" => "IMPORTACION", "SAP" => "SAP", "TELEMETRIA" => "TELEMETRIA", _ => "MANUAL" };
+    private static string UnitTrace(string code, string? observations) => string.IsNullOrWhiteSpace(observations) ? $"Operación iniciada desde unidad operacional {code}." : $"Operación iniciada desde unidad operacional {code}. {observations.Trim()}";
+    private static void RegisterReadings(UserAccessContext user) { if (user.Permissions.Contains(AuthPermissions.RegisterAssetReadings, StringComparer.OrdinalIgnoreCase) || user.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase)) return; throw new UnauthorizedAccessException("No tiene permiso para registrar lecturas de activos."); }
+    private static void CorrectReadings(UserAccessContext user) { if (user.Permissions.Contains(AuthPermissions.CorrectAssetReadings, StringComparer.OrdinalIgnoreCase) || user.Roles.Contains(AuthRoles.Planner, StringComparer.OrdinalIgnoreCase)) return; throw new UnauthorizedAccessException("No tiene permiso para corregir lecturas de activos."); }
+    private static void MaintainAssets(UserAccessContext user) { if (user.Permissions.Contains(AuthPermissions.ManageAssets, StringComparer.OrdinalIgnoreCase)) return; throw new UnauthorizedAccessException("No tiene permiso para administrar activos."); }
+    private async Task SetAssetStateEventCorrelationAsync(IEnumerable<Guid> eventIds, CancellationToken ct)
+    {
+        if (!db.Database.IsNpgsql()) return;
+        var value = string.Join(",", eventIds.Distinct().OrderBy(item => item).Select(item => item.ToString("D")));
+        if (value.Length > 0) await db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('cmms.asset_state_event_id', {value}, true)", ct);
+    }
     private IQueryable<OperationalUnitEntity> Units() => db.OperationalUnits.Include(x => x.OperationalUnitType).Include(x => x.Faena).ThenInclude(x => x!.TechnicalLocation).Include(x => x.OperationalState).Include(x => x.DerivedFromAsset);
     private Task<OperationalUnitEntity?> FindUnitAsync(string code, CancellationToken ct) => Units().SingleOrDefaultAsync(x => x.Code == Code(code), ct);
 
@@ -257,10 +506,31 @@ public sealed class OperationalUnitService(CmmsDbContext db, IAuditService audit
     private async Task<OperationalUnitResponse> MapAsync(OperationalUnitEntity unit, CancellationToken ct)
     {
         var role = unit.DerivedFromAssetId is null ? null : await db.OperationalUnitComponents.AsNoTracking().Include(x => x.ComponentRole).Where(x => x.OperationalUnitId == unit.Id && x.AssetId == unit.DerivedFromAssetId && x.RemovedAtUtc == null).Select(x => x.ComponentRole.Code).FirstOrDefaultAsync(ct);
-        var derived = new OperationalUnitDerivedStateResponse(unit.OperationalState.Code, unit.DerivedFromAsset?.Code, role, unit.DerivedStateReason, unit.DerivedStateCalculatedAtUtc, unit.OperationalState.Name);
-        return new(unit.Code, unit.Name, unit.OperationalUnitType.Code, unit.Faena?.Code, unit.Faena?.TechnicalLocation?.Code, unit.OperationalState.Code, unit.Criticality, unit.CommissioningDate, unit.DecommissioningDate, unit.Observations, await CompositionAsync(unit, ct), derived, unit.OperationalUnitType.Name, unit.Faena?.Name, unit.Faena?.TechnicalLocation?.Name, unit.OperationalState.Name);
-    }
+        var composition = await CompositionAsync(unit, ct);
+        var componentCodes = composition.Completa ? composition.Vigentes.Select(item => item.ActivoCodigo).ToArray() : [];
+        var componentIds = componentCodes.Length == 0 ? new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase) : (await db.Assets.AsNoTracking().Where(item => componentCodes.Contains(item.Code)).Select(item => new { item.Id, item.Code }).ToListAsync(ct)).ToDictionary(item => item.Code, item => item.Id, StringComparer.OrdinalIgnoreCase);
+        var chassisCode = composition.Completa ? composition.Vigentes.SingleOrDefault(item => Same(item.RolComponenteCodigo, "CHASIS"))?.ActivoCodigo : null;
+        Guid? chassisId = chassisCode is not null && componentIds.TryGetValue(chassisCode, out var chassisAssetId) ? chassisAssetId : null;
+        decimal? lastReading = chassisId is null ? null : (await LastValidReadingAsync(chassisId.Value, ct))?.Value;
 
+        var physicalLocations = componentIds.Count == 0 ? [] : await db.AssetPhysicalLocationPeriods.AsNoTracking().Where(item => item.ValidToUtc == null && componentIds.Values.Contains(item.AssetId)).Select(item => item.LocationType + ":" + (item.WorkshopId ?? item.FaenaId).ToString()).ToListAsync(ct);
+        var physicalLocationType = physicalLocations.Count == 2 && physicalLocations.Distinct().Count() == 1 ? physicalLocations[0].Split(':')[0] : null;
+        var correctionReady = false;
+        if (composition.Completa && chassisId is not null)
+        {
+            var factoryCode = composition.Vigentes.Single(item => Same(item.RolComponenteCodigo, "FABRICA")).ActivoCodigo;
+            Guid? factoryId = componentIds.TryGetValue(factoryCode, out var factoryAssetId) ? factoryAssetId : null;
+            if (factoryId is not null)
+            {
+                var componentAssetIds = new[] { chassisId.Value, factoryId.Value };
+                var originals = await db.AssetReadings.Where(item => componentAssetIds.Contains(item.AssetId) && item.OperationalUnitId == unit.Id && item.OperationalUnitReadingOperationId != null && !item.IsCompositionSynchronization && !item.IsCorrection).ToListAsync(ct);
+                var replaced = originals.Where(item => item.CorrectedReadingId.HasValue).Select(item => item.CorrectedReadingId!.Value).ToHashSet();
+                correctionReady = originals.Where(item => item.AssetId == chassisId && !replaced.Contains(item.Id)).Any(chassisReading => originals.Any(factoryReading => factoryReading.AssetId == factoryId && !replaced.Contains(factoryReading.Id) && factoryReading.OperationalUnitReadingOperationId == chassisReading.OperationalUnitReadingOperationId));
+            }
+        }
+        var derived = new OperationalUnitDerivedStateResponse(unit.OperationalState.Code, unit.DerivedFromAsset?.Code, role, unit.DerivedStateReason, unit.DerivedStateCalculatedAtUtc, unit.OperationalState.Name);
+        return new(unit.Code, unit.Name, unit.OperationalUnitType.Code, unit.Faena?.Code, unit.Faena?.TechnicalLocation?.Code, unit.OperationalState.Code, unit.Criticality, unit.CommissioningDate, unit.DecommissioningDate, unit.Observations, composition, derived, unit.OperationalUnitType.Name, unit.Faena?.Name, unit.Faena?.TechnicalLocation?.Name, unit.OperationalState.Name, lastReading, lastReading is null ? null : "horas", physicalLocationType, correctionReady);
+    }
     private async Task LockCompositionAsync(CancellationToken ct)
     {
         if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("LOCK TABLE componentes_unidad_operativa IN SHARE ROW EXCLUSIVE MODE", ct);

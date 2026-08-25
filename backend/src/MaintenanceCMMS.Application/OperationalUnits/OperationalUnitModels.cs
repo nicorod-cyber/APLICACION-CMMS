@@ -1,5 +1,6 @@
 using MaintenanceCMMS.Application.Abstractions.Pagination;
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.Assets;
 
 namespace MaintenanceCMMS.Application.OperationalUnits;
 
@@ -16,10 +17,14 @@ public sealed record ReplaceOperationalUnitComponentRequest(string ActivoSalient
 public sealed record OperationalUnitComponentResponse(string ActivoCodigo, string ActivoNombre, string RolComponenteCodigo, DateTimeOffset FechaMontajeUtc, DateTimeOffset? FechaDesmontajeUtc, string? OrdenTrabajoMontaje, string? OrdenTrabajoDesmontaje, string? Observaciones, string? EstadoOperacionalCodigo = null, string? FaenaCodigo = null, string? UbicacionTecnicaCodigo = null, string? MontadoPor = null, string? MotivoMontaje = null, string? DesmontadoPor = null, string? MotivoDesmontaje = null, bool Vigente = true, string? EstadoOperacionalNombre = null);
 public sealed record OperationalUnitCompositionResponse(bool Completa, IReadOnlyCollection<string> Faltantes, IReadOnlyCollection<OperationalUnitComponentResponse> Vigentes, IReadOnlyCollection<OperationalUnitComponentResponse> Historial);
 public sealed record OperationalUnitDerivedStateResponse(string EstadoCodigo, string? ActivoRestrictivoCodigo, string? RolRestrictivoCodigo, string? Motivo, DateTimeOffset? CalculadoEnUtc, string? EstadoNombre = null);
-public sealed record OperationalUnitResponse(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string? UbicacionTecnicaCodigo, string EstadoOperacionalCodigo, string? Criticidad, DateOnly? FechaPuestaServicio, DateOnly? FechaBaja, string? Observaciones, OperationalUnitCompositionResponse Composicion, OperationalUnitDerivedStateResponse? EstadoDerivado = null, string? TipoUnidadNombre = null, string? FaenaNombre = null, string? UbicacionTecnicaNombre = null, string? EstadoOperacionalNombre = null);
+public sealed record OperationalUnitResponse(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string? UbicacionTecnicaCodigo, string EstadoOperacionalCodigo, string? Criticidad, DateOnly? FechaPuestaServicio, DateOnly? FechaBaja, string? Observaciones, OperationalUnitCompositionResponse Composicion, OperationalUnitDerivedStateResponse? EstadoDerivado = null, string? TipoUnidadNombre = null, string? FaenaNombre = null, string? UbicacionTecnicaNombre = null, string? EstadoOperacionalNombre = null, decimal? UltimaLectura = null, string? UnidadLectura = null, string? TipoUbicacionFisica = null, bool PuedeCorregirLectura = false);
 public sealed record OperationalUnitListQuery(string? FaenaCodigo = null, string? Texto = null, int Page = 1, int PageSize = 25);
 public sealed record OperationalUnitSummary(string Codigo, string Nombre, string TipoUnidadCodigo, string? FaenaCodigo, string? UbicacionTecnicaCodigo, string EstadoOperacionalCodigo, string? Criticidad, bool ComposicionCompleta, IReadOnlyCollection<string> RolesFaltantes);
 public sealed record OperationalUnitRuleResponse(string TipoUnidadCodigo, string RolComponenteCodigo, int CantidadMinima, int CantidadMaxima, bool Obligatorio, IReadOnlyCollection<AllowedComponentRequest> Permitidos);
+public sealed record OperationalUnitReadingResponse(string UnidadOperativaCodigo, IReadOnlyCollection<AssetReadingResponse> Lecturas);
+public sealed record OperationalUnitCorrectableReadingResponse(string Id, decimal Valor, string Unidad, DateTimeOffset FechaLecturaUtc);
+public sealed record CorrectOperationalUnitReadingRequest(string LecturaChasisId, decimal Valor, string MotivoCorreccion, string Origen = "MANUAL", string? EvidenciaReferencia = null, string? Observaciones = null);
+public sealed record OperationalUnitStateEventResponse(string UnidadOperativaCodigo, IReadOnlyCollection<AssetStateEventResponse> Eventos);
 
 /// <summary>Vista documental consolidada: cada fila conserva su activo propietario técnico.</summary>
 public sealed record OperationalUnitDocumentSummary(int PendingUpload, int PendingValidation, int Expiring, int Expired, int Valid, bool Compliant, bool BlocksAvailability);
@@ -55,6 +60,14 @@ public interface IOperationalUnitService
     Task<OperationalUnitCompositionResponse?> MountAsync(string unidadCodigo, MountOperationalUnitComponentRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitCompositionResponse?> UnmountAsync(string unidadCodigo, string activoCodigo, UnmountOperationalUnitComponentRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitCompositionResponse?> ReplaceAsync(string unidadCodigo, ReplaceOperationalUnitComponentRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitReadingResponse> AddReadingAsync(string codigo, CreateAssetReadingRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<OperationalUnitCorrectableReadingResponse>> GetCorrectableReadingsAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitReadingResponse> CorrectReadingAsync(string codigo, CorrectOperationalUnitReadingRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitReadingResponse> CorrectLatestReadingAsync(string codigo, CorrectAssetReadingRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<OperationalUnitStateEventResponse> AddStateEventAsync(string codigo, CreateAssetStateEventRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterWorkshopEntryAsync(string codigo, RegisterWorkshopEntryRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> RegisterReturnToSiteAsync(string codigo, RegisterReturnToSiteRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest request, UserAccessContext user, CancellationToken cancellationToken);
 }
 
 public interface IOperationalUnitDocumentService
@@ -68,4 +81,3 @@ public interface IOperationalUnitDocumentService
     Task<OperationalUnitDocumentResponse?> AnnulAsync(string unitCode, string documentId, MaintenanceCMMS.Application.Documents.AnnulDocumentRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<OperationalUnitDocumentOwnerContext?> FindCurrentUnitByComponentAsync(string assetCode, UserAccessContext user, CancellationToken cancellationToken);
 }
-

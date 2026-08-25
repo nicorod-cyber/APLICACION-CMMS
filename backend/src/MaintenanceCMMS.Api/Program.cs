@@ -1163,6 +1163,53 @@ operationalUnitsApi.MapGet("/component-context/{activoCodigo}", async (string ac
     try { var result = await service.FindCurrentUnitByComponentAsync(activoCodigo, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }
     catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
 }).RequireAuthorization("VerUnidadesOperativas").WithName("GetOperationalUnitComponentContext");
+operationalUnitsApi.MapPost("/{codigo}/readings", async (string codigo, CreateAssetReadingRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.AddReadingAsync(codigo, request, UserAccessContext.FromClaims(user), ct)); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("RegistrarLecturasActivos").WithName("CreateOperationalUnitReading");
+
+operationalUnitsApi.MapGet("/{codigo}/readings/correctable", async (string codigo, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.GetCorrectableReadingsAsync(codigo, UserAccessContext.FromClaims(user), ct)); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("CorregirLecturasActivos").WithName("GetCorrectableOperationalUnitReadings");
+
+operationalUnitsApi.MapPost("/{codigo}/readings/corrections", async (string codigo, CorrectOperationalUnitReadingRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.CorrectReadingAsync(codigo, request, UserAccessContext.FromClaims(user), ct)); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("CorregirLecturasActivos").WithName("CorrectOperationalUnitReading");
+operationalUnitsApi.MapPost("/{codigo}/state-events", async (string codigo, CreateAssetStateEventRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.AddStateEventAsync(codigo, request, UserAccessContext.FromClaims(user), ct)); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("AdministrarActivos").WithName("CreateOperationalUnitStateEvent");
+
+operationalUnitsApi.MapPost("/{codigo}/transfers", async (string codigo, TransferAssetRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.TransferAsync(codigo, request, UserAccessContext.FromClaims(user), ct)); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("CambiarFaenaActivos").WithName("TransferOperationalUnit");
+
+operationalUnitsApi.MapPost("/{codigo}/physical-location/workshop-entry", async (string codigo, RegisterWorkshopEntryRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.RegisterWorkshopEntryAsync(codigo, request, UserAccessContext.FromClaims(user), ct)); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("AdministrarActivos").WithName("RegisterOperationalUnitWorkshopEntry");
+
+operationalUnitsApi.MapPost("/{codigo}/physical-location/return-to-site", async (string codigo, RegisterReturnToSiteRequest request, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
+{
+    try { return Results.Ok(await service.RegisterReturnToSiteAsync(codigo, request, UserAccessContext.FromClaims(user), ct)); }
+    catch (DomainException ex) { return Results.BadRequest(new { message = ex.Message }); }
+    catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+}).RequireAuthorization("AdministrarActivos").WithName("RegisterOperationalUnitReturnToSite");
 operationalUnitsApi.MapGet("/{codigo}", async (string codigo, ClaimsPrincipal user, IOperationalUnitService service, CancellationToken ct) =>
 {
     try { var result = await service.GetAsync(codigo, UserAccessContext.FromClaims(user), ct); return result is null ? Results.NotFound() : Results.Ok(result); }

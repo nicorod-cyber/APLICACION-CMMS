@@ -17,6 +17,7 @@ public interface IAssetService
     Task<AssetStateEventResponse?> AddStateEventAsync(string codigo, CreateAssetStateEventRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<AssetStateEventAntecedentSearchResponse> SearchStateEventAntecedentsAsync(string codigo, string origen, string? texto, int pagina, int tamanoPagina, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest request, UserAccessContext user, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<AssetTransferResponse>> TransferOperationalUnitAsync(string unidadCodigo, TransferAssetRequest request, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AssetHistoryEntry>> GetHistoryAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
     Task<AssetPhysicalLocationResponse?> GetPhysicalLocationAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> GetPhysicalLocationHistoryAsync(string codigo, UserAccessContext user, CancellationToken cancellationToken);

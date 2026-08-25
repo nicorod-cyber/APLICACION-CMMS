@@ -8,8 +8,8 @@ import { UnitCompositionDialogs, type UnitComponent } from "./UnitCompositionDia
 import { Dialog } from "../../shared/ui/Dialog";
 import { UnitEditorDialog } from "../operational-units/components/UnitEditorDialog";
 import { OperationalUnitDocumentManager } from "../documents/components/OperationalUnitDocumentManager";
-import { UnitTransferDialog } from "../operational-units/components/UnitTransferDialog";
 import { UnitMaintenanceActions } from "../operational-units/components/UnitMaintenanceActions";
+import { UnitOperationalActions } from "../operational-units/components/UnitOperationalActions";
 
 type Rule = { tipoUnidadCodigo:string; rolComponenteCodigo:string; cantidadMinima:number; cantidadMaxima:number; obligatorio:boolean; permitidos:{tipoActivoCodigo?:string|null;familiaEquipoCodigo?:string|null}[] };
 
@@ -27,6 +27,10 @@ type Unit = {
   criticidad?: string | null;
   observaciones?: string | null;
   estadoDerivado?: { estadoCodigo: string; estadoNombre?: string | null; activoRestrictivoCodigo?: string | null; rolRestrictivoCodigo?: string | null; motivo?: string | null } | null;
+  ultimaLectura?: number | null;
+  unidadLectura?: string | null;
+  tipoUbicacionFisica?: string | null;
+  puedeCorregirLectura?: boolean;
   composicion: { completa: boolean; faltantes: string[]; vigentes: UnitComponent[]; historial: UnitComponent[] };
 };
 
@@ -39,7 +43,6 @@ export function CompositeUnitDetailPage() {
   const [compositionMode, setCompositionMode] = useState<"mount" | "replace" | "unmount" | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [transferring, setTransferring] = useState(false);
   const user = useAuthStore(state => state.user);
   const canTransfer = user?.permissions.includes(AUTH_PERMISSIONS.changeAssetFaena) ?? false;
   const canManage = user?.permissions.includes(AUTH_PERMISSIONS.manageOperationalUnits) ?? false;
@@ -65,19 +68,18 @@ export function CompositeUnitDetailPage() {
         <nav className="flex overflow-auto border-y border-slate-200 bg-slate-50">{tabs.map(([key, label]) => <button className={"h-12 shrink-0 border-b-2 px-4 text-sm font-semibold " + (tab === key ? "border-teal-500 text-teal-700" : "border-transparent text-slate-500")} key={key} onClick={() => setTab(key)} type="button">{label}</button>)}</nav>
         <div className="p-5">{tab === "resumen" ? <UnitSummary unit={unit} /> : tab === "composicion" ? <Composition unit={unit} openAsset={asset => navigate("/equipos/activos/" + encodeURIComponent(asset))} onAction={setCompositionMode} canCompose={canCompose} /> : tab === "historial" ? <CompositionHistory rows={unit.composicion.historial} /> : <OperationalUnitDocumentManager unitCode={unit.codigo} />}</div>
       </section>
-      <aside className="space-y-3">
-        <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="font-semibold">Acciones de la unidad</h2><div className="mt-3 grid gap-2"><button className="secondary-button" type="button" disabled={!canManage} onClick={() => setEditing(true)}>Editar identificación</button><button className="secondary-button" type="button" disabled={!canTransfer} onClick={() => setTransferring(true)}>Trasladar unidad completa</button><button className="secondary-button" type="button" disabled={!canCompose} onClick={() => setCompositionMode("mount")}>Montar componente</button><button className="secondary-button" type="button" disabled={!canCompose || unit.composicion.vigentes.length === 0} onClick={() => setCompositionMode("replace")}>Reemplazar componente</button><button className="secondary-button text-red-700" type="button" disabled={!canCompose || unit.composicion.vigentes.length === 0} onClick={() => setCompositionMode("unmount")}>Desmontar componente</button><button className="secondary-button" type="button" onClick={() => setRulesOpen(true)}>Ver reglas de composición</button></div></article><article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="font-semibold">Mantenimiento</h2><div className="mt-3"><UnitMaintenanceActions unitCode={unit.codigo} canTransfer={canTransfer} /></div></article>
+      <aside className="space-y-3"><UnitOperationalActions unitCode={unit.codigo} complete={unit.composicion.completa} lastReading={unit.ultimaLectura} readingUnit={unit.unidadLectura} stateCode={unit.estadoDerivado?.estadoCodigo || unit.estadoOperacionalCodigo} locationType={unit.tipoUbicacionFisica} faenaCode={unit.faenaCodigo} canCorrectReading={unit.puedeCorregirLectura} />
+        <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="font-semibold">Acciones de la unidad</h2><div className="mt-3 grid gap-2"><button className="secondary-button" type="button" disabled={!canManage} onClick={() => setEditing(true)}>Editar identificación</button><button className="secondary-button" type="button" disabled={!canCompose} onClick={() => setCompositionMode("mount")}>Montar componente</button><button className="secondary-button" type="button" disabled={!canCompose || unit.composicion.vigentes.length === 0} onClick={() => setCompositionMode("replace")}>Reemplazar componente</button><button className="secondary-button text-red-700" type="button" disabled={!canCompose || unit.composicion.vigentes.length === 0} onClick={() => setCompositionMode("unmount")}>Desmontar componente</button><button className="secondary-button" type="button" onClick={() => setRulesOpen(true)}>Ver reglas de composición</button></div></article><article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><h2 className="font-semibold">Mantenimiento</h2><div className="mt-3"><UnitMaintenanceActions unitCode={unit.codigo} canTransfer={canTransfer} /></div></article>
       </aside>
     </div>
     <button className="secondary-button" type="button" onClick={() => navigate(-1)}><ArrowLeft className="h-4 w-4" />Volver</button>
-    <UnitTransferDialog open={transferring} unit={unit} onClose={() => setTransferring(false)} />
-    <UnitCompositionDialogs unitCode={unit.codigo} unitSiteCode={unit.faenaCodigo} components={unit.composicion.vigentes} mode={compositionMode} onClose={() => setCompositionMode(null)} />
+        <UnitCompositionDialogs unitCode={unit.codigo} unitSiteCode={unit.faenaCodigo} components={unit.composicion.vigentes} mode={compositionMode} onClose={() => setCompositionMode(null)} />
     <Dialog open={rulesOpen} onClose={() => setRulesOpen(false)} title="Reglas de composición"><p className="mb-3 text-sm text-slate-500">Reglas reales vigentes para el tipo {unit.tipoUnidadNombre || unit.tipoUnidadCodigo}.</p>{rules.isLoading ? <p className="text-sm text-slate-500">Cargando reglas...</p> : rules.error ? <p className="error-banner">{rules.error instanceof Error ? rules.error.message : "No fue posible cargar las reglas."}</p> : <div className="space-y-2">{rules.data?.map(rule => <article className="rounded border p-3" key={rule.rolComponenteCodigo}><b>{rule.rolComponenteCodigo}</b><p className="text-sm">Cantidad: {rule.cantidadMinima} - {rule.cantidadMaxima}{rule.obligatorio ? " - obligatorio" : " - opcional"}</p><p className="text-sm text-slate-500">Compatibles: {rule.permitidos.length ? rule.permitidos.map(item => item.familiaEquipoCodigo || item.tipoActivoCodigo || "Sin restriccion").join(", ") : "Sin restriccion adicional"}</p></article>)}</div>}</Dialog>
   </section>;
 }
 
 function UnitSummary({ unit }: { unit: Unit }) {
-  return <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[["Tipo", unit.tipoUnidadNombre || unit.tipoUnidadCodigo], ["Faena", unit.faenaNombre || unit.faenaCodigo], ["Estado", unit.estadoDerivado?.estadoNombre || unit.estadoOperacionalNombre || unit.estadoDerivado?.estadoCodigo || unit.estadoOperacionalCodigo], ["Composición", unit.composicion.completa ? "Completa" : "Incompleta"], ["Componentes vigentes", String(unit.composicion.vigentes.length)], ["Preventivo", "NA"], ["Disponibilidad", "NA"], ["Criticidad", unit.criticidad]].map(([label, value]) => <article className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={label}><p className="text-[10px] font-extrabold uppercase tracking-[.05em] text-slate-500">{label}</p><b className="mt-1 block text-sm">{na(value)}</b></article>)}</div>;
+  return <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[["Tipo", unit.tipoUnidadNombre || unit.tipoUnidadCodigo], ["Faena", unit.faenaNombre || unit.faenaCodigo], ["Estado", unit.estadoDerivado?.estadoNombre || unit.estadoOperacionalNombre || unit.estadoDerivado?.estadoCodigo || unit.estadoOperacionalCodigo], ["Composición", unit.composicion.completa ? "Completa" : "Incompleta"], ["Componentes vigentes", String(unit.composicion.vigentes.length)], ["Última lectura", unit.ultimaLectura === null || unit.ultimaLectura === undefined ? "NA" : String(unit.ultimaLectura) + " " + (unit.unidadLectura || "horas")], ["Preventivo", "NA"], ["Disponibilidad", "NA"], ["Criticidad", unit.criticidad]].map(([label, value]) => <article className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={label}><p className="text-[10px] font-extrabold uppercase tracking-[.05em] text-slate-500">{label}</p><b className="mt-1 block text-sm">{na(value)}</b></article>)}</div>;
 }
 
 function Composition({ unit, openAsset, onAction, canCompose }: { unit: Unit; openAsset: (code: string) => void; onAction: (mode: "mount" | "replace" | "unmount") => void; canCompose: boolean }) {

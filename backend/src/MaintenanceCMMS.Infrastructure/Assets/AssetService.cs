@@ -420,6 +420,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         Maintain(u); Require(r.EstadoOperacionalCodigo, nameof(r.EstadoOperacionalCodigo)); Require(r.Motivo, nameof(r.Motivo));
         await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         var asset = await FindAsync(codigo, true, ct); if (asset is null) return null; View(u, asset);
+        await EnsureIndependentOperationAsync(asset, ct);
         var state = await _db.AssetOperationalStates.SingleOrDefaultAsync(x => x.Code == Code(r.EstadoOperacionalCodigo) && x.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente.");
         AssetOperationalPolicy.EnsureTransitionAllowed(asset.OperationalState.Code, state.Code);
         var physicalLocation = await _db.AssetPhysicalLocationPeriods.AsNoTracking().SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct);
@@ -438,7 +439,15 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         return new(evt.Id.ToString("D"), asset.Code, previous.Code, state.Code, evt.OccurredAtUtc, evt.Reason, u.UserId, evt.ReferenceType, evt.ReferenceId, evt.ReferenceText);
     }
 
-    public async Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
+    public Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest r, UserAccessContext u, CancellationToken ct) => TransferCoreAsync(codigo, r, u, ct, false);
+
+    public async Task<IReadOnlyCollection<AssetTransferResponse>> TransferOperationalUnitAsync(string unidadCodigo, TransferAssetRequest r, UserAccessContext u, CancellationToken ct)
+    {
+        var component = await _db.OperationalUnitComponents.AsNoTracking().Include(item => item.Asset).SingleOrDefaultAsync(item => item.OperationalUnit.Code == Code(unidadCodigo) && item.RemovedAtUtc == null && item.ComponentRole.Code == "CHASIS", ct) ?? throw new DomainException("La unidad debe tener un CHASIS vigente para trasladarse.");
+        return await TransferCoreAsync(component.Asset.Code, r, u, ct, true);
+    }
+
+    private async Task<IReadOnlyCollection<AssetTransferResponse>> TransferCoreAsync(string codigo, TransferAssetRequest r, UserAccessContext u, CancellationToken ct, bool initiatedFromOperationalUnit)
     {
         if (!_authorization.CanChangeAssetFaena(u)) throw new UnauthorizedAccessException("No tiene permiso para trasladar activos entre faenas.");
         Require(r.FaenaDestinoCodigo, nameof(r.FaenaDestinoCodigo)); Require(r.Motivo, nameof(r.Motivo));
@@ -459,7 +468,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         var assets = new List<AssetEntity> { asset }; OperationalUnitEntity? unit = null;
         if (activeComponent is not null)
         {
-            if (!r.TrasladarUnidadCompleta) throw new DomainException("El activo está montado. Traslade la unidad completa o desmonte previamente el componente.");
+            if (!initiatedFromOperationalUnit) throw new DomainException("El activo está montado. La operación debe realizarse desde la unidad compuesta.");
             unit = activeComponent.OperationalUnit;
             assets = await _db.OperationalUnitComponents.Include(x => x.Asset).ThenInclude(x => x.Faena).Where(x => x.OperationalUnitId == unit.Id && x.RemovedAtUtc == null).Select(x => x.Asset).ToListAsync(ct);
             if (assets.Any(x => x.FaenaId != asset.FaenaId)) throw new DomainException("La unidad contiene componentes con inconsistencia territorial; corrija la composición antes del traslado.");
@@ -643,7 +652,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
     public async Task<AssetReadingResponse> AddReadingAsync(string codigo, CreateAssetReadingRequest r, UserAccessContext u, CancellationToken ct)
     {
-        RegisterReadings(u); var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); AssetReadingPolicy.EnsureCanRegister(asset, r.Valor, r.FechaLecturaUtc, "nuevas lecturas");
+        RegisterReadings(u); var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); await EnsureIndependentOperationAsync(asset, ct); AssetReadingPolicy.EnsureCanRegister(asset, r.Valor, r.FechaLecturaUtc, "nuevas lecturas");
         var valid = await ValidReadingsAsync(asset.Id, ct); var last = valid.OrderByDescending(x => x.ReadAtUtc).ThenByDescending(x => x.CreatedAtUtc).FirstOrDefault(); if (last is not null && r.Valor < last.Value) throw new DomainException("Una lectura normal no puede disminuir.");
         var reading = new AssetReadingEntity { AssetId = asset.Id, ReadAtUtc = r.FechaLecturaUtc ?? DateTimeOffset.UtcNow, Value = r.Valor, Source = Source(r.Origen), RegisteredByUserId = u.UserId, EvidenceReference = Empty(r.EvidenciaReferencia), Observations = Empty(r.Observaciones) }; _db.AssetReadings.Add(reading); await _db.SaveChangesAsync(ct); return MapReadings([.. valid, reading], asset.UsageMeasurementType).Single(x => x.Id == reading.Id.ToString("D"));
     }
@@ -651,7 +660,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     public async Task<AssetReadingResponse> CorrectReadingAsync(string codigo, string readingId, CorrectAssetReadingRequest r, UserAccessContext u, CancellationToken ct)
     {
         CorrectReadings(u); Require(r.MotivoCorreccion, nameof(r.MotivoCorreccion)); if (!Guid.TryParse(readingId, out var id)) throw new DomainException("Lectura invalida.");
-        var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); AssetReadingPolicy.EnsureCanRegister(asset, r.Valor, r.FechaLecturaUtc, "correcciones de lecturas"); var original = await _db.AssetReadings.SingleOrDefaultAsync(x => x.Id == id && x.AssetId == asset.Id, ct) ?? throw new DomainException("Lectura inexistente."); if (await _db.AssetReadings.AnyAsync(x => x.CorrectedReadingId == original.Id, ct)) throw new DomainException("La lectura ya fue corregida.");
+        var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset); await EnsureIndependentOperationAsync(asset, ct); AssetReadingPolicy.EnsureCanRegister(asset, r.Valor, r.FechaLecturaUtc, "correcciones de lecturas"); var original = await _db.AssetReadings.SingleOrDefaultAsync(x => x.Id == id && x.AssetId == asset.Id, ct) ?? throw new DomainException("Lectura inexistente."); if (await _db.AssetReadings.AnyAsync(x => x.CorrectedReadingId == original.Id, ct)) throw new DomainException("La lectura ya fue corregida.");
         var correction = new AssetReadingEntity { AssetId = asset.Id, ReadAtUtc = r.FechaLecturaUtc ?? DateTimeOffset.UtcNow, Value = r.Valor, Source = Source(r.Origen), RegisteredByUserId = u.UserId, EvidenceReference = Empty(r.EvidenciaReferencia), Observations = Empty(r.Observaciones), IsCorrection = true, CorrectedReadingId = original.Id, CorrectionReason = r.MotivoCorreccion.Trim(), AuthorizedByUserId = u.UserId }; _db.AssetReadings.Add(correction); await _db.SaveChangesAsync(ct); return MapReadings(await ValidReadingsAsync(asset.Id, ct), asset.UsageMeasurementType).Single(x => x.Id == correction.Id.ToString("D"));
     }
 
@@ -677,6 +686,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         if (_db.Database.IsNpgsql()) await _db.Database.ExecuteSqlRawAsync("LOCK TABLE vigencias_ubicacion_fisica_activo IN SHARE ROW EXCLUSIVE MODE", ct);
         var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset);
+        await EnsureIndependentOperationAsync(asset, ct);
         WorkshopEntity? workshop = null; FaenaEntity? faena = null;
         if (targetType == "TALLER")
         {
@@ -763,6 +773,11 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     }
 
     private IQueryable<AssetEntity> Query() => _db.Assets.Include(x => x.AssetTypeDefinition).Include(x => x.Family).Include(x => x.Faena).ThenInclude(x => x.TechnicalLocation).Include(x => x.OperationalState);
+    private async Task EnsureIndependentOperationAsync(AssetEntity asset, CancellationToken ct)
+    {
+        var unit = await _db.OperationalUnitComponents.AsNoTracking().Include(item => item.OperationalUnit).Where(item => item.AssetId == asset.Id && item.RemovedAtUtc == null).Select(item => item.OperationalUnit.Code).SingleOrDefaultAsync(ct);
+        if (unit is not null) throw new DomainException($"El activo forma parte de {unit}. La operación debe realizarse desde la unidad compuesta.");
+    }
     private async Task SetAssetStateEventCorrelationAsync(IEnumerable<Guid> eventIds, CancellationToken ct)
     {
         if (!_db.Database.IsNpgsql()) return;
