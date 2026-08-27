@@ -3,7 +3,7 @@ import { useState } from "react";
 import { ArrowLeft, FileText, Truck, Wrench } from "lucide-react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { apiFetch, AUTH_PERMISSIONS, useAuthStore } from "../auth/authStore";
-import { na } from "./formatters";
+import { formatPhysicalLocation, na } from "./formatters";
 import { UnitCompositionDialogs, type UnitComponent } from "./UnitCompositionDialogs";
 import { Dialog } from "../../shared/ui/Dialog";
 import { UnitEditorDialog } from "../operational-units/components/UnitEditorDialog";
@@ -30,6 +30,7 @@ type Unit = {
   ultimaLectura?: number | null;
   unidadLectura?: string | null;
   tipoUbicacionFisica?: string | null;
+  nombreUbicacionFisica?: string | null;
   puedeCorregirLectura?: boolean;
   composicion: { completa: boolean; faltantes: string[]; vigentes: UnitComponent[]; historial: UnitComponent[] };
 };
@@ -79,7 +80,7 @@ export function CompositeUnitDetailPage() {
 }
 
 function UnitSummary({ unit }: { unit: Unit }) {
-  return <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[["Tipo", unit.tipoUnidadNombre || unit.tipoUnidadCodigo], ["Faena", unit.faenaNombre || unit.faenaCodigo], ["Estado", unit.estadoDerivado?.estadoNombre || unit.estadoOperacionalNombre || unit.estadoDerivado?.estadoCodigo || unit.estadoOperacionalCodigo], ["Composición", unit.composicion.completa ? "Completa" : "Incompleta"], ["Componentes vigentes", String(unit.composicion.vigentes.length)], ["Última lectura", unit.ultimaLectura === null || unit.ultimaLectura === undefined ? "NA" : String(unit.ultimaLectura) + " " + (unit.unidadLectura || "horas")], ["Preventivo", "NA"], ["Disponibilidad", "NA"], ["Criticidad", unit.criticidad]].map(([label, value]) => <article className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={label}><p className="text-[10px] font-extrabold uppercase tracking-[.05em] text-slate-500">{label}</p><b className="mt-1 block text-sm">{na(value)}</b></article>)}</div>;
+  return <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[["Tipo", unit.tipoUnidadNombre || unit.tipoUnidadCodigo], ["Faena", unit.faenaNombre || unit.faenaCodigo], ["Estado", unit.estadoDerivado?.estadoNombre || unit.estadoOperacionalNombre || unit.estadoDerivado?.estadoCodigo || unit.estadoOperacionalCodigo], ["Lugar", formatPhysicalLocation(unit.tipoUbicacionFisica, unit.nombreUbicacionFisica)], ["Composición", unit.composicion.completa ? "Completa" : "Incompleta"], ["Componentes vigentes", String(unit.composicion.vigentes.length)], ["Última lectura", unit.ultimaLectura === null || unit.ultimaLectura === undefined ? "NA" : String(unit.ultimaLectura) + " " + (unit.unidadLectura || "horas")], ["Preventivo", "NA"], ["Disponibilidad", "NA"], ["Criticidad", unit.criticidad]].map(([label, value]) => <article className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={label}><p className="text-[10px] font-extrabold uppercase tracking-[.05em] text-slate-500">{label}</p><b className="mt-1 block text-sm">{na(value)}</b></article>)}</div>;
 }
 
 function Composition({ unit, openAsset, onAction, canCompose }: { unit: Unit; openAsset: (code: string) => void; onAction: (mode: "mount" | "replace" | "unmount") => void; canCompose: boolean }) {

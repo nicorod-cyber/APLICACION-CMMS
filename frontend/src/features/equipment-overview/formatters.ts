@@ -14,8 +14,12 @@ export function formatUsage(row: EquipmentOverviewRow) {
 }
 
 export function formatLocation(row: EquipmentOverviewRow) {
-  if (!row.physicalLocationType || !row.physicalLocationName) return "NA";
-  return row.physicalLocationType === "FAENA" ? "En faena" : row.physicalLocationName;
+  return formatPhysicalLocation(row.physicalLocationType, row.physicalLocationName);
+}
+
+export function formatPhysicalLocation(type?: string | null, name?: string | null) {
+  if (!type || !name) return "NA";
+  return type === "FAENA" ? "En faena" : name;
 }
 
 export function documentLabel(value?: DocumentRequirementStatus | null) {

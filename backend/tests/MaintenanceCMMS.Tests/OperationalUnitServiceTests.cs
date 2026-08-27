@@ -265,6 +265,53 @@ var afterReading = await fixture.Service.GetAsync("CFA-OPS", operationalUser, Ca
         await Assert.ThrowsAsync<DomainException>(() => assetService.AddReadingAsync("CHF-TWCK41", new CreateAssetReadingRequest(12600m), operationalUser, CancellationToken.None));
         await Assert.ThrowsAsync<DomainException>(() => assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("OPERATIVO", "Intento individual"), operationalUser, CancellationToken.None));
     }
+    [Fact]
+    public async Task GetAsync_ProjectsCurrentPhysicalLocationForSiteAndWorkshop()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var user = new UserAccessContext("admin", [AuthRoles.Admin], [AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition, AuthPermissions.ManageAssets], ["F001"]);
+        await fixture.Service.CreateTypeAsync(new OperationalUnitTypeRequest("CFA", "Camión fábrica"), user, CancellationToken.None);
+        await fixture.Service.CreateRoleAsync(new OperationalUnitRoleRequest("CHASIS", "Chasis"), user, CancellationToken.None);
+        await fixture.Service.CreateRoleAsync(new OperationalUnitRoleRequest("FABRICA", "Fábrica"), user, CancellationToken.None);
+        var permitted = new[] { new AllowedComponentRequest("MONTABLE") };
+        await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "CHASIS", 1, 1, true, permitted), user, CancellationToken.None);
+        await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 1, 1, true, permitted), user, CancellationToken.None);
+        await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-LUGAR", "CFA lugar", "CFA", "F001", "OPERATIVO"), user, CancellationToken.None);
+
+        var faena = await fixture.Db.Faenas.SingleAsync(item => item.Code == "F001");
+        var components = await fixture.Db.Assets.Where(item => item.Code == "CHF-TWCK41" || item.Code == "AUGER-1000").ToArrayAsync();
+        var locationStart = DateTimeOffset.UtcNow.AddMinutes(-2);
+        fixture.Db.AssetPhysicalLocationPeriods.AddRange(components.Select(asset => new AssetPhysicalLocationPeriodEntity
+        {
+            AssetId = asset.Id,
+            LocationType = "FAENA",
+            FaenaId = faena.Id,
+            ValidFromUtc = locationStart,
+            RegisteredByUserId = user.UserId,
+            Reason = "Ubicación inicial de prueba"
+        }));
+        await fixture.Db.SaveChangesAsync();
+        await fixture.Service.MountAsync("CFA-LUGAR", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje inicial"), user, CancellationToken.None);
+        await fixture.Service.MountAsync("CFA-LUGAR", new MountOperationalUnitComponentRequest("AUGER-1000", "FABRICA", Motivo: "Montaje inicial"), user, CancellationToken.None);
+
+        var atSite = await fixture.Service.GetAsync("CFA-LUGAR", user, CancellationToken.None);
+        Assert.NotNull(atSite);
+        Assert.Equal("FAENA", atSite!.TipoUbicacionFisica);
+        Assert.Equal("Faena", atSite.NombreUbicacionFisica);
+
+        var supervisor = new AppUserEntity { Username = "supervisor-lugar", Email = "supervisor-lugar@example.test", DisplayName = "Supervisor", PasswordHash = "test-hash", IsActive = true };
+        var workshop = new WorkshopEntity { Code = "TAL-LUGAR", Name = "Taller CFA", EquipmentCapacity = 2, Commune = "Antofagasta", SupervisorUser = supervisor, IsActive = true, CreatedByUserId = user.UserId };
+        fixture.Db.AddRange(supervisor, workshop);
+        await fixture.Db.SaveChangesAsync();
+        await fixture.Service.RegisterWorkshopEntryAsync("CFA-LUGAR", new RegisterWorkshopEntryRequest(workshop.Code, DateTimeOffset.UtcNow.AddMinutes(1), "CORRECTIVO", Motivo: "Ingreso de prueba"), user, CancellationToken.None);
+
+        var atWorkshop = await fixture.Service.GetAsync("CFA-LUGAR", user, CancellationToken.None);
+        Assert.NotNull(atWorkshop);
+        Assert.Equal("TALLER", atWorkshop!.TipoUbicacionFisica);
+        Assert.Equal("Taller CFA", atWorkshop.NombreUbicacionFisica);
+        var activeLocations = await fixture.Db.AssetPhysicalLocationPeriods.Where(item => components.Select(component => component.Id).Contains(item.AssetId) && item.ValidToUtc == null).ToArrayAsync();
+        Assert.All(activeLocations, location => Assert.Equal(workshop.Id, location.WorkshopId));
+    }
     private sealed record Fixture(string DatabaseName, string AdminConnectionString, CmmsDbContext Db, IOperationalUnitService Service) : IAsyncDisposable
     {
         public static async Task<Fixture> CreateAsync()

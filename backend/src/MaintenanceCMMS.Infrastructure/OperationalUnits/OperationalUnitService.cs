@@ -513,8 +513,16 @@ public sealed class OperationalUnitService : IOperationalUnitService
         Guid? chassisId = chassisCode is not null && componentIds.TryGetValue(chassisCode, out var chassisAssetId) ? chassisAssetId : null;
         decimal? lastReading = chassisId is null ? null : (await LastValidReadingAsync(chassisId.Value, ct))?.Value;
 
-        var physicalLocations = componentIds.Count == 0 ? [] : await db.AssetPhysicalLocationPeriods.AsNoTracking().Where(item => item.ValidToUtc == null && componentIds.Values.Contains(item.AssetId)).Select(item => item.LocationType + ":" + (item.WorkshopId ?? item.FaenaId).ToString()).ToListAsync(ct);
-        var physicalLocationType = physicalLocations.Count == 2 && physicalLocations.Distinct().Count() == 1 ? physicalLocations[0].Split(':')[0] : null;
+        var physicalLocations = componentIds.Count == 0 ? [] : await db.AssetPhysicalLocationPeriods.AsNoTracking()
+            .Where(item => item.ValidToUtc == null && componentIds.Values.Contains(item.AssetId))
+            .Select(item => new { item.LocationType, LocationId = item.WorkshopId ?? item.FaenaId, LocationName = item.Workshop != null ? item.Workshop.Name : item.Faena != null ? item.Faena.Name : null })
+            .ToListAsync(ct);
+        var physicalLocation = physicalLocations.Count == componentIds.Count && physicalLocations
+            .Select(item => new { item.LocationType, item.LocationId, item.LocationName })
+            .Distinct()
+            .Count() == 1
+            ? physicalLocations[0]
+            : null;
         var correctionReady = false;
         if (composition.Completa && chassisId is not null)
         {
@@ -529,7 +537,7 @@ public sealed class OperationalUnitService : IOperationalUnitService
             }
         }
         var derived = new OperationalUnitDerivedStateResponse(unit.OperationalState.Code, unit.DerivedFromAsset?.Code, role, unit.DerivedStateReason, unit.DerivedStateCalculatedAtUtc, unit.OperationalState.Name);
-        return new(unit.Code, unit.Name, unit.OperationalUnitType.Code, unit.Faena?.Code, unit.Faena?.TechnicalLocation?.Code, unit.OperationalState.Code, unit.Criticality, unit.CommissioningDate, unit.DecommissioningDate, unit.Observations, composition, derived, unit.OperationalUnitType.Name, unit.Faena?.Name, unit.Faena?.TechnicalLocation?.Name, unit.OperationalState.Name, lastReading, lastReading is null ? null : "horas", physicalLocationType, correctionReady);
+        return new(unit.Code, unit.Name, unit.OperationalUnitType.Code, unit.Faena?.Code, unit.Faena?.TechnicalLocation?.Code, unit.OperationalState.Code, unit.Criticality, unit.CommissioningDate, unit.DecommissioningDate, unit.Observations, composition, derived, unit.OperationalUnitType.Name, unit.Faena?.Name, unit.Faena?.TechnicalLocation?.Name, unit.OperationalState.Name, lastReading, lastReading is null ? null : "horas", physicalLocation?.LocationType, correctionReady, physicalLocation?.LocationName);
     }
     private async Task LockCompositionAsync(CancellationToken ct)
     {
