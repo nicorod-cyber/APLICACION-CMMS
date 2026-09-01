@@ -3,8 +3,8 @@ using System.Text.Json;
 using ClosedXML.Excel;
 using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.SharePoint;
@@ -22,6 +22,8 @@ public sealed class FileMetadataExcelImportService : IFileMetadataExcelImportSer
         FileMetadataExcelImportRequest request,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         DomainGuard.AgainstEmpty(request.ExcelPath, nameof(request.ExcelPath));
         if (!File.Exists(request.ExcelPath))
         {
@@ -116,7 +118,9 @@ public sealed class FileMetadataExcelImportService : IFileMetadataExcelImportSer
         await _dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new FileMetadataExcelImportResult(rowsRead, inserted, updated, skipped, duplicates, 0, warnings, referencesNotFound);
-    }
+
+        });
+}
 
     private async Task<FileMetadataEntity> CreateEntityAsync(
         IXLRow row,

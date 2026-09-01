@@ -29,3 +29,6 @@ backups/
 *.suo
 
 artifacts/
+
+# Migration reports
+reports/

@@ -2,8 +2,8 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Auditing;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Faenas;
 using MaintenanceCMMS.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
@@ -325,7 +325,7 @@ public sealed class FaenaServiceTests
     public void Model_UsesUniqueTechnicalLocationPerFaenaAndRestrictsResponsibleDeletion()
     {
         var options = new DbContextOptionsBuilder<CmmsDbContext>()
-            .UseNpgsql("Host=localhost;Database=cmms_model;Username=cmms;Password=cmms")
+            .UseSqlServer("Host=localhost;Database=cmms_model;Username=cmms;Password=cmms")
             .Options;
         using var db = new CmmsDbContext(options);
 
@@ -348,7 +348,7 @@ public sealed class FaenaServiceTests
         Assert.NotNull(administrator);
         Assert.True(administrator!.IsNullable);
         Assert.Equal("administrador_contrato", administrator.GetColumnName());
-        Assert.Equal("text", administrator.GetColumnType());
+        Assert.Equal("nvarchar(max)", administrator.GetColumnType());
         var zoneConstraint = Assert.Single(faenaType.GetCheckConstraints().Where(item => item.Name == "ck_faenas_zona_valida"));
         Assert.Equal(FaenaZones.CheckConstraintSql, zoneConstraint.Sql);
     }
@@ -383,18 +383,18 @@ public sealed class FaenaServiceTests
 
     private sealed class Fixture : IAsyncDisposable
     {
-        private readonly PostgreSqlWorkTestFixture _database;
+        private readonly SqlServerWorkTestFixture _database;
 
-        private Fixture(PostgreSqlWorkTestFixture database)
+        private Fixture(SqlServerWorkTestFixture database)
         {
             _database = database;
-            Service = new FaenaService(database.DbContext, new AuthorizationPolicyService(), new PostgreSqlAuditService(database.DbContext, new AuditContextAccessor()));
+            Service = new FaenaService(database.DbContext, new AuthorizationPolicyService(), new SqlServerAuditService(database.DbContext, new AuditContextAccessor()));
         }
 
         public CmmsDbContext Db => _database.DbContext;
         public IFaenaService Service { get; }
 
-        public static async Task<Fixture> CreateAsync() => new(await PostgreSqlWorkTestFixture.CreateAsync());
+        public static async Task<Fixture> CreateAsync() => new(await SqlServerWorkTestFixture.CreateAsync());
 
         public CmmsDbContext NewContext() => _database.NewContext();
 

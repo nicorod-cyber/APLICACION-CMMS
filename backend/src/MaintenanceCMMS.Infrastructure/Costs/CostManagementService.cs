@@ -2,8 +2,8 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Costs;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 namespace MaintenanceCMMS.Infrastructure.Costs;
 public sealed class CostManagementService(CmmsDbContext db,IAuditService audit):ICostManagementService

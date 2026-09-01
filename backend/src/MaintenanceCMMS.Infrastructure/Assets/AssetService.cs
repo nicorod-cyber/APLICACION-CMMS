@@ -8,8 +8,8 @@ using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Documents;
 using MaintenanceCMMS.Infrastructure.OperationalUnits;
 using Microsoft.EntityFrameworkCore;
@@ -90,7 +90,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         if (!string.IsNullOrWhiteSpace(query.FamiliaEquipoCodigo)) source = source.Where(a => a.Family != null && a.Family.Code == Code(query.FamiliaEquipoCodigo));
         if (!string.IsNullOrWhiteSpace(query.Criticidad)) source = source.Where(a => a.Criticality != null && a.Criticality == query.Criticidad.Trim());
         if (!string.IsNullOrWhiteSpace(query.EstadoOperacionalCodigo)) source = source.Where(a => a.OperationalState.Code == Code(query.EstadoOperacionalCodigo));
-        if (!string.IsNullOrWhiteSpace(query.Texto)) { var term=query.Texto.Trim(); source=source.Where(a=>EF.Functions.ILike(a.Code, "%" + term + "%") || EF.Functions.ILike(a.Name, "%" + term + "%")); }
+        if (!string.IsNullOrWhiteSpace(query.Texto)) { var term=query.Texto.Trim(); source=source.Where(a=>EF.Functions.Like(a.Code, "%" + term + "%") || EF.Functions.Like(a.Name, "%" + term + "%")); }
         var total = await source.CountAsync(ct);
         var entities = await source.OrderBy(a => a.Code).ThenBy(a => a.Id).Skip((page - 1) * pageSize).Take(pageSize).Include(a => a.AssetTypeDefinition).Include(a => a.Family).Include(a => a.Faena).ThenInclude(f => f!.TechnicalLocation).Include(a => a.OperationalState).ToListAsync(ct);
         var items = await SummariesAsync(entities, ct);
@@ -153,10 +153,10 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
-            assets = assets.Where(x => EF.Functions.ILike(x.Code, "%" + term + "%")
-                || EF.Functions.ILike(x.Name, "%" + term + "%")
-                || (x.SerialNumber != null && EF.Functions.ILike(x.SerialNumber, "%" + term + "%")));
-            units = units.Where(x => EF.Functions.ILike(x.Code, "%" + term + "%") || EF.Functions.ILike(x.Name, "%" + term + "%"));
+            assets = assets.Where(x => EF.Functions.Like(x.Code, "%" + term + "%")
+                || EF.Functions.Like(x.Name, "%" + term + "%")
+                || (x.SerialNumber != null && EF.Functions.Like(x.SerialNumber, "%" + term + "%")));
+            units = units.Where(x => EF.Functions.Like(x.Code, "%" + term + "%") || EF.Functions.Like(x.Name, "%" + term + "%"));
         }
 
         if (!string.IsNullOrWhiteSpace(query.TipoUbicacionFisica))
@@ -389,6 +389,8 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
     public async Task<AssetDetail> CreateAsync(CreateAssetRequest r, UserAccessContext u, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         Maintain(u); Require(r.Nombre, nameof(r.Nombre)); var code = await NextCodeAsync(ct);
         var refs = await ReferencesAsync(r.TipoActivoCodigo, r.FamiliaEquipoCodigo, r.FaenaCodigo, r.EstadoOperacionalCodigo, u, ct); ValidateDates(r.AnioFabricacion, r.FechaPuestaServicio, r.FechaBaja);
         await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
@@ -400,7 +402,9 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         await SyncIdentifierAliasesAsync(entity, ct);
         await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
         await AuditAsync(u, "asset.created", entity, null, entity, ct); return (await GetByIdAsync(code, u, ct))!;
-    }
+
+        });
+}
     public async Task<AssetDetail?> UpdateAsync(string codigo, UpdateAssetRequest r, UserAccessContext u, CancellationToken ct)
     {
         Maintain(u); Require(r.Nombre, nameof(r.Nombre)); var asset = await FindAsync(codigo, true, ct); if (asset is null) return null; View(u, asset);
@@ -417,6 +421,8 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
     public async Task<AssetStateEventResponse?> AddStateEventAsync(string codigo, CreateAssetStateEventRequest r, UserAccessContext u, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync<AssetStateEventResponse?>(_db, async () =>
+        {
         Maintain(u); Require(r.EstadoOperacionalCodigo, nameof(r.EstadoOperacionalCodigo)); Require(r.Motivo, nameof(r.Motivo));
         await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         var asset = await FindAsync(codigo, true, ct); if (asset is null) return null; View(u, asset);
@@ -427,17 +433,22 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, physicalLocation?.LocationType, state.Code, state.Name);
         var previous = asset.OperationalState; var occurred = r.FechaEventoUtc ?? DateTimeOffset.UtcNow;
         var antecedent = await ValidateStateEventAntecedentAsync(asset, r, u, ct);
-        asset.OperationalStateId = state.Id; asset.OperationalState = state; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
-        if (Same(state.Code, AssetOperationalPolicy.DecommissionedStateCode)) asset.DecommissioningDate ??= DateOnly.FromDateTime(occurred.UtcDateTime);
+
         var evt = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = occurred, UserId = u.UserId, Reason = r.Motivo.Trim(), ReferenceType = antecedent.Type, ReferenceId = antecedent.Id, ReferenceText = antecedent.Reference };
         _db.AssetStateEvents.Add(evt);
+        await _db.SaveChangesAsync(ct);
         await SetAssetStateEventCorrelationAsync([evt.Id], ct);
+        asset.OperationalStateId = state.Id; asset.OperationalState = state; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        if (Same(state.Code, AssetOperationalPolicy.DecommissionedStateCode)) asset.DecommissioningDate ??= DateOnly.FromDateTime(occurred.UtcDateTime);
         await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, asset.Id, $"{antecedent.Type}:{antecedent.Id ?? antecedent.Reference} {r.Motivo}".Trim(), ct);
         await _db.SaveChangesAsync(ct);
+        await ClearAssetChangeCorrelationsAsync(ct);
         await tx.CommitAsync(ct);
         await AuditAsync(u, "asset.operational_state.changed", asset, new { Estado = previous.Code }, new { Estado = state.Code, r.Motivo, antecedent.Type, antecedent.Id, antecedent.Reference }, ct);
         return new(evt.Id.ToString("D"), asset.Code, previous.Code, state.Code, evt.OccurredAtUtc, evt.Reason, u.UserId, evt.ReferenceType, evt.ReferenceId, evt.ReferenceText);
-    }
+
+        });
+}
 
     public Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest r, UserAccessContext u, CancellationToken ct) => TransferCoreAsync(codigo, r, u, ct, false);
 
@@ -449,10 +460,12 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
     private async Task<IReadOnlyCollection<AssetTransferResponse>> TransferCoreAsync(string codigo, TransferAssetRequest r, UserAccessContext u, CancellationToken ct, bool initiatedFromOperationalUnit)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         if (!_authorization.CanChangeAssetFaena(u)) throw new UnauthorizedAccessException("No tiene permiso para trasladar activos entre faenas.");
         Require(r.FaenaDestinoCodigo, nameof(r.FaenaDestinoCodigo)); Require(r.Motivo, nameof(r.Motivo));
         await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
-        if (_db.Database.IsNpgsql()) await _db.Database.ExecuteSqlRawAsync("LOCK TABLE vigencias_ubicacion_activo IN SHARE ROW EXCLUSIVE MODE", ct);
+        await SqlServerTransactionLock.AcquireExclusiveAsync(_db, "cmms.asset-location-periods", ct);
         var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset);
         var destination = await _db.Faenas.Include(x => x.TechnicalLocation).SingleOrDefaultAsync(x => x.Code == Code(r.FaenaDestinoCodigo) && x.IsActive, ct) ?? throw new DomainException("Faena destino inexistente.");
         if (!_authorization.CanViewFaena(u, destination.Code)) throw new UnauthorizedAccessException("No tiene acceso a la faena destino.");
@@ -476,10 +489,17 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         }
         var results = new List<AssetTransferResponse>();
         var stateEventIds = new List<Guid>();
-        foreach (var item in assets.DistinctBy(x => x.Id)) results.Add(await TransferCoreAsync(item, destination, unit, destinationState, r, u, stateEventIds, ct));
-        await _db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('cmms.asset_transfer_ids', {string.Join(",", results.Select(x => x.TrasladoId))}, true)", ct);
+        var pendingStateChanges = new List<(AssetEntity Asset, AssetOperationalStateEntity State)>();
+        foreach (var item in assets.DistinctBy(x => x.Id)) results.Add(await TransferCoreAsync(item, destination, unit, destinationState, r, u, stateEventIds, pendingStateChanges, ct));
+        await _db.SaveChangesAsync(ct);
+        await SetAssetTransferCorrelationAsync(results.Select(result => result.TrasladoId), ct);
         await SetAssetStateEventCorrelationAsync(stateEventIds, ct);
-        await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+        foreach (var item in assets.DistinctBy(x => x.Id)) { item.FaenaId = destination.Id; item.Faena = destination; item.UpdatedAtUtc = DateTimeOffset.UtcNow; }
+        foreach (var pending in pendingStateChanges) { pending.Asset.OperationalStateId = pending.State.Id; pending.Asset.OperationalState = pending.State; }
+        foreach (var item in assets.DistinctBy(x => x.Id)) await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, item.Id, $"TRANSFER:{destination.Code} {r.Motivo}".Trim(), ct);
+        await _db.SaveChangesAsync(ct);
+        await ClearAssetChangeCorrelationsAsync(ct);
+        await tx.CommitAsync(ct);
         foreach (var item in assets) await AuditAsync(u, "asset.transferred", item, new { Faena = results.Single(x => x.ActivoCodigo == item.Code).FaenaOrigenCodigo }, new { Faena = destination.Code, Estado = destinationState?.Code ?? item.OperationalState.Code, r.FechaEfectivaUtc, r.Motivo, Unidad = unit?.Code }, ct);
         if (_documentaryWorkOrders is not null)
         {
@@ -494,7 +514,9 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
             }
         }
         return results;
-    }
+
+        });
+}
     public async Task<AssetStateEventAntecedentSearchResponse> SearchStateEventAntecedentsAsync(string codigo, string origen, string? texto, int pagina, int tamanoPagina, UserAccessContext u, CancellationToken ct)
     {
         Maintain(u);
@@ -613,7 +635,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
             "INSPECTION" or "INSPECCION" => throw new DomainException("No existe un m?dulo de inspecciones disponible para usar como antecedente."), _ => throw new DomainException("El origen de cambio seleccionado no es v?lido.")
         };
     }
-    private async Task<AssetTransferResponse> TransferCoreAsync(AssetEntity asset, FaenaEntity destination, OperationalUnitEntity? unit, AssetOperationalStateEntity? destinationState, TransferAssetRequest r, UserAccessContext u, ICollection<Guid> stateEventIds, CancellationToken ct)
+    private async Task<AssetTransferResponse> TransferCoreAsync(AssetEntity asset, FaenaEntity destination, OperationalUnitEntity? unit, AssetOperationalStateEntity? destinationState, TransferAssetRequest r, UserAccessContext u, ICollection<Guid> stateEventIds, ICollection<(AssetEntity Asset, AssetOperationalStateEntity State)> pendingStateChanges, CancellationToken ct)
     {
         var current = await _db.AssetLocationPeriods.SingleOrDefaultAsync(x => x.AssetId == asset.Id && x.ValidToUtc == null, ct);
         if (current is not null && r.FechaEfectivaUtc <= current.ValidFromUtc) throw new DomainException($"La fecha efectiva del traslado de {asset.Code} debe ser posterior al inicio de su ubicación vigente.");
@@ -631,18 +653,19 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         _db.AssetLocationPeriods.Add(new AssetLocationPeriodEntity { AssetId = asset.Id, FaenaId = destination.Id, ValidFromUtc = r.FechaEfectivaUtc, TransferId = transfer.Id });
         physical.ValidToUtc = r.FechaEfectivaUtc;
         _db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, LocationType = "FAENA", FaenaId = destination.Id, ValidFromUtc = r.FechaEfectivaUtc, RegisteredByUserId = u.UserId, Reason = r.Motivo, OperationalUnitId = unit?.Id, Observations = Empty(r.Observaciones) });
-        var origin = asset.Faena?.Code; asset.FaenaId = destination.Id; asset.Faena = destination; asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        var origin = asset.Faena?.Code;
         var previous = asset.OperationalState;
         if (!Same(previous.Code, state.Code))
         {
             AssetOperationalPolicy.EnsureTransitionAllowed(previous.Code, state.Code);
-            asset.OperationalStateId = state.Id; asset.OperationalState = state;
+
             var stateEvent = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = r.FechaEfectivaUtc, UserId = u.UserId, Reason = r.Motivo.Trim(), ReferenceType = "TRANSFER", ReferenceId = transfer.Id.ToString("D"), ReferenceText = null };
 
             _db.AssetStateEvents.Add(stateEvent);
             stateEventIds.Add(stateEvent.Id);
+            pendingStateChanges.Add((asset, state));
         }
-        await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, asset.Id, $"TRANSFER:{transfer.Id:D} {r.Motivo}", ct);
+
         return new(transfer.Id.ToString("D"), asset.Code, origin, destination.Code, transfer.EffectiveAtUtc, transfer.Reason, transfer.UserId, transfer.RegisteredAtUtc, transfer.Observations, unit?.Code);
     }
     public async Task<IReadOnlyCollection<AssetReadingResponse>> GetReadingsAsync(string codigo, UserAccessContext u, CancellationToken ct)
@@ -682,9 +705,11 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
 
     private async Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> MovePhysicalLocationAsync(string codigo, string targetType, string? workshopCode, DateTimeOffset effectiveAt, string? destinationStateCode, string? workOrderNumber, string? reason, string? observations, UserAccessContext u, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         Maintain(u); if (effectiveAt == default) throw new DomainException("La fecha efectiva es obligatoria.");
         await using var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
-        if (_db.Database.IsNpgsql()) await _db.Database.ExecuteSqlRawAsync("LOCK TABLE vigencias_ubicacion_fisica_activo IN SHARE ROW EXCLUSIVE MODE", ct);
+        await SqlServerTransactionLock.AcquireExclusiveAsync(_db, "cmms.asset-physical-location-periods", ct);
         var asset = await FindAsync(codigo, true, ct) ?? throw new DomainException("Activo inexistente."); View(u, asset);
         await EnsureIndependentOperationAsync(asset, ct);
         WorkshopEntity? workshop = null; FaenaEntity? faena = null;
@@ -720,6 +745,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         }
         AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, targetType, targetState.Code, targetState.Name);
         var auditPrevious = new Dictionary<Guid, object>();
+        var pendingStateChanges = new List<(AssetEntity Asset, AssetOperationalStateEntity State)>();
         var stateEventIds = new List<Guid>();
         foreach (var item in assets.DistinctBy(x => x.Id))
         {
@@ -735,21 +761,26 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
             if (previous.Id != targetState.Id)
             {
                 AssetOperationalPolicy.EnsureTransitionAllowed(previous.Code, targetState.Code);
-                item.OperationalStateId = targetState.Id; item.OperationalState = targetState;
                 var stateEvent = new AssetStateEventEntity { AssetId = item.Id, PreviousStateId = previous.Id, NewStateId = targetState.Id, OccurredAtUtc = effectiveAt, UserId = u.UserId, Reason = Empty(reason) ?? (targetType == "TALLER" ? "Ingreso efectivo a taller" : "Retorno efectivo a faena"), ReferenceType = "UBICACION_FISICA", ReferenceId = item.Id.ToString("D"), ReferenceText = order?.WorkOrderNumber };
                 _db.AssetStateEvents.Add(stateEvent);
                 stateEventIds.Add(stateEvent.Id);
+                pendingStateChanges.Add((item, targetState));
             }
-            item.UpdatedAtUtc = DateTimeOffset.UtcNow;
-            await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, item.Id, $"UBICACION_FISICA:{targetType} {reason}".Trim(), ct);
         }
+        await _db.SaveChangesAsync(ct);
         await SetAssetStateEventCorrelationAsync(stateEventIds, ct);
-        await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+        foreach (var pending in pendingStateChanges) { pending.Asset.OperationalStateId = pending.State.Id; pending.Asset.OperationalState = pending.State; pending.Asset.UpdatedAtUtc = DateTimeOffset.UtcNow; }
+        foreach (var item in assets.DistinctBy(x => x.Id)) await OperationalUnitStateCalculator.RecalculateForAssetAsync(_db, item.Id, $"UBICACION_FISICA:{targetType} {reason}".Trim(), ct);
+        await _db.SaveChangesAsync(ct);
+        await ClearAssetChangeCorrelationsAsync(ct);
+        await tx.CommitAsync(ct);
         var affected = assets.Select(x => x.Code).Distinct().ToArray();
         var movements = await PhysicalLocationQuery().Where(x => affected.Contains(x.Asset.Code) && x.ValidToUtc == null).ToListAsync(ct);
         foreach (var item in assets) await AuditAsync(u, "asset.physical_location.changed", item, auditPrevious[item.Id], new { Ubicacion = targetType, Taller = workshop?.Code, Faena = faena?.Code, Estado = targetState.Code, FechaEfectiva = effectiveAt, FechaRegistro = DateTimeOffset.UtcNow, Usuario = u.UserId, UnidadOperativa = movementUnit?.Code, OT = order?.WorkOrderNumber, Motivo = Empty(reason), Observaciones = Empty(observations) }, ct);
         return movements.Select(x => ToPhysicalLocation(x, affected)).ToArray();
-    }
+
+        });
+}
     public async Task<IReadOnlyCollection<AssetHistoryEntry>> GetHistoryAsync(string codigo, UserAccessContext u, CancellationToken ct)
     {
         var asset = await FindAsync(codigo, false, ct); if (asset is null) return []; View(u, asset); return (await _db.AssetStateEvents.AsNoTracking().Include(x => x.PreviousState).Include(x => x.NewState).Where(x => x.AssetId == asset.Id).OrderByDescending(x => x.OccurredAtUtc).ToListAsync(ct)).Select(x => new AssetHistoryEntry(x.Id.ToString("D"), x.OccurredAtUtc, "STATE_CHANGED", "EVENTOS_ESTADO", x.UserId, x.PreviousState?.Code, x.NewState.Code, x.Reason)).ToArray();
@@ -772,6 +803,11 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
         var asset = await FindAsync(codigo, false, ct); if (asset is null) return null; View(u, asset); var matrix = await MatrixAsync(asset, ct); var documents = matrix.Where(x => x.BloqueaDisponibilidad && x.Estado is not "VALIDADO" and not "POR_VENCER").Select(x => $"Documento {x.TipoDocumento}: {x.Estado}").ToArray(); var excluded = AssetOperationalPolicy.IsExcludedFromOperationalUniverse(asset.OperationalState.Code); var operational = AssetOperationalPolicy.IsAvailable(asset.OperationalState.Code); var blocks = (operational || excluded ? [] : new[] { $"Estado operacional: {asset.OperationalState.Name}" }).Concat(documents).ToArray(); return new(asset.Code, !excluded && blocks.Length == 0, operational, documents.Length == 0, asset.OperationalState.Code, DocumentState(matrix), blocks, !excluded && blocks.Length == 0 ? 100 : 0);
     }
 
+    private async Task ClearAssetChangeCorrelationsAsync(CancellationToken ct)
+    {
+        await _db.Database.ExecuteSqlRawAsync("EXEC sys.sp_set_session_context @key=N'cmms.asset_state_event_ids', @value=NULL; EXEC sys.sp_set_session_context @key=N'cmms.asset_transfer_ids', @value=NULL;", ct);
+    }
+
     private IQueryable<AssetEntity> Query() => _db.Assets.Include(x => x.AssetTypeDefinition).Include(x => x.Family).Include(x => x.Faena).ThenInclude(x => x.TechnicalLocation).Include(x => x.OperationalState);
     private async Task EnsureIndependentOperationAsync(AssetEntity asset, CancellationToken ct)
     {
@@ -780,12 +816,16 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     }
     private async Task SetAssetStateEventCorrelationAsync(IEnumerable<Guid> eventIds, CancellationToken ct)
     {
-        if (!_db.Database.IsNpgsql()) return;
-
         var value = string.Join(",", eventIds.Distinct().OrderBy(id => id).Select(id => id.ToString("D")));
         if (value.Length == 0) return;
+        await _db.Database.ExecuteSqlInterpolatedAsync($"EXEC sys.sp_set_session_context @key=N'cmms.asset_state_event_ids', @value={value}", ct);
+    }
 
-        await _db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('cmms.asset_state_event_id', {value}, true)", ct);
+    private async Task SetAssetTransferCorrelationAsync(IEnumerable<string> transferIds, CancellationToken ct)
+    {
+        var value = string.Join(",", transferIds.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(id => id, StringComparer.OrdinalIgnoreCase));
+        if (value.Length == 0) return;
+        await _db.Database.ExecuteSqlInterpolatedAsync($"EXEC sys.sp_set_session_context @key=N'cmms.asset_transfer_ids', @value={value}", ct);
     }
     private Task<AssetEntity?> FindAsync(string code, bool tracking, CancellationToken ct) { var query = Query(); if (!tracking) query = query.AsNoTracking(); return query.SingleOrDefaultAsync(x => x.Code == Code(code), ct); }
 
@@ -948,7 +988,7 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
     private static string? Unit(string? type) => type == "HOROMETRO" ? "horas" : type == "KILOMETRAJE" ? "kilometros" : null;
     private async Task<string> NextCodeAsync(CancellationToken ct)
     {
-        var number = await _db.Database.SqlQueryRaw<long>("SELECT nextval('asset_number_seq') AS \"Value\"").SingleAsync(ct);
+        var number = await SqlServerSequence.NextValueAsync(_db, "asset_number_seq", ct);
         return $"ACT-{number:D6}";
     }
     private async Task<string?> CriticalityAsync(string? value, CancellationToken ct)

@@ -2,8 +2,8 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.WorkOrders;
 using Xunit;
 
@@ -12,10 +12,10 @@ namespace MaintenanceCMMS.Tests;
 public sealed class WorkOrderServiceTests
 {
     private const string FaenaCode = "FAE-1";
-    private static readonly UserAccessContext Planner = new(PostgreSqlWorkTestFixture.PlannerUserId.ToString("D"), [AuthRoles.Planner], [AuthPermissions.CreateWorkOrders, AuthPermissions.AssignWorkOrderSupervisor, AuthPermissions.SendWorkOrderToSupervisor, AuthPermissions.FinalValidateWorkOrders], [FaenaCode]);
-    private static readonly UserAccessContext Supervisor = new(PostgreSqlWorkTestFixture.SupervisorUserId.ToString("D"), [AuthRoles.MaintenanceSupervisor], [AuthPermissions.ManageWorkOrderTasks, AuthPermissions.ManageWorkOrderTechnicians, AuthPermissions.ReviewWorkOrderLabor, AuthPermissions.ReviewWorkOrderTasks, AuthPermissions.CloseWorkOrders], [FaenaCode]);
-    private static readonly UserAccessContext TechnicianOne = new(PostgreSqlWorkTestFixture.TechnicianOneUserId.ToString("D"), [AuthRoles.Technician], [AuthPermissions.ExecuteAssignedWorkOrders, AuthPermissions.RegisterWorkOrderLabor, AuthPermissions.RegisterWorkOrderEvidence, AuthPermissions.SignWorkOrders], [FaenaCode]);
-    private static readonly UserAccessContext TechnicianTwo = new(PostgreSqlWorkTestFixture.TechnicianTwoUserId.ToString("D"), [AuthRoles.Technician], [AuthPermissions.ExecuteAssignedWorkOrders, AuthPermissions.RegisterWorkOrderLabor, AuthPermissions.RegisterWorkOrderEvidence, AuthPermissions.SignWorkOrders], [FaenaCode]);
+    private static readonly UserAccessContext Planner = new(SqlServerWorkTestFixture.PlannerUserId.ToString("D"), [AuthRoles.Planner], [AuthPermissions.CreateWorkOrders, AuthPermissions.AssignWorkOrderSupervisor, AuthPermissions.SendWorkOrderToSupervisor, AuthPermissions.FinalValidateWorkOrders], [FaenaCode]);
+    private static readonly UserAccessContext Supervisor = new(SqlServerWorkTestFixture.SupervisorUserId.ToString("D"), [AuthRoles.MaintenanceSupervisor], [AuthPermissions.ManageWorkOrderTasks, AuthPermissions.ManageWorkOrderTechnicians, AuthPermissions.ReviewWorkOrderLabor, AuthPermissions.ReviewWorkOrderTasks, AuthPermissions.CloseWorkOrders], [FaenaCode]);
+    private static readonly UserAccessContext TechnicianOne = new(SqlServerWorkTestFixture.TechnicianOneUserId.ToString("D"), [AuthRoles.Technician], [AuthPermissions.ExecuteAssignedWorkOrders, AuthPermissions.RegisterWorkOrderLabor, AuthPermissions.RegisterWorkOrderEvidence, AuthPermissions.SignWorkOrders], [FaenaCode]);
+    private static readonly UserAccessContext TechnicianTwo = new(SqlServerWorkTestFixture.TechnicianTwoUserId.ToString("D"), [AuthRoles.Technician], [AuthPermissions.ExecuteAssignedWorkOrders, AuthPermissions.RegisterWorkOrderLabor, AuthPermissions.RegisterWorkOrderEvidence, AuthPermissions.SignWorkOrders], [FaenaCode]);
 
     [Fact]
     public async Task CorrectiveFlow_ClosesAndPlanningValidatesWithOrderScopedTechnicians()
@@ -27,7 +27,7 @@ public sealed class WorkOrderServiceTests
         Assert.NotNull(taskOne);
         Assert.NotNull(taskTwo);
 
-        var technicians = await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([PostgreSqlWorkTestFixture.TechnicianOneUserId, PostgreSqlWorkTestFixture.TechnicianTwoUserId]), Supervisor, default);
+        var technicians = await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([SqlServerWorkTestFixture.TechnicianOneUserId, SqlServerWorkTestFixture.TechnicianTwoUserId]), Supervisor, default);
         Assert.Equal(2, technicians!.Count);
         Assert.Equal(2, (await fixture.Service.ListTasksAsync(order.Summary.NumeroOT, TechnicianOne, default))!.Count);
         Assert.Single(await fixture.Service.ListMyAssignedAsync(TechnicianOne, default));
@@ -61,8 +61,8 @@ public sealed class WorkOrderServiceTests
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Service.GetByIdAsync(order.Summary.NumeroOT, TechnicianOne, default));
 
-        await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([PostgreSqlWorkTestFixture.TechnicianOneUserId]), Supervisor, default);
-        var duplicate = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([PostgreSqlWorkTestFixture.TechnicianOneUserId]), Supervisor, default));
+        await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([SqlServerWorkTestFixture.TechnicianOneUserId]), Supervisor, default);
+        var duplicate = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([SqlServerWorkTestFixture.TechnicianOneUserId]), Supervisor, default));
         Assert.Contains("ya está asignado", duplicate.Message);
     }
 
@@ -73,7 +73,7 @@ public sealed class WorkOrderServiceTests
         var order = await CreateAndSendAsync(fixture);
         var task = await fixture.Service.AddTaskAsync(order.Summary.NumeroOT, new CreateWorkOrderTaskRequest("Inspección visual", "SMOKE-BLOCK", RequiereEvidencia: true, RequiereHH: true), Supervisor, default);
         Assert.NotNull(task);
-        await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([PostgreSqlWorkTestFixture.TechnicianOneUserId]), Supervisor, default);
+        await fixture.Service.AssignTechniciansAsync(order.Summary.NumeroOT, new AssignWorkOrderTechniciansRequest([SqlServerWorkTestFixture.TechnicianOneUserId]), Supervisor, default);
         await fixture.Service.StartTaskAsync(order.Summary.NumeroOT, task!.CodigoTarea, new WorkOrderTaskActionRequest("Inicio"), TechnicianOne, default);
         await fixture.Service.RegisterOwnLaborAsync(order.Summary.NumeroOT, task.CodigoTarea, new RegisterOwnLaborRequest(DateOnly.FromDateTime(DateTime.UtcNow), new TimeOnly(8, 0), new TimeOnly(9, 0), null, "NORMAL", "Inspección"), TechnicianOne, default);
 
@@ -84,7 +84,7 @@ public sealed class WorkOrderServiceTests
     private static async Task<WorkOrderDetailResponse> CreateAndSendAsync(Fixture fixture)
     {
         var order = await fixture.Service.CreateAsync(new CreateWorkOrderRequest("ACT-1", "OT de regresión operacional", "Corrective", FaenaCodigo: FaenaCode, FechaProgramada: DateTimeOffset.UtcNow), Planner, default);
-        await fixture.Service.AssignSupervisorAsync(order.Summary.NumeroOT, new AssignWorkOrderSupervisorRequest(PostgreSqlWorkTestFixture.SupervisorUserId, "Asignación de prueba"), Planner, default);
+        await fixture.Service.AssignSupervisorAsync(order.Summary.NumeroOT, new AssignWorkOrderSupervisorRequest(SqlServerWorkTestFixture.SupervisorUserId, "Asignación de prueba"), Planner, default);
         return (await fixture.Service.SendToSupervisorAsync(order.Summary.NumeroOT, new WorkOrderActionRequest("Envío a supervisor"), Planner, default))!;
     }
 
@@ -125,11 +125,11 @@ public sealed class WorkOrderServiceTests
         return file;
     }
 
-    private sealed record Fixture(PostgreSqlWorkTestFixture Database, CmmsDbContext DbContext, WorkOrderService Service) : IAsyncDisposable
+    private sealed record Fixture(SqlServerWorkTestFixture Database, CmmsDbContext DbContext, WorkOrderService Service) : IAsyncDisposable
     {
         public static async Task<Fixture> CreateAsync()
         {
-            var database = await PostgreSqlWorkTestFixture.CreateAsync();
+            var database = await SqlServerWorkTestFixture.CreateAsync();
             return new Fixture(database, database.DbContext, new WorkOrderService(database.DbContext, new NullAuditService()));
         }
 

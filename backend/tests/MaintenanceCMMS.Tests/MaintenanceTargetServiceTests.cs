@@ -1,6 +1,6 @@
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.MaintenanceTargets;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -14,7 +14,7 @@ public sealed class MaintenanceTargetServiceTests
     [Fact]
     public async Task OperationalScope_ListsUnitAndIndependentAsset_ButNotMountedComponent()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         await SeedUnitAsync(fixture);
         var service = new MaintenanceTargetService(fixture.DbContext);
 
@@ -33,7 +33,7 @@ public sealed class MaintenanceTargetServiceTests
     [Fact]
     public async Task Resolve_ReturnsExactlyOnePrimaryForeignKey_AndEnforcesFaenaAccess()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         await SeedUnitAsync(fixture);
         var service = new MaintenanceTargetService(fixture.DbContext);
 
@@ -48,7 +48,7 @@ public sealed class MaintenanceTargetServiceTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.ResolveAsync(new(MaintenanceTargetType.Asset, "ACT-1"), otherFaena, CancellationToken.None));
     }
 
-    private static async Task SeedUnitAsync(PostgreSqlWorkTestFixture fixture)
+    private static async Task SeedUnitAsync(SqlServerWorkTestFixture fixture)
     {
         var db = fixture.DbContext;
         if (await db.OperationalUnits.AnyAsync()) return;

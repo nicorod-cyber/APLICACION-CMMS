@@ -4,8 +4,8 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
 
@@ -74,40 +74,64 @@ public sealed class InventoryService : IInventoryService
 
     public async Task<StockMovementResponse> RegisterMovementAsync(StockMovementRequest r, UserAccessContext u, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         EnsureAdjust(u); Positive(r.Quantity); Required(r.Reason,nameof(r.Reason)); await using var tx=await _db.Database.BeginTransactionAsync(ct); var movement=await ApplyMovement(r,u,null,null,null,ct); await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct); await Audit(u,"stock.movement","StockMovement",movement.MovementNumber,null,movement,null,r.Reason,ct); return await MovementResponse(movement.Id,ct);
-    }
+
+        });
+}
 
     public async Task<IReadOnlyCollection<StockReservationResponse>> ListReservationsAsync(UserAccessContext u,CancellationToken ct)
     { EnsureView(u); return (await _db.Set<StockReservationEntity>().Include(x=>x.SparePart).Include(x=>x.Warehouse).AsNoTracking().OrderByDescending(x=>x.CreatedAtUtc).ToArrayAsync(ct)).Select(ToReservation).ToArray(); }
 
     public async Task<StockReservationResponse> CreateReservationAsync(CreateStockReservationRequest r,UserAccessContext u,CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         EnsureAdjust(u); Positive(r.Quantity); Required(r.WorkOrderId,nameof(r.WorkOrderId)); var part=await RequiredPart(r.RepuestoCodigo,ct); var wh=await RequiredWarehouse(r.BodegaCodigo,ct); EnsureActive(wh); await using var tx=await _db.Database.BeginTransactionAsync(ct); var stock=await StockForUpdate(part.Id,wh.Id,ct); if(stock.PhysicalQuantity-stock.ReservedQuantity<r.Quantity)throw new DomainException("Stock disponible insuficiente para reservar."); var n=await NextAsync("stock_reservation_number_seq","RES",ct); var wo=await _db.WorkOrders.Include(x=>x.Asset).ThenInclude(x=>x!.OperationalState).Include(x=>x.RelatedAssets).ThenInclude(x=>x.Asset).ThenInclude(x=>x.OperationalState).SingleOrDefaultAsync(x=>x.WorkOrderNumber.ToUpper()==Code(r.WorkOrderId),ct); if(wo?.Asset is not null)AssetOperationalPolicy.EnsureCanStartOperation(wo.Asset,"reservas de stock"); foreach(var link in wo?.RelatedAssets??[])AssetOperationalPolicy.EnsureCanStartOperation(link.Asset,"reservas de stock"); var reservation=new StockReservationEntity{ReservationNumber=n,SparePartId=part.Id,WarehouseId=wh.Id,RequestedQuantity=r.Quantity,ReservedQuantity=r.Quantity,WorkOrderId=wo?.Id,WorkOrderNumber=r.WorkOrderId.Trim(),RequestedBy=r.RequestedBy.Trim(),Reason=r.Reason.Trim(),CreatedByUserId=u.UserId}; stock.ReservedQuantity+=r.Quantity; stock.UpdatedAtUtc=DateTimeOffset.UtcNow; _db.Add(reservation); var movement=await AddMovement(StockMovementType.Reservation,part,wh,null,r.Quantity,stock.PhysicalQuantity,stock.PhysicalQuantity,stock.ReservedQuantity-r.Quantity,stock.ReservedQuantity,r.Reason,u,"ReservaOT",n,reservation,null,ct); await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct); await Audit(u,"stock.reservation_created","StockReservation",n,null,reservation,wh.Faena.Code,r.Reason,ct); return ToReservation(reservation);
-    }
+
+        });
+}
 
     public async Task<StockReservationResponse?> ReleaseReservationAsync(string id,ReleaseStockReservationRequest r,UserAccessContext u,CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         EnsureAdjust(u); Positive(r.Quantity); var reservation=await _db.Set<StockReservationEntity>().Include(x=>x.SparePart).Include(x=>x.Warehouse).ThenInclude(x=>x.Faena).SingleOrDefaultAsync(x=>x.ReservationNumber.ToUpper()==Code(id),ct); if(reservation is null)return null; if(reservation.Status is "Entregada" or "Liberada" or "Cancelada")throw new DomainException("La reserva no admite nuevas liberaciones."); var pending=reservation.ReservedQuantity-reservation.DeliveredQuantity-reservation.ReleasedQuantity; if(r.Quantity>pending)throw new DomainException("La cantidad a liberar excede el saldo pendiente de la reserva."); await using var tx=await _db.Database.BeginTransactionAsync(ct); var stock=await StockForUpdate(reservation.SparePartId,reservation.WarehouseId,ct); var before=stock.ReservedQuantity; stock.ReservedQuantity-=r.Quantity; reservation.ReleasedQuantity+=r.Quantity; reservation.ReleasedAtUtc=DateTimeOffset.UtcNow; if(reservation.DeliveredQuantity+reservation.ReleasedQuantity>=reservation.ReservedQuantity)reservation.Status="Liberada"; await AddMovement(StockMovementType.ReservationRelease,reservation.SparePart,reservation.Warehouse,null,r.Quantity,stock.PhysicalQuantity,stock.PhysicalQuantity,before,stock.ReservedQuantity,r.Reason,u,"ReservaOT",reservation.ReservationNumber,reservation,null,ct); await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct); await Audit(u,"stock.reservation_released","StockReservation",id,null,reservation,reservation.Warehouse.Faena.Code,r.Reason,ct); return ToReservation(reservation);
-    }
+
+        });
+}
 
     public async Task<StockMovementResponse> DeliverMaterialAsync(DeliverMaterialRequest r,UserAccessContext u,CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         EnsureAdjust(u); Positive(r.Quantity); Required(r.Reason,nameof(r.Reason)); if(Empty(r.WorkOrderId)&&Empty(r.AssetCode)&&Empty(r.FaenaCodigo)&&Empty(r.CostCenter))throw new DomainException("La entrega de material requiere OT, activo, faena o centro de costo."); await using var tx=await _db.Database.BeginTransactionAsync(ct); StockReservationEntity? reservation=null; if(!Empty(r.ReservationId)){ reservation=await _db.Set<StockReservationEntity>().Include(x=>x.SparePart).Include(x=>x.Warehouse).SingleOrDefaultAsync(x=>x.ReservationNumber.ToUpper()==Code(r.ReservationId),ct)??throw new DomainException("La reserva no existe."); var pending=reservation.ReservedQuantity-reservation.DeliveredQuantity-reservation.ReleasedQuantity; if(r.Quantity>pending)throw new DomainException("La entrega excede la reserva pendiente."); }
         var m=await ApplyMovement(new(StockMovementType.MaintenanceConsumption,r.RepuestoCodigo,r.Quantity,r.Reason,BodegaCodigo:r.BodegaCodigo,ReferenceType:"OT",ReferenceId:r.WorkOrderId),u,reservation,null,null,ct); if(reservation is not null){reservation.DeliveredQuantity+=r.Quantity; reservation.DeliveredAtUtc=DateTimeOffset.UtcNow; reservation.Status=reservation.DeliveredQuantity+reservation.ReleasedQuantity>=reservation.ReservedQuantity?"Entregada":"ParcialmenteEntregada";} await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct); return await MovementResponse(m.Id,ct);
-    }
+
+        });
+}
 
     public async Task<IReadOnlyCollection<StockTransferResponse>> ListTransfersAsync(UserAccessContext u,CancellationToken ct)
     { EnsureView(u); var x=await _db.Set<StockTransferEntity>().Include(t=>t.SparePart).Include(t=>t.SourceWarehouse).Include(t=>t.TransitWarehouse).Include(t=>t.TargetWarehouse).AsNoTracking().OrderByDescending(t=>t.RequestedAtUtc).ToArrayAsync(ct); var m=await ListMovementsAsync(new(ReferenceType:"Transferencia",Take:500),u,ct); return x.Select(t=>ToTransfer(t,m.Where(z=>Same(z.ReferenceId,t.TransferNumber)).ToArray())).ToArray(); }
 
     public async Task<StockTransferResponse> TransferStockAsync(TransferStockRequest r,UserAccessContext u,CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         EnsureAdjust(u); Positive(r.Quantity); if(Same(r.SourceWarehouseCode,r.TargetWarehouseCode))throw new DomainException("La transferencia requiere bodegas origen y destino distintas."); var p=await RequiredPart(r.RepuestoCodigo,ct); var source=await RequiredWarehouse(r.SourceWarehouseCode,ct); var transit=await RequiredWarehouse(r.TransitWarehouseCode,ct); var target=await RequiredWarehouse(r.TargetWarehouseCode,ct); if(!Same(transit.Type.Code, WarehouseType.Transito.ToString()))throw new DomainException("La bodega de transito debe ser de tipo Transito."); EnsureActive(source);EnsureActive(transit);EnsureActive(target); var n=Empty(r.TransferId)?await NextAsync("stock_transfer_number_seq","TRF",ct):Code(r.TransferId)!; if(await _db.Set<StockTransferEntity>().AnyAsync(x=>x.TransferNumber==n,ct))throw new DomainException("Ya existe la transferencia indicada."); await using var tx=await _db.Database.BeginTransactionAsync(ct); var tr=new StockTransferEntity{TransferNumber=n,SourceWarehouseId=source.Id,TransitWarehouseId=transit.Id,TargetWarehouseId=target.Id,SparePartId=p.Id,Quantity=r.Quantity,Reason=r.Reason.Trim(),RequestedByUserId=u.UserId}; _db.Add(tr); await ApplyMovement(new(StockMovementType.InTransit,p.Code,r.Quantity,r.Reason,SourceWarehouseCode:source.Code,TargetWarehouseCode:transit.Code,ReferenceType:"Transferencia",ReferenceId:n),u,null,tr,null,ct); if (!await _db.Set<WarehouseStockEntity>().AnyAsync(x => x.SparePartId == p.Id && x.WarehouseId == transit.Id, ct)) _db.Add(new WarehouseStockEntity { SparePartId = p.Id, WarehouseId = transit.Id }); await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct); return ToTransfer(tr,await ListMovementsAsync(new(ReferenceType:"Transferencia",ReferenceId:n,Take:50),u,ct));
-    }
+
+        });
+}
 
     public async Task<StockTransferResponse?> ReceiveTransferAsync(string id,ReceiveTransferRequest r,UserAccessContext u,CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         EnsureAdjust(u); var tr=await _db.Set<StockTransferEntity>().Include(x=>x.SparePart).Include(x=>x.SourceWarehouse).Include(x=>x.TransitWarehouse).Include(x=>x.TargetWarehouse).SingleOrDefaultAsync(x=>x.TransferNumber.ToUpper()==Code(id),ct); if(tr is null)return null; if(tr.Status!="EnTransito")throw new DomainException("La transferencia no esta pendiente de recepcion."); await using var tx=await _db.Database.BeginTransactionAsync(ct); await ApplyMovement(new(StockMovementType.TransferReception,tr.SparePart.Code,tr.Quantity,r.Reason,SourceWarehouseCode:tr.TransitWarehouse.Code,TargetWarehouseCode:tr.TargetWarehouse.Code,ReferenceType:"Transferencia",ReferenceId:tr.TransferNumber),u,null,tr,null,ct); tr.Status="Recibida";tr.ReceivedAtUtc=DateTimeOffset.UtcNow;tr.ReceivedByUserId=u.UserId;tr.ReceptionReason=r.Reason.Trim(); await _db.SaveChangesAsync(ct);await tx.CommitAsync(ct); return ToTransfer(tr,await ListMovementsAsync(new(ReferenceType:"Transferencia",ReferenceId:tr.TransferNumber,Take:50),u,ct));
-    }
+
+        });
+}
 
     public Task<StockMovementResponse> ReturnStockAsync(ReturnStockRequest r,UserAccessContext u,CancellationToken ct) => RegisterMovementAsync(new(r.Reusable?StockMovementType.ReturnFromWorkOrder:StockMovementType.MaterialWriteOff,r.RepuestoCodigo,r.Quantity,r.Reason,BodegaCodigo:r.BodegaCodigo,ReferenceType:"OT",ReferenceId:r.WorkOrderId??r.AssetCode),u,ct);
     public Task<StockMovementResponse> AdjustStockAsync(AdjustStockRequest r,UserAccessContext u,CancellationToken ct) => RegisterMovementAsync(new(r.Quantity>=0?StockMovementType.PositiveAdjustment:StockMovementType.NegativeAdjustment,r.RepuestoCodigo,Math.Abs(r.Quantity),r.Reason,BodegaCodigo:r.BodegaCodigo,AllowNegativeException:r.AllowNegativeException),u,ct);
@@ -129,7 +153,7 @@ public sealed class InventoryService : IInventoryService
     private async Task<SparePartEntity> RequiredPart(string c,CancellationToken ct)=>await PartAsync(c,ct,true)??throw new DomainException("El repuesto no existe.");
     private async Task<WarehouseEntity> RequiredWarehouse(string c,CancellationToken ct)=>await _db.Set<WarehouseEntity>().Include(x=>x.Faena).Include(x=>x.Type).SingleOrDefaultAsync(x=>x.Code.ToUpper()==Code(c),ct)??throw new DomainException("La bodega no existe.");
     private async Task<InventoryCatalogEntity> CatalogAsync(string cat,string code,CancellationToken ct) { var value = Code(code)!; var existing = await _db.Set<InventoryCatalogEntity>().SingleOrDefaultAsync(x => x.Category == cat && x.Code == value && x.IsActive, ct); if (existing is not null) return existing; var created = new InventoryCatalogEntity { Category = cat, Code = value, Name = value, IsActive = true }; _db.Add(created); return created; }
-    private async Task<string> NextAsync(string seq,string prefix,CancellationToken ct){var n=await _db.Database.SqlQuery<long>($"SELECT nextval({seq}) AS \"Value\"").SingleAsync(ct);return $"{prefix}-{n:000000}";}
+    private async Task<string> NextAsync(string seq,string prefix,CancellationToken ct){var n=await SqlServerSequence.NextValueAsync(_db,seq,ct);return $"{prefix}-{n:000000}";}
     private static WarehouseResponse ToWarehouse(WarehouseEntity x)=>new(x.Code,x.Name,x.Faena.Code,Parse(x.Type.Code,WarehouseType.Faena),x.Location,x.Locations.Where(l=>l.IsActive).Select(l=>l.Name).ToArray(),x.IsActive,x.ResponsibleUserId,x.AllowsNegativeStock);
     private static SparePartSummary ToSummary(SparePartEntity p,IEnumerable<WarehouseStockEntity> s){var a=s.ToArray();var ph=a.Sum(x=>x.PhysicalQuantity);var re=a.Sum(x=>x.ReservedQuantity);var av=ph-re;return new(p.Code,p.SapCode,p.SupplierCode,p.Description,p.TechnicalDescription,p.Unit.Code,p.Category?.Code,p.Manufacturer,p.ModelReference,p.IsCritical,p.MinimumStock,p.MaximumStock,p.ReorderPoint,p.LeadTimeDays,p.AverageUnitCost,Parse(p.Status,SparePartStatus.Activo),Empty(p.SapCode),p.PreferredSupplier,p.ReplacementCode,ph,re,av,ph<p.MinimumStock,p.IsCritical&&ph<=0);}
     private static StockItemResponse ToStock(WarehouseStockEntity s){var min=s.MinimumStockOverride??s.SparePart.MinimumStock;return new(s.Warehouse.Code,s.Warehouse.Name,s.Warehouse.Faena.Code,s.SparePart.Code,s.SparePart.Description,s.SparePart.Unit.Code,s.SparePart.IsCritical,s.PhysicalQuantity,s.ReservedQuantity,s.PhysicalQuantity-s.ReservedQuantity,min,s.SparePart.MaximumStock,s.SparePart.ReorderPoint,s.PhysicalQuantity<min,s.SparePart.IsCritical&&s.PhysicalQuantity<=0,s.UpdatedAtUtc??s.CreatedAtUtc);}

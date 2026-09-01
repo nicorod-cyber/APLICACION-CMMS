@@ -4,7 +4,7 @@ using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Application.OperationalUnits;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Auditing;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Documents;
 using MaintenanceCMMS.Infrastructure.OperationalUnits;
 using MaintenanceCMMS.Infrastructure.Security;
@@ -24,9 +24,9 @@ public sealed class OperationalUnitDocumentServiceTests
     [Fact]
     public async Task ConsolidatedView_MergesCurrentChassisAndFactory_AndRecalculatesAfterReplacement()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var db = fixture.DbContext;
-        var audit = new PostgreSqlAuditService(db, new AuditContextAccessor());
+        var audit = new SqlServerAuditService(db, new AuditContextAccessor());
         var authorization = new AuthorizationPolicyService();
         var documents = new DocumentService(db, audit, authorization);
         var service = new OperationalUnitDocumentService(db, documents, audit, authorization);
@@ -100,9 +100,9 @@ public sealed class OperationalUnitDocumentServiceTests
     [Fact]
     public async Task Upload_EnforcesTheCurrentMatrixExpirationRule_AndNormalizesNonExpiringRequirements()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var db = fixture.DbContext;
-        var audit = new PostgreSqlAuditService(db, new AuditContextAccessor());
+        var audit = new SqlServerAuditService(db, new AuditContextAccessor());
         var storage = new LocalSharePointSimulationService(db, audit, Options.Create(new SharePointOptions
         {
             Provider = "LocalSimulation",

@@ -2,8 +2,8 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Faenas;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Faenas;
@@ -39,19 +39,19 @@ public sealed class FaenaService : IFaenaService
             source = source.Where(faena => faena.IsActive);
         }
 
-        if (_dbContext.Database.IsNpgsql() && !string.IsNullOrWhiteSpace(query.Search))
+        if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var pattern = $"%{query.Search.Trim()}%";
             source = source.Where(faena =>
-                EF.Functions.ILike(faena.Code, pattern) ||
-                EF.Functions.ILike(faena.Name, pattern) ||
-                (faena.Zone != null && EF.Functions.ILike(faena.Zone, pattern)) ||
-                (faena.Client != null && EF.Functions.ILike(faena.Client, pattern)) ||
-                (faena.Region != null && EF.Functions.ILike(faena.Region, pattern)) ||
-                (faena.Commune != null && EF.Functions.ILike(faena.Commune, pattern)) ||
-                (faena.ResponsibleUser != null && EF.Functions.ILike(faena.ResponsibleUser.DisplayName, pattern)) ||
-                (faena.TechnicalLocation != null && EF.Functions.ILike(faena.TechnicalLocation.Code, pattern)) ||
-                (faena.TechnicalLocation != null && EF.Functions.ILike(faena.TechnicalLocation.Name, pattern)));
+                EF.Functions.Like(faena.Code, pattern) ||
+                EF.Functions.Like(faena.Name, pattern) ||
+                (faena.Zone != null && EF.Functions.Like(faena.Zone, pattern)) ||
+                (faena.Client != null && EF.Functions.Like(faena.Client, pattern)) ||
+                (faena.Region != null && EF.Functions.Like(faena.Region, pattern)) ||
+                (faena.Commune != null && EF.Functions.Like(faena.Commune, pattern)) ||
+                (faena.ResponsibleUser != null && EF.Functions.Like(faena.ResponsibleUser.DisplayName, pattern)) ||
+                (faena.TechnicalLocation != null && EF.Functions.Like(faena.TechnicalLocation.Code, pattern)) ||
+                (faena.TechnicalLocation != null && EF.Functions.Like(faena.TechnicalLocation.Name, pattern)));
         }
 
         var faenas = await source
@@ -96,6 +96,8 @@ public sealed class FaenaService : IFaenaService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         ArgumentNullException.ThrowIfNull(request);
         var code = NormalizeRequiredCode(request.Codigo, "Codigo");
         if (await _dbContext.Faenas.AnyAsync(item => item.Code == code, cancellationToken))
@@ -118,7 +120,9 @@ public sealed class FaenaService : IFaenaService
         await _auditService.RecordAsync(new AuditEventRequest(user.UserId, "faena.created", AuditModules.Configuration, "Faena", entity.Code, FaenaCodigo: entity.Code, Severity: AuditSeverity.Medium), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return ToResponse(entity);
-    }
+
+        });
+}
 
     public async Task<FaenaResponse?> UpdateAsync(
         string code,
@@ -126,6 +130,8 @@ public sealed class FaenaService : IFaenaService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         ArgumentNullException.ThrowIfNull(request);
         var entity = await Query()
             .SingleOrDefaultAsync(item => item.Code == NormalizeCode(code), cancellationToken);
@@ -153,7 +159,9 @@ public sealed class FaenaService : IFaenaService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return ToResponse(entity);
-    }
+
+        });
+}
 
     private IQueryable<FaenaEntity> Query() => _dbContext.Faenas
         .Include(faena => faena.ResponsibleUser)

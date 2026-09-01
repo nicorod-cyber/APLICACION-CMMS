@@ -79,8 +79,8 @@ public sealed class DocumentStorageServiceTests
     private static async Task<StorageFixture> CreateFixtureAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "maintenance-cmms-storage-tests", Guid.NewGuid().ToString("N"));
-        var database = await PostgreSqlWorkTestFixture.CreateAsync();
-        var auditService = new PostgreSqlAuditService(database.DbContext, new AuditContextAccessor());
+        var database = await SqlServerWorkTestFixture.CreateAsync();
+        var auditService = new SqlServerAuditService(database.DbContext, new AuditContextAccessor());
         var sharePointOptions = Options.Create(new SharePointOptions
         {
             Provider = "LocalSimulation",
@@ -94,7 +94,7 @@ public sealed class DocumentStorageServiceTests
     }
 
     private sealed record StorageFixture(
-        PostgreSqlWorkTestFixture Database,
+        SqlServerWorkTestFixture Database,
         LocalSharePointSimulationService LocalStorage,
         SharePointManualLinkService ManualStorage) : IAsyncDisposable
     {

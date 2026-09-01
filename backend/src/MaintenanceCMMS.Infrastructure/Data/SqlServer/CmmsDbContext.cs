@@ -1,0 +1,131 @@
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
+using Microsoft.EntityFrameworkCore;
+namespace MaintenanceCMMS.Infrastructure.Data.SqlServer;
+
+public sealed class CmmsDbContext : DbContext
+{
+    public CmmsDbContext(DbContextOptions<CmmsDbContext> options)
+        : base(options)
+    {
+    }
+
+    public DbSet<AppUserEntity> Users => Set<AppUserEntity>();
+    public DbSet<RoleEntity> Roles => Set<RoleEntity>();
+    public DbSet<PermissionEntity> Permissions => Set<PermissionEntity>();
+    public DbSet<UserRoleEntity> UserRoles => Set<UserRoleEntity>();
+    public DbSet<RolePermissionEntity> RolePermissions => Set<RolePermissionEntity>();
+    public DbSet<UserFaenaEntity> UserFaenas => Set<UserFaenaEntity>();
+    public DbSet<FaenaEntity> Faenas => Set<FaenaEntity>();
+    public DbSet<AssetOperationalStateEntity> AssetOperationalStates => Set<AssetOperationalStateEntity>();
+    public DbSet<AssetTypeEntity> AssetTypes => Set<AssetTypeEntity>();
+    public DbSet<AssetAttributeDefinitionEntity> AssetAttributeDefinitions => Set<AssetAttributeDefinitionEntity>();
+    public DbSet<AssetAttributeValueEntity> AssetAttributeValues => Set<AssetAttributeValueEntity>();
+    public DbSet<AssetReadingEntity> AssetReadings => Set<AssetReadingEntity>();
+    public DbSet<AssetDocumentRequirementEntity> AssetDocumentRequirements => Set<AssetDocumentRequirementEntity>();
+    public DbSet<DocumentRequirementMatrixEntity> DocumentRequirementMatrices => Set<DocumentRequirementMatrixEntity>();
+    public DbSet<DocumentRequirementMatrixItemEntity> DocumentRequirementMatrixItems => Set<DocumentRequirementMatrixItemEntity>();
+    public DbSet<OperationalUnitTypeEntity> OperationalUnitTypes => Set<OperationalUnitTypeEntity>();
+    public DbSet<OperationalUnitEntity> OperationalUnits => Set<OperationalUnitEntity>();
+    public DbSet<OperationalUnitComponentRoleEntity> OperationalUnitComponentRoles => Set<OperationalUnitComponentRoleEntity>();
+    public DbSet<OperationalUnitCompositionRuleEntity> OperationalUnitCompositionRules => Set<OperationalUnitCompositionRuleEntity>();
+    public DbSet<OperationalUnitCompositionRuleAllowedAssetEntity> OperationalUnitCompositionRuleAllowedAssets => Set<OperationalUnitCompositionRuleAllowedAssetEntity>();
+    public DbSet<OperationalUnitComponentEntity> OperationalUnitComponents => Set<OperationalUnitComponentEntity>();
+    public DbSet<EquipmentFamilyEntity> EquipmentFamilies => Set<EquipmentFamilyEntity>();
+    public DbSet<AssetEntity> Assets => Set<AssetEntity>();
+    public DbSet<AssetStateEventEntity> AssetStateEvents => Set<AssetStateEventEntity>();
+    public DbSet<AssetTransferEntity> AssetTransfers => Set<AssetTransferEntity>();
+    public DbSet<AssetLocationPeriodEntity> AssetLocationPeriods => Set<AssetLocationPeriodEntity>();
+    public DbSet<AssetPhysicalLocationPeriodEntity> AssetPhysicalLocationPeriods => Set<AssetPhysicalLocationPeriodEntity>();
+    public DbSet<AssetIdentifierAliasEntity> AssetIdentifierAliases => Set<AssetIdentifierAliasEntity>();
+    public DbSet<DocumentTypeEntity> DocumentTypes => Set<DocumentTypeEntity>();
+    public DbSet<DocumentEntity> Documents => Set<DocumentEntity>();
+    public DbSet<DocumentVersionEntity> DocumentVersions => Set<DocumentVersionEntity>();
+    public DbSet<FileMetadataEntity> Files => Set<FileMetadataEntity>();
+    public DbSet<DocumentAssetEntity> DocumentAssets => Set<DocumentAssetEntity>();
+    public DbSet<DocumentFaenaEntity> DocumentFaenas => Set<DocumentFaenaEntity>();
+    public DbSet<WorkCatalogEntity> WorkCatalogs => Set<WorkCatalogEntity>();
+    public DbSet<WorkNotificationEntity> WorkNotifications => Set<WorkNotificationEntity>();
+    public DbSet<WorkOrderEntity> WorkOrders => Set<WorkOrderEntity>();
+    public DbSet<WorkOrderAssetEntity> WorkOrderAssets => Set<WorkOrderAssetEntity>();
+    public DbSet<WorkOrderTaskEntity> WorkOrderTasks => Set<WorkOrderTaskEntity>();
+    public DbSet<WorkOrderTechnicianEntity> WorkOrderTechnicians => Set<WorkOrderTechnicianEntity>();
+    public DbSet<WorkOrderTaskStatusHistoryEntity> WorkOrderTaskStatusHistory => Set<WorkOrderTaskStatusHistoryEntity>();
+    public DbSet<WorkOrderLaborEntity> WorkOrderLabor => Set<WorkOrderLaborEntity>();
+    public DbSet<WorkOrderEvidenceEntity> WorkOrderEvidences => Set<WorkOrderEvidenceEntity>();
+    public DbSet<WorkOrderSparePartEntity> WorkOrderSpareParts => Set<WorkOrderSparePartEntity>();
+    public DbSet<ChecklistTemplateEntity> ChecklistTemplates => Set<ChecklistTemplateEntity>();
+    public DbSet<ChecklistTemplateItemEntity> ChecklistTemplateItems => Set<ChecklistTemplateItemEntity>();
+    public DbSet<WorkOrderChecklistEntity> WorkOrderChecklist => Set<WorkOrderChecklistEntity>();
+    public DbSet<WorkOrderSignatureEntity> WorkOrderSignatures => Set<WorkOrderSignatureEntity>();
+    public DbSet<WorkOrderStatusHistoryEntity> WorkOrderStatusHistory => Set<WorkOrderStatusHistoryEntity>();
+    public DbSet<DocumentWorkOrderEntity> DocumentWorkOrders => Set<DocumentWorkOrderEntity>();
+    public DbSet<DocumentaryWorkOrderRequirementEntity> DocumentaryWorkOrderRequirements => Set<DocumentaryWorkOrderRequirementEntity>();
+    public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
+    public DbSet<InventoryCatalogEntity> InventoryCatalogs => Set<InventoryCatalogEntity>();
+    public DbSet<WarehouseEntity> Warehouses => Set<WarehouseEntity>();
+    public DbSet<WarehouseLocationEntity> WarehouseLocations => Set<WarehouseLocationEntity>();
+    public DbSet<SparePartEntity> SpareParts => Set<SparePartEntity>();
+    public DbSet<WarehouseStockEntity> WarehouseStocks => Set<WarehouseStockEntity>();
+    public DbSet<StockMovementEntity> StockMovements => Set<StockMovementEntity>();
+    public DbSet<StockReservationEntity> StockReservations => Set<StockReservationEntity>();
+    public DbSet<StockTransferEntity> StockTransfers => Set<StockTransferEntity>();
+    public DbSet<TechnicalLocationEntity> TechnicalLocations => Set<TechnicalLocationEntity>();
+    public DbSet<TechnicalNodeEntity> TechnicalNodes => Set<TechnicalNodeEntity>();
+    public DbSet<TechnicalNodeFamilyEntity> TechnicalNodeFamilies => Set<TechnicalNodeFamilyEntity>();
+    public DbSet<TechnicalNodeAssetEntity> TechnicalNodeAssets => Set<TechnicalNodeAssetEntity>();
+    public DbSet<TechnicalNodeAliasEntity> TechnicalNodeAliases => Set<TechnicalNodeAliasEntity>();
+    public DbSet<PdfTemplateEntity> PdfTemplates => Set<PdfTemplateEntity>();
+    public DbSet<AlertRuleEntity> AlertRules => Set<AlertRuleEntity>();
+    public DbSet<AlertRuleRecipientEntity> AlertRuleRecipients => Set<AlertRuleRecipientEntity>();
+    public DbSet<AlertEntity> Alerts => Set<AlertEntity>();
+    public DbSet<NotificationEntity> Notifications => Set<NotificationEntity>();
+    public DbSet<NotificationRecipientEntity> NotificationRecipients => Set<NotificationRecipientEntity>();
+    public DbSet<NotificationAttemptEntity> NotificationAttempts => Set<NotificationAttemptEntity>();
+    public DbSet<AvailabilityContractEntity> AvailabilityContracts => Set<AvailabilityContractEntity>();
+    public DbSet<AvailabilityContractAssignmentEntity> AvailabilityContractAssignments => Set<AvailabilityContractAssignmentEntity>();
+    public DbSet<AvailabilityEventEntity> AvailabilityEvents => Set<AvailabilityEventEntity>();
+    public DbSet<PreventivePlanEntity> PreventivePlans => Set<PreventivePlanEntity>();
+    public DbSet<PreventivePlanScopeEntity> PreventivePlanScopes => Set<PreventivePlanScopeEntity>();
+    public DbSet<PreventiveEvaluationEntity> PreventiveEvaluations => Set<PreventiveEvaluationEntity>();
+    public DbSet<PreventiveHistoryEntity> PreventiveHistory => Set<PreventiveHistoryEntity>();
+    public DbSet<WorkshopEntity> Workshops => Set<WorkshopEntity>();
+    public DbSet<WorkOrderScheduleEntity> WorkOrderSchedules => Set<WorkOrderScheduleEntity>();
+    public DbSet<ScheduleDependencyEntity> ScheduleDependencies => Set<ScheduleDependencyEntity>();
+    public DbSet<ScheduleAlertEntity> ScheduleAlerts => Set<ScheduleAlertEntity>();
+    public DbSet<SupplierEntity> Suppliers => Set<SupplierEntity>();
+    public DbSet<ProcurementRequestEntity> ProcurementRequests => Set<ProcurementRequestEntity>();
+    public DbSet<ProcurementRequestLineEntity> ProcurementRequestLines => Set<ProcurementRequestLineEntity>();
+    public DbSet<PurchaseOrderEntity> PurchaseOrders => Set<PurchaseOrderEntity>();
+    public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
+    public DbSet<ProcurementReceiptEntity> ProcurementReceipts => Set<ProcurementReceiptEntity>();
+    public DbSet<ProcurementReceiptLineEntity> ProcurementReceiptLines => Set<ProcurementReceiptLineEntity>();
+    public DbSet<ImportEntity> Imports => Set<ImportEntity>();
+    public DbSet<ImportRowEntity> ImportRows => Set<ImportRowEntity>();
+    public DbSet<ImportErrorEntity> ImportErrors => Set<ImportErrorEntity>();
+    public DbSet<ImportEventEntity> ImportEvents => Set<ImportEventEntity>();
+    public DbSet<LaborRateEntity> LaborRates => Set<LaborRateEntity>();
+    public DbSet<CostEntryEntity> CostEntries => Set<CostEntryEntity>();
+    public DbSet<PaymentStatementEntity> PaymentStatements => Set<PaymentStatementEntity>();
+    public DbSet<MaterialRequestEntity> MaterialRequests => Set<MaterialRequestEntity>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.UseCollation("Latin1_General_100_CI_AI");
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(CmmsDbContext).Assembly);
+        ConfigureSqlServerOutputClause<AssetEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<AssetStateEventEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<AssetTransferEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<AssetLocationPeriodEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<AssetPhysicalLocationPeriodEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<DocumentEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<DocumentVersionEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<OperationalUnitComponentEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<WorkOrderEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<DocumentRequirementMatrixEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<DocumentaryWorkOrderRequirementEntity>(modelBuilder);
+        ConfigureSqlServerOutputClause<AssetAttributeValueEntity>(modelBuilder);
+    }
+
+    private static void ConfigureSqlServerOutputClause<TEntity>(ModelBuilder modelBuilder) where TEntity : class
+        => modelBuilder.Entity<TEntity>().ToTable(table => table.UseSqlOutputClause(false));
+}

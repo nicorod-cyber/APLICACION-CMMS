@@ -3,7 +3,7 @@ using System.Text;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.WorkOrders;

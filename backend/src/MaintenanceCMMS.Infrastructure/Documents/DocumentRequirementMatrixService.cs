@@ -2,8 +2,8 @@ using System.Data;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Documents;
@@ -20,6 +20,8 @@ public sealed class DocumentRequirementMatrixService(CmmsDbContext db) : IDocume
 
     public async Task<DocumentRequirementMatrixResponse> CreateVersionAsync(CreateDocumentRequirementMatrixVersionRequest request, UserAccessContext user, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(db, async () =>
+        {
         EnsureManage(user);
         if (string.IsNullOrWhiteSpace(request.Codigo) || string.IsNullOrWhiteSpace(request.TipoActivoCodigo) || string.IsNullOrWhiteSpace(request.MotivoCambio)) throw new DomainException("Codigo, tipo de activo y motivo de cambio son obligatorios.");
         if (request.Requisitos.Count == 0) throw new DomainException("La matriz debe contener al menos un requisito.");
@@ -54,7 +56,9 @@ public sealed class DocumentRequirementMatrixService(CmmsDbContext db) : IDocume
         matrix.AssetType = type; matrix.EquipmentFamily = family;
         foreach (var item in matrix.Items) item.DocumentType = await db.DocumentTypes.AsNoTracking().SingleAsync(x => x.Id == item.DocumentTypeId, ct);
         return Map(matrix);
-    }
+
+        });
+}
 
     private static DocumentRequirementMatrixResponse Map(DocumentRequirementMatrixEntity x) => new(x.Id.ToString("D"), x.Code, x.VersionNumber, x.AssetType.Code, x.EquipmentFamily?.Code, x.Faena?.Code, x.ValidFrom, x.ValidTo, x.Status, x.CreatedByUserId, x.ChangeReason, x.Items.OrderBy(i => i.SortOrder).ThenBy(i => i.DocumentType.Code).Select(i => new DocumentRequirementMatrixItemResponse(i.Id.ToString("D"), i.DocumentType.Code, i.IsMandatory, i.IsCritical, i.BlocksAvailability, i.RequiresExpirationDate, i.AlertDays, i.ReusableBetweenFaenas, i.SortOrder)).ToArray());
     private async Task<FaenaEntity> ResolveFaenaAsync(string? code, UserAccessContext user, CancellationToken ct)

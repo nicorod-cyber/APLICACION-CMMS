@@ -3,14 +3,14 @@ using MaintenanceCMMS.Application.PreventiveMaintenance;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.PreventiveMaintenance;
 
-/// <summary>Preventive plans, scopes, evaluations and history persisted in PostgreSQL tables.</summary>
+/// <summary>Preventive plans, scopes, evaluations and history persisted in SQL Server tables.</summary>
 public sealed class PreventiveMaintenanceService : IPreventiveMaintenanceService
 {
     private readonly CmmsDbContext _db;

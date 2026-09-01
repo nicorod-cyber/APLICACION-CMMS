@@ -30,7 +30,7 @@ using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
 using MaintenanceCMMS.Infrastructure.Data.Excel;
 using MaintenanceCMMS.Infrastructure.Options;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -39,7 +39,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
-using Npgsql;
+using Microsoft.Data.SqlClient;
 using Quartz;
 using Serilog;
 
@@ -312,18 +312,18 @@ try
 }
 catch (Exception exception)
 {
-    var postgresException = FindPostgresException(exception);
+    var sqlException = FindSqlException(exception);
     var failedMigration = pendingMigrations.FirstOrDefault() ?? "unknown";
-    var sqlState = postgresException?.SqlState ?? "n/a";
+    var sqlErrorNumber = sqlException?.Number.ToString() ?? "n/a";
 
     Log.Fatal(
         exception,
-        "Database migration bootstrap failed for {DatabaseTarget}. Migration: {MigrationId}. PostgreSQL SQLSTATE: {PostgreSqlState}.",
+        "Database migration bootstrap failed for {DatabaseTarget}. Migration: {MigrationId}. SQL Server error number: {SqlServerErrorNumber}.",
         migrationDatabaseTarget,
         failedMigration,
-        sqlState);
+        sqlErrorNumber);
 
-    if (IsLegacyOperationalDataSetBlock(postgresException, exception))
+    if (IsLegacyOperationalDataSetBlock(sqlException, exception))
     {
         Log.Fatal(
             "Migration is blocked by legacy rows in public.conjuntos_datos_operacionales. " +
@@ -336,21 +336,26 @@ catch (Exception exception)
     return 1;
 }
 
+Log.Information("Starting SQL Server structural bootstrap for {DatabaseTarget}.", migrationDatabaseTarget);
 await using (var structuralBootstrapScope = app.Services.CreateAsyncScope())
 {
-    var structuralBootstrap = structuralBootstrapScope.ServiceProvider.GetRequiredService<IPostgreSqlStructuralBootstrap>();
+    var structuralBootstrap = structuralBootstrapScope.ServiceProvider.GetRequiredService<ISqlServerStructuralBootstrap>();
     await structuralBootstrap.BootstrapAsync(CancellationToken.None);
 }
 
+Log.Information("SQL Server structural bootstrap completed for {DatabaseTarget}.", migrationDatabaseTarget);
+
+Log.Information("Starting SQL Server identity seed for {DatabaseTarget}.", migrationDatabaseTarget);
 await using (var identitySeedScope = app.Services.CreateAsyncScope())
 {
     var identitySeedService = identitySeedScope.ServiceProvider.GetRequiredService<IIdentitySeedService>();
     await identitySeedService.SeedAsync(CancellationToken.None);
 }
+Log.Information("SQL Server identity seed completed for {DatabaseTarget}.", migrationDatabaseTarget);
 if (app.Environment.IsDevelopment() && builder.Configuration.GetValue("Database:SeedDemoData", false))
 {
     await using var developmentDemoScope = app.Services.CreateAsyncScope();
-    var developmentSeeder = developmentDemoScope.ServiceProvider.GetRequiredService<IPostgreSqlDevelopmentSeeder>();
+    var developmentSeeder = developmentDemoScope.ServiceProvider.GetRequiredService<ISqlServerDevelopmentSeeder>();
     await developmentSeeder.SeedDemoDataAsync(CancellationToken.None);
 }
 
@@ -4288,7 +4293,7 @@ api.MapGet("/system/info", (
         IConfiguration configuration,
         IWebHostEnvironment environment) =>
     {
-        var dataProvider = "PostgreSql";
+        var dataProvider = "SqlServer";
 
         return Results.Ok(systemInfoService.GetInfo(dataProvider, environment.EnvironmentName));
     })
@@ -4297,9 +4302,9 @@ api.MapGet("/system/info", (
 api.MapGet("/system/data-provider", (DataProviderSettings settings) =>
     Results.Ok(new
     {
-        activeProvider = "PostgreSql",
-        providerType = DataProviderType.PostgreSql.ToString(),
-        postgreSqlConfigured = !string.IsNullOrWhiteSpace(settings.PostgreSqlConnectionString),
+        activeProvider = "SqlServer",
+        providerType = DataProviderType.SqlServer.ToString(),
+        sqlServerConfigured = !string.IsNullOrWhiteSpace(settings.SqlServerConnectionString),
         legacyExcelRuntimeEnabled = false
     }))
     .WithName("GetDataProviderInfo");
@@ -4311,8 +4316,8 @@ api.MapGet("/system/database-health", async (CmmsDbContext dbContext, Cancellati
         var appliedMigrations = (await dbContext.Database.GetAppliedMigrationsAsync(cancellationToken)).ToArray();
         return Results.Ok(new
         {
-            activeProvider = "PostgreSql",
-            postgreSqlOfficial = true,
+            activeProvider = "SqlServer",
+            sqlServerOfficial = true,
             healthy = canConnect && pendingMigrations.Length == 0,
             canConnect,
             appliedMigrations,
@@ -4360,12 +4365,12 @@ static string DescribeDatabaseTarget(string? connectionString)
 
     try
     {
-        var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        var host = string.IsNullOrWhiteSpace(builder.Host) ? "(default host)" : builder.Host;
-        var database = string.IsNullOrWhiteSpace(builder.Database) ? "(default database)" : builder.Database;
-        var username = string.IsNullOrWhiteSpace(builder.Username) ? "(default user)" : builder.Username;
+        var builder = new SqlConnectionStringBuilder(connectionString);
+        var host = string.IsNullOrWhiteSpace(builder.DataSource) ? "(default server)" : builder.DataSource;
+        var database = string.IsNullOrWhiteSpace(builder.InitialCatalog) ? "(default database)" : builder.InitialCatalog;
+        var username = string.IsNullOrWhiteSpace(builder.UserID) ? "(integrated security)" : builder.UserID;
 
-        return $"{host}:{builder.Port}/{database} as {username}";
+        return $"{host}/{database} as {username}";
     }
     catch (ArgumentException)
     {
@@ -4373,22 +4378,22 @@ static string DescribeDatabaseTarget(string? connectionString)
     }
 }
 
-static PostgresException? FindPostgresException(Exception exception)
+static SqlException? FindSqlException(Exception exception)
 {
     for (Exception? current = exception; current is not null; current = current.InnerException)
     {
-        if (current is PostgresException postgresException)
+        if (current is SqlException sqlException)
         {
-            return postgresException;
+            return sqlException;
         }
 
         if (current is AggregateException aggregateException)
         {
             foreach (var innerException in aggregateException.Flatten().InnerExceptions)
             {
-                if (innerException is PostgresException aggregatePostgresException)
+                if (innerException is SqlException aggregateSqlException)
                 {
-                    return aggregatePostgresException;
+                    return aggregateSqlException;
                 }
             }
         }
@@ -4397,10 +4402,10 @@ static PostgresException? FindPostgresException(Exception exception)
     return null;
 }
 
-static bool IsLegacyOperationalDataSetBlock(PostgresException? postgresException, Exception exception)
+static bool IsLegacyOperationalDataSetBlock(SqlException? sqlException, Exception exception)
 {
-    var message = postgresException?.MessageText ?? exception.Message;
-    return postgresException?.SqlState == "P0001"
+    var message = sqlException?.Message ?? exception.Message;
+    return sqlException?.Number == 50000
         && message.Contains("conjuntos_datos_operacionales", StringComparison.OrdinalIgnoreCase);
 }
 

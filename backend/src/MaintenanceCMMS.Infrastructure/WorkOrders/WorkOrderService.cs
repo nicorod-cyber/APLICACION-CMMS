@@ -6,8 +6,8 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.MaintenanceTargets;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Assets;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
@@ -61,6 +61,8 @@ public sealed partial class WorkOrderService : IWorkOrderService
 
     public async Task<WorkOrderDetailResponse> CreateAsync(CreateWorkOrderRequest request, UserAccessContext user, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         EnsureCanPlan(user);
         ValidateRequired(request.Descripcion, nameof(request.Descripcion));
         ValidateRequired(request.TipoMantenimiento, nameof(request.TipoMantenimiento));
@@ -144,7 +146,9 @@ public sealed partial class WorkOrderService : IWorkOrderService
         await tx.CommitAsync(ct);
         await Audit(user, "work_order.created", order.WorkOrderNumber, null, order, faena.Code, request.Descripcion, ct);
         return (await GetByIdAsync(order.WorkOrderNumber, user, ct))!;
-    }
+
+        });
+}
 
     private static string TargetRole(string? value)
     {
@@ -278,7 +282,11 @@ public async Task<WorkOrderDetailResponse> CreatePreventiveAsync(CreatePreventiv
     }
     private async Task<Guid?> ResolveNotificationIdAsync(string? a, CancellationToken ct) => string.IsNullOrWhiteSpace(a) ? null : (await _dbContext.WorkNotifications.FirstOrDefaultAsync(n => n.NotificationNumber == C(a), ct))?.Id;
     private async Task<WorkCatalogEntity> CatalogAsync(string cat, string code, CancellationToken ct) => await _dbContext.WorkCatalogs.FirstOrDefaultAsync(x => x.Category == cat && x.Code == code.Trim(), ct) ?? throw new DomainException($"No existe catalogo {cat}:{code}.");
-    private async Task<string> NextNumberAsync(string seq, string prefix, CancellationToken ct) { var cn = _dbContext.Database.GetDbConnection(); if (cn.State != ConnectionState.Open) await cn.OpenAsync(ct); await using var cmd = cn.CreateCommand(); if (_dbContext.Database.CurrentTransaction is not null) cmd.Transaction = _dbContext.Database.CurrentTransaction.GetDbTransaction(); cmd.CommandText = $"SELECT nextval('{seq}')"; var v = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture); return $"{prefix}-{v:000000}"; }
+    private async Task<string> NextNumberAsync(string seq, string prefix, CancellationToken ct)
+    {
+        var value = await SqlServerSequence.NextValueAsync(_dbContext, seq, ct);
+        return $"{prefix}-{value:000000}";
+    }
     private async Task<string> NextTaskCodeAsync(Guid id, CancellationToken ct) => $"T-{(await _dbContext.WorkOrderTasks.CountAsync(t => t.WorkOrderId == id, ct) + 1):000}";
     private void AddHistory(WorkOrderEntity o, WorkCatalogEntity p, WorkCatalogEntity n, UserAccessContext u, string r, DateTimeOffset now) => _dbContext.WorkOrderStatusHistory.Add(new WorkOrderStatusHistoryEntity { Id = Guid.NewGuid(), WorkOrder = o, WorkOrderId = o.Id, PreviousStatusId = p.Id, NewStatusId = n.Id, OccurredAtUtc = now, UserId = u.UserId, Reason = r });
 

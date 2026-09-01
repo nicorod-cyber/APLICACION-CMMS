@@ -5,11 +5,12 @@ using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Assets;
 using MaintenanceCMMS.Infrastructure.Auditing;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
+using MaintenanceCMMS.Infrastructure.OperationalUnits;
 using MaintenanceCMMS.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
+using Microsoft.Data.SqlClient;
 using Xunit;
 
 namespace MaintenanceCMMS.Tests;
@@ -97,14 +98,14 @@ public sealed class AssetServiceTests
             created.Resumen.TipoActivoCodigo,
             created.Resumen.FamiliaEquipoCodigo,
             "F002",
-            "CORRECTIVO",
+            "OPERATIVO",
             NumeroSerie: "SER-EQ-TRANSFER",
             TipoMedicionUso: "HOROMETRO");
 
         var exception = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.UpdateAsync(created.Resumen.Codigo, directEdit, Admin, CancellationToken.None));
         Assert.Contains("traslado", exception.Message, StringComparison.OrdinalIgnoreCase);
 
-        var stateException = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.UpdateAsync(created.Resumen.Codigo, directEdit with { FaenaCodigo = "F001" }, Admin, CancellationToken.None));
+        var stateException = await Assert.ThrowsAsync<DomainException>(() => fixture.Service.UpdateAsync(created.Resumen.Codigo, directEdit with { FaenaCodigo = "F001", EstadoOperacionalCodigo = "CORRECTIVO" }, Admin, CancellationToken.None));
         Assert.Contains("estado", stateException.Message, StringComparison.OrdinalIgnoreCase);
 
         var effectiveAt = DateTimeOffset.UtcNow.AddMinutes(1);
@@ -252,19 +253,22 @@ public sealed class AssetServiceTests
         var faena = await db.Faenas.SingleAsync(item => item.Code == "F001");
         var operating = await db.AssetOperationalStates.SingleAsync(item => item.Code == "OPERATIVO");
         var unitType = new OperationalUnitTypeEntity { Code = "CFA", Name = "Camión fábrica", IsActive = true };
-        var role = new OperationalUnitComponentRoleEntity { Code = "COMPONENTE", Name = "Componente", IsActive = true };
+        var chassisRole = new OperationalUnitComponentRoleEntity { Code = "CHASIS", Name = "Chasis", IsActive = true };
+        var factoryRole = new OperationalUnitComponentRoleEntity { Code = "FABRICA", Name = "Fábrica", IsActive = true };
         var unit = new OperationalUnitEntity { Code = "CFA-TEST", Name = "Camión fábrica de prueba", OperationalUnitType = unitType, FaenaId = faena.Id, OperationalStateId = operating.Id };
-        db.AddRange(unitType, role, unit);
+        db.AddRange(unitType, chassisRole, factoryRole, unit);
         await db.SaveChangesAsync();
         var firstEntity = await db.Assets.SingleAsync(item => item.Code == first.Resumen.Codigo);
         var secondEntity = await db.Assets.SingleAsync(item => item.Code == second.Resumen.Codigo);
         db.OperationalUnitComponents.AddRange(
-            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = firstEntity.Id, ComponentRoleId = role.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" },
-            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = secondEntity.Id, ComponentRoleId = role.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" });
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = firstEntity.Id, ComponentRoleId = chassisRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" },
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = secondEntity.Id, ComponentRoleId = factoryRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" });
         await db.SaveChangesAsync();
         var workshop = await CreateWorkshopAsync(db, "TALLER-CFA");
 
-        await fixture.Service.RegisterWorkshopEntryAsync(first.Resumen.Codigo, new RegisterWorkshopEntryRequest(workshop.Code, DateTimeOffset.UtcNow.AddMinutes(1), "CORRECTIVO", Motivo: "Ingreso conjunto"), Admin, CancellationToken.None);
+        var unitService = new OperationalUnitService(db, new SqlServerAuditService(db, new AuditContextAccessor()));
+        var operationalAdmin = new UserAccessContext("admin", [AuthRoles.Admin], [AuthPermissions.ManageAssets], ["F001", "F002"]);
+        await unitService.RegisterWorkshopEntryAsync(unit.Code, new RegisterWorkshopEntryRequest(workshop.Code, DateTimeOffset.UtcNow.AddMinutes(1), "CORRECTIVO", Motivo: "Ingreso conjunto"), operationalAdmin, CancellationToken.None);
         var affectedIds = new[] { firstEntity.Id, secondEntity.Id };
         var states = await db.Assets.Include(item => item.OperationalState).Where(item => affectedIds.Contains(item.Id)).ToArrayAsync();
         var locations = await db.AssetPhysicalLocationPeriods.Where(item => affectedIds.Contains(item.AssetId) && item.ValidToUtc == null).ToArrayAsync();
@@ -279,20 +283,18 @@ public sealed class AssetServiceTests
     }
 
     [Fact]
-    public async Task DirectOperationalStateUpdate_RemainsRejectedByPostgreSqlTrigger()
+    public async Task DirectOperationalStateUpdate_RemainsRejectedBySqlServerTrigger()
     {
         await using var fixture = await CreateFixtureAsync();
         var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-DIRECT-STATE"), Admin, CancellationToken.None);
         var entity = await fixture.DbContext.Assets.SingleAsync(item => item.Code == asset.Resumen.Codigo);
         var corrective = await fixture.DbContext.AssetOperationalStates.SingleAsync(item => item.Code == "CORRECTIVO");
-        await using var transaction = await fixture.DbContext.Database.BeginTransactionAsync();
         entity.OperationalStateId = corrective.Id;
-        await fixture.DbContext.SaveChangesAsync();
+        var exception = await Assert.ThrowsAsync<DbUpdateException>(() => fixture.DbContext.SaveChangesAsync());
 
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => transaction.CommitAsync());
-
-        Assert.Equal("23514", exception.SqlState);
-        Assert.Contains("El estado operacional solo puede cambiar mediante un evento de estado", exception.MessageText);
+        var sqlException = Assert.IsType<SqlException>(exception.InnerException);
+        Assert.Equal(51001, sqlException.Number);
+        Assert.Contains("El estado operacional solo puede cambiar mediante un evento de estado", sqlException.Message);
     }
     [Fact]
     public async Task Transfer_ValidPhysicalAndTerritorialPeriods_PersistsBothHistories()
@@ -365,7 +367,7 @@ public sealed class AssetServiceTests
         await using var fixture = await CreateFixtureAsync();
         var asset = await fixture.Service.CreateAsync(CompleteCreateRequest("EQ-TRANSFER-DOCUMENTARY"), Admin, CancellationToken.None);
         var documentary = new ThrowingDocumentaryWorkOrderService();
-        var service = new AssetService(fixture.DbContext, new PostgreSqlAuditService(fixture.DbContext, new AuditContextAccessor()), new AuthorizationPolicyService(), documentary);
+        var service = new AssetService(fixture.DbContext, new SqlServerAuditService(fixture.DbContext, new AuditContextAccessor()), new AuthorizationPolicyService(), documentary);
         var effectiveAt = DateTimeOffset.UtcNow.AddMinutes(1);
 
         var transfers = await service.TransferAsync(asset.Resumen.Codigo, new TransferAssetRequest("F002", effectiveAt, "Traslado pese a error documental"), Admin, CancellationToken.None);
@@ -421,11 +423,11 @@ public sealed class AssetServiceTests
 
         var counter = new DbCommandCounter();
         var options = new DbContextOptionsBuilder<CmmsDbContext>()
-            .UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
+            .UseSqlServer(SqlServerWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
             .AddInterceptors(counter)
             .Options;
         await using var measuredDb = new CmmsDbContext(options);
-        var measuredService = new AssetService(measuredDb, new PostgreSqlAuditService(measuredDb, new AuditContextAccessor()), new AuthorizationPolicyService());
+        var measuredService = new AssetService(measuredDb, new SqlServerAuditService(measuredDb, new AuditContextAccessor()), new AuthorizationPolicyService());
 
         counter.Reset();
         await measuredService.ListPageAsync(new AssetListQuery(Texto: "PAGE", Page: 1, PageSize: 25), Admin, CancellationToken.None);
@@ -486,11 +488,11 @@ public sealed class AssetServiceTests
 
         var counter = new DbCommandCounter();
         var options = new DbContextOptionsBuilder<CmmsDbContext>()
-            .UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
+            .UseSqlServer(SqlServerWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
             .AddInterceptors(counter)
             .Options;
         await using var measuredDb = new CmmsDbContext(options);
-        var measuredService = new AssetService(measuredDb, new PostgreSqlAuditService(measuredDb, new AuditContextAccessor()), new AuthorizationPolicyService());
+        var measuredService = new AssetService(measuredDb, new SqlServerAuditService(measuredDb, new AuditContextAccessor()), new AuthorizationPolicyService());
 
         counter.Reset();
         await measuredService.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "OVERVIEW", Page: 1, PageSize: 25), Admin, CancellationToken.None);
@@ -618,13 +620,13 @@ public sealed class AssetServiceTests
     private static async Task<AssetFixture> CreateFixtureAsync()
     {
         var databaseName = $"cmms_test_asset_{Guid.NewGuid():N}";
-        var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
-        await PostgreSqlWorkTestFixture.CreateDatabaseAsync(databaseName, adminConnectionString);
-        var options = new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, databaseName)).Options;
+        var adminConnectionString = await SqlServerWorkTestFixture.GetAdminConnectionStringAsync();
+        await SqlServerWorkTestFixture.CreateDatabaseAsync(databaseName, adminConnectionString);
+        var options = new DbContextOptionsBuilder<CmmsDbContext>().UseSqlServer(SqlServerWorkTestFixture.ConnectionString(adminConnectionString, databaseName)).Options;
         var dbContext = new CmmsDbContext(options);
         await dbContext.Database.MigrateAsync();
         await SeedCatalogsAsync(dbContext);
-        return new AssetFixture(databaseName, adminConnectionString, dbContext, new AssetService(dbContext, new PostgreSqlAuditService(dbContext, new AuditContextAccessor()), new AuthorizationPolicyService()));
+        return new AssetFixture(databaseName, adminConnectionString, dbContext, new AssetService(dbContext, new SqlServerAuditService(dbContext, new AuditContextAccessor()), new AuthorizationPolicyService()));
     }
 
     private static async Task SeedCatalogsAsync(CmmsDbContext dbContext)
@@ -656,7 +658,8 @@ public sealed class AssetServiceTests
         dbContext.AssetOperationalStates.AddRange(
             new AssetOperationalStateEntity { Code = "OPERATIVO", Name = "Operativo", IsActive = true },
             new AssetOperationalStateEntity { Code = "CORRECTIVO", Name = "Correctivo", Severity = 100, IsActive = true },
-            new AssetOperationalStateEntity { Code = "PREPARACION", Name = "Preparación", Severity = 50, IsActive = true });
+            new AssetOperationalStateEntity { Code = "PREPARACION", Name = "Preparación", Severity = 50, IsActive = true },
+            new AssetOperationalStateEntity { Code = "DADO_DE_BAJA", Name = "Dado de baja", Severity = 200, IsActive = true });
         await dbContext.SaveChangesAsync();
         dbContext.EquipmentFamilies.Add(new EquipmentFamilyEntity { Code = "CAMIONES", Name = "Camiones", AssetTypeId = type.Id, IsActive = true });
         dbContext.AssetAttributeDefinitions.Add(new AssetAttributeDefinitionEntity { AssetTypeId = type.Id, Code = "IDENTIFICADOR", Name = "Identificador", DataType = "TEXTO", IsRequired = true, IsIdentifier = true, IsUnique = true, IsActive = true });
@@ -668,7 +671,7 @@ public sealed class AssetServiceTests
         public async ValueTask DisposeAsync()
         {
             await DbContext.DisposeAsync();
-            await PostgreSqlWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
+            await SqlServerWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
         }
     }
 }

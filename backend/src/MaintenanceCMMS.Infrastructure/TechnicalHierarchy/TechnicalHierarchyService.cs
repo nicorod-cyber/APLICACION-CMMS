@@ -5,8 +5,8 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.TechnicalHierarchy;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.TechnicalHierarchy;
@@ -24,7 +24,7 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
         var all=await LoadAllAsync(ct);
         var q=BaseQuery().AsNoTracking();
         if(!query.IncludeObsolete)q=q.Where(x=>!x.IsObsolete);
-        if(query.Nivel.HasValue){var level=query.Nivel.Value.ToString();q=q.Where(x=>x.Level==level);}        
+        if(query.Nivel.HasValue){var level=query.Nivel.Value.ToString();q=q.Where(x=>x.Level==level);}
         if(!string.IsNullOrWhiteSpace(query.FaenaCodigo)){var f=Code(query.FaenaCodigo)!;q=q.Where(x=>(x.Faena!=null&&x.Faena.Code.ToUpper()==f)||x.Assets.Any(a=>a.Asset.Faena.Code.ToUpper()==f));}
         if(!string.IsNullOrWhiteSpace(query.Familia)){var fam=Code(query.Familia)!;q=q.Where(x=>x.Families.Any(f=>f.EquipmentFamily.Code.ToUpper()==fam));}
         q=ApplyScope(q,user);
@@ -85,6 +85,8 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
 
     public async Task<TechnicalNodeResponse?> MergeAsync(MergeTechnicalNodesRequest r, UserAccessContext user, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         EnsureCanManage(user);Req(r.SourceCode,nameof(r.SourceCode));Req(r.TargetCode,nameof(r.TargetCode));Req(r.Reason,nameof(r.Reason));if(Same(r.SourceCode,r.TargetCode))throw new DomainException("El nodo origen y destino deben ser distintos.");DetachTrackedTechnicalHierarchy();
         await using var tx=await _db.Database.BeginTransactionAsync(ct);
         var sourceCode=Code(r.SourceCode)!;var targetCode=Code(r.TargetCode)!;
@@ -100,7 +102,9 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
         foreach(var alias in sourceAliases.Concat([source.Code,source.Name]).Where(x=>!string.IsNullOrWhiteSpace(x)).Select(x=>x.Trim())){var normalized=NormalizeName(alias);if(!string.IsNullOrWhiteSpace(normalized)&&existingAliases.Add(normalized))_db.TechnicalNodeAliases.Add(new TechnicalNodeAliasEntity{TechnicalNodeId=target.Id,Alias=alias,NormalizedAlias=normalized,Source="Merge"});}
         source.IsObsolete=true;source.MergedIntoNodeId=target.Id;source.UpdatedAtUtc=DateTimeOffset.UtcNow;source.UpdatedByUserId=user.UserId;target.UpdatedAtUtc=DateTimeOffset.UtcNow;target.UpdatedByUserId=user.UserId;
         await _db.SaveChangesAsync(ct);await tx.CommitAsync(ct);DetachTrackedTechnicalHierarchy();var merged=await GetByCodeAsync(target.Code,user,ct);await Audit(user,"Merged",target.Code,JsonSerializer.Serialize(new{r.SourceCode,r.TargetCode}),JsonSerializer.Serialize(merged),r.Reason,ct);return merged;
-    }
+
+        });
+}
 
     public async Task<IReadOnlyCollection<TechnicalNodeResponse>> AssignFamiliesAsync(BulkFamilyAssignmentRequest r, UserAccessContext user, CancellationToken ct)
     {
@@ -222,7 +226,7 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
         return b.ToString().Normalize(NormalizationForm.FormC).Trim();
     }
 
-    private static decimal Similarity(string left,string right){if(string.IsNullOrWhiteSpace(left)&&string.IsNullOrWhiteSpace(right))return 1;var max=Math.Max(left.Length,right.Length);if(max==0)return 1;return 1-((decimal)Distance(left,right)/max);}    
+    private static decimal Similarity(string left,string right){if(string.IsNullOrWhiteSpace(left)&&string.IsNullOrWhiteSpace(right))return 1;var max=Math.Max(left.Length,right.Length);if(max==0)return 1;return 1-((decimal)Distance(left,right)/max);}
     private static int Distance(string left,string right){var d=new int[left.Length+1,right.Length+1];for(var i=0;i<=left.Length;i++)d[i,0]=i;for(var j=0;j<=right.Length;j++)d[0,j]=j;for(var i=1;i<=left.Length;i++)for(var j=1;j<=right.Length;j++){var cost=left[i-1]==right[j-1]?0:1;d[i,j]=Math.Min(Math.Min(d[i-1,j]+1,d[i,j-1]+1),d[i-1,j-1]+cost);}return d[left.Length,right.Length];}
     private static TechnicalHierarchyLevel ParseLevel(string? value)=>Enum.TryParse<TechnicalHierarchyLevel>(value,true,out var level)?level:TechnicalHierarchyLevel.Sistema;
     private static object AuditShape(TechnicalNodeEntity n)=>new{n.Code,n.Name,n.Level,Parent=n.Parent?.Code,Faena=n.Faena?.Code,Families=n.Families.Select(x=>x.EquipmentFamily?.Code).ToArray(),Assets=n.Assets.Select(x=>x.Asset?.Code).ToArray(),Aliases=n.Aliases.Select(x=>x.Alias).ToArray(),n.IsObsolete,MergedInto=n.MergedIntoNode?.Code};

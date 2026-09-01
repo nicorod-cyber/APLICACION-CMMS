@@ -3,8 +3,8 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.TechnicalHierarchy;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.TechnicalHierarchy;
@@ -19,6 +19,8 @@ public sealed class TechnicalHierarchyExcelImportService : ITechnicalHierarchyEx
 
     public async Task<TechnicalHierarchyExcelImportResult> ImportAsync(TechnicalHierarchyExcelImportCommand command, UserAccessContext user, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         if (!_auth.CanManageTechnicalHierarchy(user)) throw new UnauthorizedAccessException("El usuario no tiene permiso para importar jerarquía técnica.");
 
         var files = new[] { command.UbicacionesTecnicasPath, command.SistemasComponentesPath };
@@ -112,7 +114,9 @@ public sealed class TechnicalHierarchyExcelImportService : ITechnicalHierarchyEx
             errors.Add(ex.Message);
             return Result(files, rowsRead, 0, 0, rowsRead, warnings, errors, missing);
         }
-    }
+
+        });
+}
 
     private async Task ValidateAsync(IReadOnlyCollection<Dictionary<string, string?>> locations, IReadOnlyCollection<Dictionary<string, string?>> nodes, List<string> errors, List<string> missing, CancellationToken ct)
     {

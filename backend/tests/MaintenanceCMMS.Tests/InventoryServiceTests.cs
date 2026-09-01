@@ -3,8 +3,8 @@ using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Auditing;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 using MaintenanceCMMS.Infrastructure.Inventory;
 using MaintenanceCMMS.Infrastructure.Security;
@@ -285,12 +285,12 @@ public sealed class InventoryServiceTests
 
     private static async Task<InventoryFixture> CreateFixtureAsync()
     {
-        var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var db = fixture.DbContext;
-        var service = new InventoryService(db, new PostgreSqlAuditService(db, new AuditContextAccessor()), new AuthorizationPolicyService());
+        var service = new InventoryService(db, new SqlServerAuditService(db, new AuditContextAccessor()), new AuthorizationPolicyService());
         return new InventoryFixture(fixture, service);
     }
-    private sealed record InventoryFixture(PostgreSqlWorkTestFixture Provider, IInventoryService Service);
+    private sealed record InventoryFixture(SqlServerWorkTestFixture Provider, IInventoryService Service);
 }
 
 

@@ -6,11 +6,11 @@ using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Auditing;
 using MaintenanceCMMS.Infrastructure.Assets;
 using MaintenanceCMMS.Infrastructure.Security;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.OperationalUnits;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
+using Microsoft.Data.SqlClient;
 using Xunit;
 
 namespace MaintenanceCMMS.Tests;
@@ -65,7 +65,7 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-STATE", "CFA state", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
         await fixture.Service.MountAsync("CFA-STATE", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje controlado"), Admin, CancellationToken.None);
 
-        var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
+        var assetService = new AssetService(fixture.Db, new SqlServerAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
         await Assert.ThrowsAsync<DomainException>(() => assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("CORRECTIVO", "Falla critica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-TEST"), Admin, CancellationToken.None));
         var unit = await fixture.Service.GetAsync("CFA-STATE", Admin, CancellationToken.None);
 
@@ -114,7 +114,7 @@ public sealed class OperationalUnitServiceTests
         var destination = new FaenaEntity { Code = "F002", Name = "Faena destino", IsActive = true };
         fixture.Db.AddRange(destination, new TechnicalLocationEntity { Code = "UT-F002", Name = "Ubicacion destino", Faena = destination, IsObsolete = false });
         await fixture.Db.SaveChangesAsync();
-        var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
+        var assetService = new AssetService(fixture.Db, new SqlServerAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
 
         await Assert.ThrowsAsync<DomainException>(() => assetService.TransferAsync("AUGER-1000", new TransferAssetRequest("F002", DateTimeOffset.UtcNow.AddMinutes(1), "Traslado aislado"), Admin, CancellationToken.None));
         await Assert.ThrowsAsync<DomainException>(() => assetService.AddStateEventAsync("AUGER-1000", new CreateAssetStateEventRequest("CORRECTIVO", "Falla de fabrica", TipoAntecedente: "OTHER", ReferenciaAntecedente: "OT-FAB"), Admin, CancellationToken.None));
@@ -132,11 +132,11 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-CON-A", "CFA concurrente A", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
         await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-CON-B", "CFA concurrente B", "CFA", "F001", "OPERATIVO"), Admin, CancellationToken.None);
 
-        var connectionString = PostgreSqlWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName);
-        await using var firstDb = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(connectionString).Options);
-        await using var secondDb = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(connectionString).Options);
-        var firstService = new OperationalUnitService(firstDb, new PostgreSqlAuditService(firstDb, new AuditContextAccessor()));
-        var secondService = new OperationalUnitService(secondDb, new PostgreSqlAuditService(secondDb, new AuditContextAccessor()));
+        var connectionString = SqlServerWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName);
+        await using var firstDb = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseSqlServer(connectionString).Options);
+        await using var secondDb = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseSqlServer(connectionString).Options);
+        var firstService = new OperationalUnitService(firstDb, new SqlServerAuditService(firstDb, new AuditContextAccessor()));
+        var secondService = new OperationalUnitService(secondDb, new SqlServerAuditService(secondDb, new AuditContextAccessor()));
 
         static async Task<Exception?> TryMountAsync(IOperationalUnitService service, string unit)
         {
@@ -185,11 +185,11 @@ public sealed class OperationalUnitServiceTests
 
         var counter = new DbCommandCounter();
         var options = new DbContextOptionsBuilder<CmmsDbContext>()
-            .UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
+            .UseSqlServer(SqlServerWorkTestFixture.ConnectionString(fixture.AdminConnectionString, fixture.DatabaseName))
             .AddInterceptors(counter)
             .Options;
         await using var measuredDb = new CmmsDbContext(options);
-        var measuredService = new OperationalUnitService(measuredDb, new PostgreSqlAuditService(measuredDb, new AuditContextAccessor()));
+        var measuredService = new OperationalUnitService(measuredDb, new SqlServerAuditService(measuredDb, new AuditContextAccessor()));
 
         counter.Reset();
         await measuredService.ListPageAsync(new OperationalUnitListQuery(Texto: "PAGE", Page: 1, PageSize: 25), Admin, CancellationToken.None);
@@ -213,18 +213,16 @@ public sealed class OperationalUnitServiceTests
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "CHASIS", 1, 1, true, permitted), operationalUser, CancellationToken.None);
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 1, 1, true, permitted), operationalUser, CancellationToken.None);
         await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-OPS", "CFA operaciones", "CFA", "F001", "OPERATIVO"), operationalUser, CancellationToken.None);
-        var faena = await fixture.Db.Faenas.SingleAsync(item => item.Code == "F001");
         var assets = await fixture.Db.Assets.Where(item => item.Code == "CHF-TWCK41" || item.Code == "AUGER-1000").ToArrayAsync();
         foreach (var asset in assets)
         {
             asset.UsageMeasurementType = "HOROMETRO";
-            fixture.Db.AssetPhysicalLocationPeriods.Add(new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, FaenaId = faena.Id, LocationType = "FAENA", ValidFromUtc = DateTimeOffset.UtcNow.AddDays(-1), RegisteredByUserId = "seed" });
         }
         await fixture.Db.SaveChangesAsync();
         await fixture.Service.MountAsync("CFA-OPS", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje inicial"), operationalUser, CancellationToken.None);
         await fixture.Service.MountAsync("CFA-OPS", new MountOperationalUnitComponentRequest("AUGER-1000", "FABRICA", Motivo: "Montaje inicial"), operationalUser, CancellationToken.None);
 
-        // PostgreSQL/Testcontainers regression: GET before and after each synchronous unit-reading operation must map without lazy-loading Asset.
+        // SQL Server/Testcontainers regression: GET before and after each synchronous unit-reading operation must map without lazy-loading Asset.
         var beforeReading = await fixture.Service.GetAsync("CFA-OPS", operationalUser, CancellationToken.None);
         Assert.NotNull(beforeReading);
         Assert.Null(beforeReading!.UltimaLectura);
@@ -261,7 +259,7 @@ var afterReading = await fixture.Service.GetAsync("CFA-OPS", operationalUser, Ca
         var operationalCodes = await fixture.Db.Assets.Where(item => item.Code == "CHF-TWCK41" || item.Code == "AUGER-1000").Join(fixture.Db.AssetOperationalStates, asset => asset.OperationalStateId, state => state.Id, (asset, item) => item.Code).ToArrayAsync();
         Assert.All(operationalCodes, item => Assert.Equal("CON_ALERTA", item));
 
-        var assetService = new AssetService(fixture.Db, new PostgreSqlAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
+        var assetService = new AssetService(fixture.Db, new SqlServerAuditService(fixture.Db, new AuditContextAccessor()), new AuthorizationPolicyService());
         await Assert.ThrowsAsync<DomainException>(() => assetService.AddReadingAsync("CHF-TWCK41", new CreateAssetReadingRequest(12600m), operationalUser, CancellationToken.None));
         await Assert.ThrowsAsync<DomainException>(() => assetService.AddStateEventAsync("CHF-TWCK41", new CreateAssetStateEventRequest("OPERATIVO", "Intento individual"), operationalUser, CancellationToken.None));
     }
@@ -278,19 +276,7 @@ var afterReading = await fixture.Service.GetAsync("CFA-OPS", operationalUser, Ca
         await fixture.Service.UpsertRuleAsync(new OperationalUnitRuleRequest("CFA", "FABRICA", 1, 1, true, permitted), user, CancellationToken.None);
         await fixture.Service.CreateAsync(new OperationalUnitRequest("CFA-LUGAR", "CFA lugar", "CFA", "F001", "OPERATIVO"), user, CancellationToken.None);
 
-        var faena = await fixture.Db.Faenas.SingleAsync(item => item.Code == "F001");
         var components = await fixture.Db.Assets.Where(item => item.Code == "CHF-TWCK41" || item.Code == "AUGER-1000").ToArrayAsync();
-        var locationStart = DateTimeOffset.UtcNow.AddMinutes(-2);
-        fixture.Db.AssetPhysicalLocationPeriods.AddRange(components.Select(asset => new AssetPhysicalLocationPeriodEntity
-        {
-            AssetId = asset.Id,
-            LocationType = "FAENA",
-            FaenaId = faena.Id,
-            ValidFromUtc = locationStart,
-            RegisteredByUserId = user.UserId,
-            Reason = "Ubicación inicial de prueba"
-        }));
-        await fixture.Db.SaveChangesAsync();
         await fixture.Service.MountAsync("CFA-LUGAR", new MountOperationalUnitComponentRequest("CHF-TWCK41", "CHASIS", Motivo: "Montaje inicial"), user, CancellationToken.None);
         await fixture.Service.MountAsync("CFA-LUGAR", new MountOperationalUnitComponentRequest("AUGER-1000", "FABRICA", Motivo: "Montaje inicial"), user, CancellationToken.None);
 
@@ -317,9 +303,9 @@ var afterReading = await fixture.Service.GetAsync("CFA-OPS", operationalUser, Ca
         public static async Task<Fixture> CreateAsync()
         {
             var name = $"cmms_test_operational_unit_{Guid.NewGuid():N}";
-            var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
-            await PostgreSqlWorkTestFixture.CreateDatabaseAsync(name, adminConnectionString);
-            var db = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseNpgsql(PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, name)).Options);
+            var adminConnectionString = await SqlServerWorkTestFixture.GetAdminConnectionStringAsync();
+            await SqlServerWorkTestFixture.CreateDatabaseAsync(name, adminConnectionString);
+            var db = new CmmsDbContext(new DbContextOptionsBuilder<CmmsDbContext>().UseSqlServer(SqlServerWorkTestFixture.ConnectionString(adminConnectionString, name)).Options);
             await db.Database.MigrateAsync();
             var faena = new FaenaEntity { Code = "F001", Name = "Faena", IsActive = true }; var type = new AssetTypeEntity { Code = "MONTABLE", Name = "Montable", IsMountable = true, IsActive = true }; var state = new AssetOperationalStateEntity { Code = "OPERATIVO", Name = "Operativo", Severity = 0, IsActive = true }; var outOfService = new AssetOperationalStateEntity { Code = "CORRECTIVO", Name = "Fuera de servicio", Severity = 100, IsActive = true };
             db.AddRange(
@@ -336,11 +322,14 @@ var afterReading = await fixture.Service.GetAsync("CFA-OPS", operationalUser, Ca
                     IsObsolete = false
                 });
             db.Assets.AddRange(new AssetEntity { Code = "CHF-TWCK41", Name = "Chasis", AssetTypeId = type.Id, Faena = faena, OperationalState = state }, new AssetEntity { Code = "AUGER-1000", Name = "Auger", AssetTypeId = type.Id, Faena = faena, OperationalState = state }, new AssetEntity { Code = "QUADRA-1020", Name = "Quadra", AssetTypeId = type.Id, Faena = faena, OperationalState = state }); await db.SaveChangesAsync();
-            return new Fixture(name, adminConnectionString, db, new OperationalUnitService(db, new PostgreSqlAuditService(db, new AuditContextAccessor())));
+            var initialLocationFrom = DateTimeOffset.UtcNow.AddDays(-1);
+            db.AssetPhysicalLocationPeriods.AddRange((await db.Assets.ToArrayAsync()).Select(asset => new AssetPhysicalLocationPeriodEntity { AssetId = asset.Id, LocationType = "FAENA", FaenaId = faena.Id, ValidFromUtc = initialLocationFrom, RegisteredByUserId = "admin", Reason = "Ubicación inicial de fixture" }));
+            await db.SaveChangesAsync();
+            return new Fixture(name, adminConnectionString, db, new OperationalUnitService(db, new SqlServerAuditService(db, new AuditContextAccessor())));
         }
         public async ValueTask DisposeAsync()
         {
-            await Db.DisposeAsync(); await PostgreSqlWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
+            await Db.DisposeAsync(); await SqlServerWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
         }
     }
 }

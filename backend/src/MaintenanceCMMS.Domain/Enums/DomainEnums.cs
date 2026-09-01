@@ -93,7 +93,6 @@ public enum DataProviderType
 {
     Excel = 0,
     SqlServer = 1,
-    PostgreSql = 2
 }
 
 public enum ImportStatus

@@ -27,7 +27,7 @@ using MaintenanceCMMS.Infrastructure.Assets;
 using MaintenanceCMMS.Infrastructure.Availability;
 using MaintenanceCMMS.Infrastructure.Data;
 using MaintenanceCMMS.Infrastructure.Data.Excel;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
 using MaintenanceCMMS.Infrastructure.Data.Sql;
 using MaintenanceCMMS.Infrastructure.Documents;
 using MaintenanceCMMS.Infrastructure.Costs;
@@ -61,9 +61,14 @@ public static class DependencyInjection
         IConfiguration configuration)
     {
         var dataProviderSettings = ResolveDataProviderSettings(configuration);
-        if (string.IsNullOrWhiteSpace(dataProviderSettings.PostgreSqlConnectionString))
+        if (!string.Equals(dataProviderSettings.Provider, "SqlServer", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("PostgreSQL connection string is required.");
+            throw new InvalidOperationException("SQL Server is the only supported runtime data provider.");
+        }
+
+        if (string.IsNullOrWhiteSpace(dataProviderSettings.SqlServerConnectionString))
+        {
+            throw new InvalidOperationException("SQL Server connection string is required.");
         }
 
         services.AddSingleton(dataProviderSettings);
@@ -72,7 +77,6 @@ public static class DependencyInjection
             options.Provider = dataProviderSettings.Provider;
             options.ExcelPath = dataProviderSettings.ExcelPath;
             options.SqlServerConnectionString = dataProviderSettings.SqlServerConnectionString;
-            options.PostgreSqlConnectionString = dataProviderSettings.PostgreSqlConnectionString;
         });
 
         services.Configure<DataProviderOptions>(configuration.GetSection("DataProviders"));
@@ -90,13 +94,13 @@ public static class DependencyInjection
         services.AddSingleton<IExcelSchemaRegistry, ExcelSchemaRegistry>();
         services.AddDbContext<CmmsDbContext>(options =>
         {
-            options.UseNpgsql(dataProviderSettings.PostgreSqlConnectionString);
+            options.UseSqlServer(dataProviderSettings.SqlServerConnectionString, sqlServer => sqlServer.EnableRetryOnFailure());
         });
-        services.AddScoped<IPostgreSqlStructuralBootstrap, PostgreSqlStructuralBootstrap>();
-        services.AddScoped<IPostgreSqlDevelopmentSeeder, PostgreSqlDevelopmentSeeder>();
-        services.AddScoped<IIdentityStore, PostgreSqlIdentityStore>();
-        services.AddSingleton<IIdentitySeedTransaction, PostgreSqlIdentitySeedTransaction>();
-        services.AddScoped<IAuditService, PostgreSqlAuditService>();
+        services.AddScoped<ISqlServerStructuralBootstrap, SqlServerStructuralBootstrap>();
+        services.AddScoped<ISqlServerDevelopmentSeeder, SqlServerDevelopmentSeeder>();
+        services.AddScoped<IIdentityStore, SqlServerIdentityStore>();
+        services.AddSingleton<IIdentitySeedTransaction, SqlServerIdentitySeedTransaction>();
+        services.AddScoped<IAuditService, SqlServerAuditService>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IJwtTokenService, JwtTokenService>();
         services.AddScoped<IAuthService, AuthService>();
@@ -104,12 +108,12 @@ public static class DependencyInjection
         services.AddScoped<IIdentitySeedService, IdentitySeedService>();
         services.AddSingleton<IAuditContextAccessor, AuditContextAccessor>();
         services.AddScoped<IDataGovernanceService, DataGovernanceService>();
-        services.AddScoped<IPostgreSqlImportHandler, FaenaPostgreSqlImportHandler>();
-        services.AddScoped<IPostgreSqlImportHandler, AssetPostgreSqlImportHandler>();
-        services.AddScoped<IPostgreSqlImportHandler, TechnicalLocationPostgreSqlImportHandler>();
-        services.AddScoped<IPostgreSqlImportHandler, SparePartPostgreSqlImportHandler>();
-        services.AddScoped<IPostgreSqlImportHandler, WarehousePostgreSqlImportHandler>();
-        services.AddScoped<PostgreSqlImportHandlerResolver>();
+        services.AddScoped<ISqlServerImportHandler, FaenaSqlServerImportHandler>();
+        services.AddScoped<ISqlServerImportHandler, AssetSqlServerImportHandler>();
+        services.AddScoped<ISqlServerImportHandler, TechnicalLocationSqlServerImportHandler>();
+        services.AddScoped<ISqlServerImportHandler, SparePartSqlServerImportHandler>();
+        services.AddScoped<ISqlServerImportHandler, WarehouseSqlServerImportHandler>();
+        services.AddScoped<SqlServerImportHandlerResolver>();
         services.AddScoped<IExcelImportWorkflowService, ExcelImportWorkflowService>();
         services.AddScoped<IFaenaService, FaenaService>();
         services.AddScoped<IAssetService, AssetService>();
@@ -158,35 +162,21 @@ public static class DependencyInjection
     private static DataProviderSettings ResolveDataProviderSettings(IConfiguration configuration)
     {
         var section = configuration.GetSection("DataProvider");
-        var provider = section["Provider"];
-
-        if (string.IsNullOrWhiteSpace(provider))
+        var configuredProvider = section["Provider"];
+        var connectionString = section["SqlServerConnectionString"];
+        if (string.IsNullOrWhiteSpace(connectionString))
         {
-            provider = configuration["DataProvider"];
+            var configuredName = configuration["DataProviders:SqlServer:ConnectionStringName"];
+            connectionString = ResolveConnectionString(configuration, configuredName);
         }
-
-        provider = string.IsNullOrWhiteSpace(provider) ? "PostgreSql" : provider;
-
-        var legacyExcelPath = configuration["DataProviders:Excel:BasePath"];
-        var legacySqlServerName = configuration["DataProviders:SqlServer:ConnectionStringName"];
-        var legacyPostgreSqlName = configuration["DataProviders:PostgreSql:ConnectionStringName"];
-
-        var configuredSqlServerConnectionString = section["SqlServerConnectionString"];
-        var configuredPostgreSqlConnectionString = section["PostgreSqlConnectionString"];
 
         return new DataProviderSettings
         {
-            Provider = provider,
-            ExcelPath = section["ExcelPath"] ?? legacyExcelPath ?? "data/excel",
-            SqlServerConnectionString = !string.IsNullOrWhiteSpace(configuredSqlServerConnectionString)
-                ? configuredSqlServerConnectionString
-                : ResolveConnectionString(configuration, legacySqlServerName) ?? string.Empty,
-            PostgreSqlConnectionString = !string.IsNullOrWhiteSpace(configuredPostgreSqlConnectionString)
-                ? configuredPostgreSqlConnectionString
-                : ResolveConnectionString(configuration, legacyPostgreSqlName) ?? string.Empty
+            Provider = string.IsNullOrWhiteSpace(configuredProvider) ? "SqlServer" : configuredProvider,
+            ExcelPath = section["ExcelPath"] ?? configuration["DataProviders:Excel:BasePath"] ?? "data/excel",
+            SqlServerConnectionString = connectionString ?? string.Empty
         };
     }
-
     private static string? ResolveConnectionString(IConfiguration configuration, string? connectionStringName)
     {
         if (string.IsNullOrWhiteSpace(connectionStringName))

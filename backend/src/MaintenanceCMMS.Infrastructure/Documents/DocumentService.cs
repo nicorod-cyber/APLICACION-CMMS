@@ -5,8 +5,8 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Documents;
@@ -161,6 +161,8 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         EnsureCanManage(user);
         ValidateRequired(request.EntidadCodigo, nameof(request.EntidadCodigo));
         ValidateRequired(request.TipoDocumento, nameof(request.TipoDocumento));
@@ -224,7 +226,9 @@ public sealed class DocumentService : IDocumentService
         await RecordAuditAsync(user, "document.created", document.Id.ToString("D"), null, Serialize(document), request.Reason ?? "Documento cargado", cancellationToken);
 
         return await LoadDocumentResponseAsync(document.Id.ToString("D"), cancellationToken);
-    }
+
+        });
+}
 
     public async Task<DocumentResponse> UploadAssetAsync(
         string assetCode,
@@ -232,6 +236,8 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         EnsureCanManage(user);
         ValidateRequired(upload.TipoDocumento, nameof(upload.TipoDocumento));
         var asset = await ResolveAssetAsync(assetCode, user, cancellationToken);
@@ -300,7 +306,9 @@ public sealed class DocumentService : IDocumentService
             await CompensateStoredFileAsync(stored.FileKey, user, cancellationToken);
             throw;
         }
-    }
+
+        });
+}
 
     public async Task<DocumentResponse?> ReplaceWithUploadAsync(
         string id,
@@ -308,6 +316,8 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         EnsureCanManage(user);
         DomainGuard.AgainstEmpty(upload.Observaciones ?? string.Empty, nameof(upload.Observaciones));
         var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
@@ -354,13 +364,17 @@ public sealed class DocumentService : IDocumentService
             await CompensateStoredFileAsync(stored.FileKey, user, cancellationToken);
             throw;
         }
-    }
+
+        });
+}
     public async Task<DocumentResponse?> UpdateAsync(
         string id,
         UpdateDocumentRequest request,
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         EnsureCanManage(user);
         DomainGuard.AgainstEmpty(request.Reason ?? string.Empty, "reason");
 
@@ -395,7 +409,9 @@ public sealed class DocumentService : IDocumentService
         await RecordAuditAsync(user, "document.updated", id, previous, Serialize(document), request.Reason, cancellationToken);
 
         return await LoadDocumentResponseAsync(id, cancellationToken);
-    }
+
+        });
+}
 
     public async Task<DocumentResponse?> ValidateAsync(
         string id,
@@ -493,6 +509,8 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         EnsureCanManage(user);
         DomainGuard.AgainstEmpty(request.Reason, nameof(request.Reason));
         var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
@@ -532,7 +550,9 @@ public sealed class DocumentService : IDocumentService
         await RecordAuditAsync(user, "document.replaced", id, previous, Serialize(document), request.Reason, cancellationToken);
 
         return await LoadDocumentResponseAsync(id, cancellationToken);
-    }
+
+        });
+}
 
     public async Task<IReadOnlyCollection<DocumentVersionResponse>> ListVersionsAsync(
         string id,
@@ -566,6 +586,8 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user,
         CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         EnsureCanManage(user);
         var document = await FindDocumentAsync(id, tracking: true, cancellationToken);
         if (document is null)
@@ -599,7 +621,9 @@ public sealed class DocumentService : IDocumentService
         await RecordAuditAsync(user, "document.asset.assigned", id, null, JsonSerializer.Serialize(request.ActivoCodigos), request.Reason ?? "Asociacion de activos", cancellationToken);
 
         return await LoadDocumentResponseAsync(id, cancellationToken);
-    }
+
+        });
+}
 
     public async Task<DocumentResponse?> UnassignAssetAsync(
         string id,
@@ -1192,7 +1216,7 @@ public sealed class DocumentService : IDocumentService
             Status = "Stored",
             FileVersion = 1,
             AuthorUserId = user.UserId,
-            MetadataJson = JsonSerializer.Serialize(new { binaryStoredInPostgreSql = false })
+            MetadataJson = JsonSerializer.Serialize(new { binaryStoredInSqlServer = false })
         };
     }
     private static DocumentTypeResponse ToTypeResponse(DocumentTypeEntity entity)

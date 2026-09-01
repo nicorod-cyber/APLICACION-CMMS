@@ -7,9 +7,8 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
-      DataProvider__Provider: PostgreSql
-      DataProvider__SqlServerConnectionString: ""
-      DataProvider__PostgreSqlConnectionString: Host=postgres;Port=5432;Database=${POSTGRES_DB:?POSTGRES_DB must be set};Username=${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set};Password=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set}
+      DataProvider__Provider: SqlServer
+      DataProvider__SqlServerConnectionString: Server=mssql,1433;Database=${MSSQL_DB:?MSSQL_DB must be set};User Id=sa;Password=${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD must be set};Encrypt=False;TrustServerCertificate=True
       Database__SeedReferenceCatalogs: "true"
       Database__SeedDemoData: "false"
       Jwt__Issuer: MaintenanceCMMS
@@ -42,27 +41,28 @@ services:
     ports:
       - "5041:8080"
     depends_on:
-      postgres:
+      mssql:
         condition: service_healthy
       mailhog:
         condition: service_started
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: maintenance-cmms-postgres
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: maintenance-cmms-sqlserver
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
-      POSTGRES_USER: ${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set}
-      POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set}
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD must be set}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - sqlserver-data:/var/opt/mssql
     ports:
-      - "5432:5432"
+      - "1433:1433"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set} -d ${POSTGRES_DB:?POSTGRES_DB must be set}"]
-      interval: 5s
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"SELECT 1\""]
+      interval: 10s
       timeout: 5s
       retries: 20
+      start_period: 20s
 
   frontend:
     build:
@@ -93,4 +93,4 @@ services:
       - "8025:8025"
 
 volumes:
-  postgres-data:
+  sqlserver-data:

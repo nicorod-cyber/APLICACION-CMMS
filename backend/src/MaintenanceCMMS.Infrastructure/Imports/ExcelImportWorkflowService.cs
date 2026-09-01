@@ -7,8 +7,8 @@ using MaintenanceCMMS.Application.Imports;
 using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Imports;
@@ -20,18 +20,18 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly CmmsDbContext _db;
     private readonly IExcelSchemaRegistry _schemas;
-    private readonly PostgreSqlImportHandlerResolver _handlers;
+    private readonly SqlServerImportHandlerResolver _handlers;
     private readonly IAuditService _audit;
     private readonly IDocumentStorageService _storage;
 
-    public ExcelImportWorkflowService(CmmsDbContext db, IExcelSchemaRegistry schemas, PostgreSqlImportHandlerResolver handlers, IAuditService audit, IDocumentStorageService storage)
+    public ExcelImportWorkflowService(CmmsDbContext db, IExcelSchemaRegistry schemas, SqlServerImportHandlerResolver handlers, IAuditService audit, IDocumentStorageService storage)
     { _db = db; _schemas = schemas; _handlers = handlers; _audit = audit; _storage = storage; }
 
     public async Task<ExcelImportPreviewResult> UploadAsync(ExcelImportUploadCommand command, CancellationToken ct)
     {
         DomainGuard.AgainstEmpty(command.Entity, nameof(command.Entity)); DomainGuard.AgainstEmpty(command.OriginalFileName, nameof(command.OriginalFileName)); DomainGuard.AgainstEmpty(command.UploadedBy, nameof(command.UploadedBy));
         var schema = Schema(command.Entity); var handler = _handlers.GetRequired(schema.SchemaName); var workbook = ReadWorkbook(command.Content, schema);
-        var input = workbook.Rows.Select((values, index) => new PostgreSqlImportRow(index + 2, values)).ToArray();
+        var input = workbook.Rows.Select((values, index) => new SqlServerImportRow(index + 2, values)).ToArray();
         var preview = await PreviewAsync(schema, handler, workbook.Headers, input, ct);
         var id = Guid.NewGuid(); var fileName = Path.GetFileName(command.OriginalFileName);
         var stored = await _storage.SaveImportBackupAsync(new DocumentStorageSaveRequest("Imports", "ExcelImport", id.ToString("D"), fileName, ContentType, command.Content, command.UploadedBy, DocumentStoragePurpose.ImportBackup, Metadata: new Dictionary<string, string?> { ["SchemaName"] = schema.SchemaName, ["SimulateOnly"] = command.SimulateOnly.ToString() }), ct);
@@ -53,6 +53,8 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
 
     public async Task<ExcelImportPreviewResult?> ApproveAsync(string id, string approvedBy, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_db, async () =>
+        {
         DomainGuard.AgainstEmpty(approvedBy, nameof(approvedBy)); if (!Guid.TryParse(id, out var key)) return null;
         var entity = await LoadAsync(key, true, ct); if (entity is null) return null;
         await _db.Entry(entity).ReloadAsync(ct);
@@ -72,7 +74,9 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
             _db.ChangeTracker.Clear(); var failed = await LoadAsync(key, true, ct) ?? throw new InvalidOperationException("No se encontró la importación tras revertir la transacción."); failed.Status = (int)ImportStatus.Failed; failed.RejectReason = ex.Message.Length > 2000 ? ex.Message[..2000] : ex.Message; _db.ImportEvents.Add(Event(failed.Id, failed.Status, approvedBy, "La aplicación falló; no se confirmaron cambios del maestro.")); await _db.SaveChangesAsync(ct); await AuditAsync(approvedBy, "import.failed", failed, AuditSeverity.Critical, ex.Message, ct); throw;
         }
         await AuditAsync(approvedBy, "import.applied", entity, AuditSeverity.Critical, "Aprobación de importación Excel", ct); return ToPreview(entity);
-    }
+
+        });
+}
 
     public async Task<ExcelImportPreviewResult?> RejectAsync(string id, string rejectedBy, string? reason, CancellationToken ct)
     {
@@ -89,14 +93,14 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
         sheet.Columns().AdjustToContents(); using var stream = new MemoryStream(); workbook.SaveAs(stream); return Task.FromResult(new ExcelImportTemplate($"plantilla_{schema.SchemaName}.xlsx", ContentType, stream.ToArray()));
     }
 
-    private async Task<PreviewData> PreviewAsync(ExcelFileSchema schema, IPostgreSqlImportHandler handler, IReadOnlyCollection<string> headers, IReadOnlyCollection<PostgreSqlImportRow> rows, CancellationToken ct)
+    private async Task<PreviewData> PreviewAsync(ExcelFileSchema schema, ISqlServerImportHandler handler, IReadOnlyCollection<string> headers, IReadOnlyCollection<SqlServerImportRow> rows, CancellationToken ct)
     {
         var errors = Validate(schema, headers, rows).ToList(); var analysis = await handler.AnalyzeAsync(rows, ct); errors.AddRange(analysis.SelectMany(item => item.Errors)); var results = analysis.ToDictionary(item => item.RowNumber); var byRow = errors.GroupBy(error => error.RowNumber).ToDictionary(group => group.Key, group => (IReadOnlyCollection<ExcelImportValidationError>)group.ToArray());
         var output = rows.Select(row => { var rowErrors = byRow.GetValueOrDefault(row.RowNumber, Array.Empty<ExcelImportValidationError>()); return new ExcelImportPreviewRow(row.RowNumber, row.Values, rowErrors.Count > 0 ? "Error" : results[row.RowNumber].Operation, rowErrors); }).ToArray();
         return new PreviewData(new ImportPreviewSummary(output.Length, output.Count(row => row.Operation == "Nuevo"), output.Count(row => row.Operation == "Actualizado"), output.Count(row => row.Operation == "SinCambios"), output.Count(row => row.Errors.Count > 0), output.Count(row => row.Errors.Any(error => error.Message.Contains("repite", StringComparison.OrdinalIgnoreCase)))), output, errors);
     }
 
-    private static IReadOnlyCollection<ExcelImportValidationError> Validate(ExcelFileSchema schema, IReadOnlyCollection<string> headers, IReadOnlyCollection<PostgreSqlImportRow> rows)
+    private static IReadOnlyCollection<ExcelImportValidationError> Validate(ExcelFileSchema schema, IReadOnlyCollection<string> headers, IReadOnlyCollection<SqlServerImportRow> rows)
     {
         var errors = schema.Columns.Where(column => column.IsRequired && !headers.Contains(column.Name, StringComparer.OrdinalIgnoreCase)).Select(column => new ExcelImportValidationError(1, column.Name, $"La columna requerida '{column.Name}' no existe.")).ToList();
         foreach (var row in rows) foreach (var column in schema.Columns)
@@ -119,8 +123,8 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
     }
 
     private async Task<ImportEntity?> LoadAsync(Guid id, bool tracking, CancellationToken ct) { IQueryable<ImportEntity> query = _db.Imports.Include(item => item.Rows).Include(item => item.Errors).Include(item => item.Events); if (!tracking) query = query.AsNoTracking(); return await query.SingleOrDefaultAsync(item => item.Id == id, ct); }
-    private void ReplacePreview(ImportEntity entity, IReadOnlyCollection<PostgreSqlImportRowResult> results) { _db.ImportErrors.RemoveRange(entity.Errors); entity.Errors.Clear(); var byRow = results.ToDictionary(item => item.RowNumber); foreach (var row in entity.Rows) row.Operation = byRow[row.RowNumber].Operation; foreach (var error in results.SelectMany(item => item.Errors)) entity.Errors.Add(new ImportErrorEntity { RowNumber = error.RowNumber, ColumnName = Null(error.ColumnName), Message = error.Message }); }
-    private static PostgreSqlImportRow Input(ImportRowEntity row) => new(row.RowNumber, JsonSerializer.Deserialize<Dictionary<string, string?>>(row.InputSnapshot, JsonOptions) ?? new Dictionary<string, string?>());
+    private void ReplacePreview(ImportEntity entity, IReadOnlyCollection<SqlServerImportRowResult> results) { _db.ImportErrors.RemoveRange(entity.Errors); entity.Errors.Clear(); var byRow = results.ToDictionary(item => item.RowNumber); foreach (var row in entity.Rows) row.Operation = byRow[row.RowNumber].Operation; foreach (var error in results.SelectMany(item => item.Errors)) entity.Errors.Add(new ImportErrorEntity { RowNumber = error.RowNumber, ColumnName = Null(error.ColumnName), Message = error.Message }); }
+    private static SqlServerImportRow Input(ImportRowEntity row) => new(row.RowNumber, JsonSerializer.Deserialize<Dictionary<string, string?>>(row.InputSnapshot, JsonOptions) ?? new Dictionary<string, string?>());
     private async Task AuditAsync(string user, string action, ImportEntity entity, AuditSeverity severity, string? reason, CancellationToken ct) => await _audit.RecordAsync(new AuditEventRequest(user, action, AuditModules.Imports, "ExcelImport", entity.Id.ToString("D"), NewValue: entity.SchemaName, Severity: severity, Reason: reason, Detail: $"Importación {entity.OriginalFileName}: {(ImportStatus)entity.Status}."), ct);
     private static ImportEventEntity Event(Guid importId, int status, string user, string detail) => new() { ImportId = importId, Status = status, UserId = user.Trim(), OccurredAtUtc = DateTimeOffset.UtcNow, Detail = detail };
     private static ExcelImportPreviewResult ToPreview(ImportEntity entity) => new(ToList(entity), entity.Rows.OrderBy(row => row.RowNumber).Select(row => new ExcelImportPreviewRow(row.RowNumber, Input(row).Values, row.Operation, entity.Errors.Where(error => error.RowNumber == row.RowNumber).Select(Error).ToArray())).ToArray(), entity.Errors.Select(Error).ToArray());

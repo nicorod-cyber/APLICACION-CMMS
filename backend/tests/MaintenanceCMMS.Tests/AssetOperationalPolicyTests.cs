@@ -1,4 +1,4 @@
-﻿using MaintenanceCMMS.Infrastructure.Assets;
+using MaintenanceCMMS.Infrastructure.Assets;
 using Xunit;
 
 namespace MaintenanceCMMS.Tests;

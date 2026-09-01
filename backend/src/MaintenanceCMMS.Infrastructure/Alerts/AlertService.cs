@@ -4,8 +4,8 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.MaintenanceTargets;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
 using MaintenanceCMMS.Infrastructure.Options;
 using Microsoft.EntityFrameworkCore;
@@ -27,7 +27,7 @@ public sealed class AlertService : IAlertService
     public AlertService(CmmsDbContext dbContext, IAuditService auditService, IAuthorizationPolicyService authorizationPolicyService, IEmailService emailService, IPdfService pdfService, IPdfTemplateService templateService, IOptions<BootstrapDefaultsOptions>? defaults = null, IMaintenanceTargetService? maintenanceTargets = null)
     {
         _dbContext = dbContext; _auditService = auditService; _authorizationPolicyService = authorizationPolicyService; _emailService = emailService; _pdfService = pdfService;
-        _templateService = templateService as PdfTemplateService ?? throw new InvalidOperationException("La implementacion de plantillas debe usar PostgreSQL.");
+        _templateService = templateService as PdfTemplateService ?? throw new InvalidOperationException("La implementacion de plantillas debe usar SQL Server.");
         _defaults = defaults?.Value ?? new BootstrapDefaultsOptions();
         _maintenanceTargets = maintenanceTargets ?? new MaintenanceTargetService(dbContext);
     }

@@ -8,8 +8,8 @@ using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
 using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
@@ -122,6 +122,8 @@ public sealed class WorkNotificationService : IWorkNotificationService
 
     public async Task<WorkNotificationConversionResponse?> ConvertToWorkOrderAsync(string id, ConvertWorkNotificationToWorkOrderRequest request, UserAccessContext user, CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         EnsureCanEvaluate(user);
         ValidateReason(request.Reason);
         await using var tx = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
@@ -206,7 +208,9 @@ public sealed class WorkNotificationService : IWorkNotificationService
         await RecordNotificationAuditAsync(user, "work_notification.converted_to_work_order", notification.NotificationNumber, null, notification, notification.Faena.Code, request.Reason, cancellationToken, AuditSeverity.High);
         await RecordWorkOrderAuditAsync(user, "work_order.created_from_notification", workOrder.WorkOrderNumber, null, workOrder, notification.Faena.Code, notification.NotificationNumber, cancellationToken);
         return new WorkNotificationConversionResponse(ToResponse((await FindAsync(notification.NotificationNumber, false, cancellationToken))!), workOrder.WorkOrderNumber);
-    }
+
+        });
+}
 
     public Task<WorkNotificationResponse?> AnnulAsync(string id, WorkNotificationActionRequest request, UserAccessContext user, CancellationToken cancellationToken)
         => MutateAsync(id, request, user, cancellationToken, WorkNotificationStatus.Anulado, "work_notification.annulled", current =>
@@ -288,12 +292,7 @@ public sealed class WorkNotificationService : IWorkNotificationService
 
     private async Task<string> NextNumberAsync(string sequenceName, string prefix, CancellationToken ct)
     {
-        var connection = _dbContext.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open) await connection.OpenAsync(ct);
-        await using var command = connection.CreateCommand();
-        if (_dbContext.Database.CurrentTransaction is not null) command.Transaction = _dbContext.Database.CurrentTransaction.GetDbTransaction();
-        command.CommandText = $"SELECT nextval('{sequenceName}')";
-        var value = Convert.ToInt64(await command.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+        var value = await SqlServerSequence.NextValueAsync(_dbContext, sequenceName, ct);
         return $"{prefix}-{value:000000}";
     }
 

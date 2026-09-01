@@ -4,12 +4,12 @@ using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Auditing;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Documents;
 using MaintenanceCMMS.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
+using Microsoft.Data.SqlClient;
 using Xunit;
 
 namespace MaintenanceCMMS.Tests;
@@ -306,18 +306,18 @@ public sealed class DocumentServiceTests
     private static async Task<DocumentFixture> CreateFixtureAsync()
     {
         var databaseName = $"cmms_test_document_{Guid.NewGuid():N}";
-        var adminConnectionString = await PostgreSqlWorkTestFixture.GetAdminConnectionStringAsync();
-        await PostgreSqlWorkTestFixture.CreateDatabaseAsync(databaseName, adminConnectionString);
-        var connectionString = PostgreSqlWorkTestFixture.ConnectionString(adminConnectionString, databaseName);
+        var adminConnectionString = await SqlServerWorkTestFixture.GetAdminConnectionStringAsync();
+        await SqlServerWorkTestFixture.CreateDatabaseAsync(databaseName, adminConnectionString);
+        var connectionString = SqlServerWorkTestFixture.ConnectionString(adminConnectionString, databaseName);
         var options = new DbContextOptionsBuilder<CmmsDbContext>()
-            .UseNpgsql(connectionString)
+            .UseSqlServer(connectionString)
             .Options;
 
         var dbContext = new CmmsDbContext(options);
         await dbContext.Database.MigrateAsync();
         await SeedCatalogsAsync(dbContext);
 
-        var auditService = new PostgreSqlAuditService(dbContext, new AuditContextAccessor());
+        var auditService = new SqlServerAuditService(dbContext, new AuditContextAccessor());
         var service = new DocumentService(dbContext, auditService, new AuthorizationPolicyService());
         return new DocumentFixture(databaseName, adminConnectionString, dbContext, service);
     }
@@ -363,7 +363,7 @@ public sealed class DocumentServiceTests
         {
             await DbContext.DisposeAsync();
 
-            await PostgreSqlWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
+            await SqlServerWorkTestFixture.DropDatabaseAsync(DatabaseName, AdminConnectionString);
         }
     }
 }

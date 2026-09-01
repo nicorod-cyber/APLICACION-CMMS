@@ -96,8 +96,8 @@ public sealed class AlertServiceTests
     private static async Task<AlertFixture> CreateFixtureAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "maintenance-cmms-alert-tests", Guid.NewGuid().ToString("N"));
-        var database = await PostgreSqlWorkTestFixture.CreateAsync();
-        var auditService = new PostgreSqlAuditService(database.DbContext, new AuditContextAccessor());
+        var database = await SqlServerWorkTestFixture.CreateAsync();
+        var auditService = new SqlServerAuditService(database.DbContext, new AuditContextAccessor());
         var authorization = new AuthorizationPolicyService();
         var mailOptions = Options.Create(new MailOptions
         {
@@ -125,7 +125,7 @@ public sealed class AlertServiceTests
     }
 
     private sealed record AlertFixture(
-        PostgreSqlWorkTestFixture Database,
+        SqlServerWorkTestFixture Database,
         IAlertService AlertService,
         IPdfService PdfService) : IAsyncDisposable
     {

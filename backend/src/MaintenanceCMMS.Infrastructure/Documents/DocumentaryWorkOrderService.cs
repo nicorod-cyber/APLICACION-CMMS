@@ -3,8 +3,8 @@ using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure.Assets;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Documents;
@@ -16,8 +16,10 @@ public sealed class DocumentaryWorkOrderService(CmmsDbContext db) : IDocumentary
 
     public async Task<DocumentaryEngineRunResponse> RunAsync(DateOnly referenceDate, string executedBy, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync<DocumentaryEngineRunResponse>(db, async () =>
+        {
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
-        if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("LOCK TABLE detalles_ot_documental IN SHARE ROW EXCLUSIVE MODE", ct);
+        await SqlServerTransactionLock.AcquireExclusiveAsync(db, "cmms.documentary-work-orders", ct);
         var matrices = await db.DocumentRequirementMatrices.Include(x => x.Items).ThenInclude(x => x.DocumentType).Where(x => x.FaenaId != null && x.Status == "VIGENTE" && x.ValidFrom <= referenceDate && (x.ValidTo == null || x.ValidTo >= referenceDate)).ToListAsync(ct);
         var components = await db.OperationalUnitComponents
             .Include(x => x.OperationalUnit).ThenInclude(x => x.Faena)
@@ -109,7 +111,9 @@ public sealed class DocumentaryWorkOrderService(CmmsDbContext db) : IDocumentary
         }
         await db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
         return new(referenceDate, assets.Count + mountedAssetIds.Length, createdOrders, reusedOrders, createdRequirements, numbers.OrderBy(x => x).ToArray());
-    }
+
+        });
+}
 
     private async Task<List<DocumentEntity>> DocumentsForAssetAsync(Guid assetId, CancellationToken ct) => await db.DocumentAssets.Include(x => x.Document).ThenInclude(x => x.Versions).Where(x => x.AssetId == assetId && x.IsActive).Select(x => x.Document).ToListAsync(ct);
 
@@ -130,5 +134,5 @@ public sealed class DocumentaryWorkOrderService(CmmsDbContext db) : IDocumentary
     }
 
     private static DocumentaryWorkOrderRequirementEntity CreateRequirement(WorkOrderEntity order, DueItem current) => new() { WorkOrder = order, AssetId = current.Asset.Id, MatrixVersionId = current.Matrix.Id, MatrixItemId = current.Item.Id, OriginDocumentId = current.Document?.Id, OriginDocumentVersionId = current.Version?.Id, DocumentTypeCodeSnapshot = current.Item.DocumentType.Code, DocumentTypeNameSnapshot = current.Item.DocumentType.Name, FaenaCodeSnapshot = current.Asset.Faena!.Code, IsMandatorySnapshot = current.Item.IsMandatory, IsCriticalSnapshot = current.Item.IsCritical, BlocksAvailabilitySnapshot = current.Item.BlocksAvailability, RequiresExpirationDateSnapshot = current.Item.RequiresExpirationDate, AlertDaysSnapshot = current.Item.AlertDays, ReusableBetweenFaenasSnapshot = current.Item.ReusableBetweenFaenas, CycleKey = current.Cycle, Status = DocumentComplianceCalculator.ToCode(current.Result.Status), IsApplicable = true, Observation = current.Result.Observation, CompletedAtUtc = current.Result.IsCompliant ? DateTimeOffset.UtcNow : null };
-    private async Task<long> NextSequenceAsync(CancellationToken ct) => await db.Database.SqlQueryRaw<long>("SELECT nextval('work_order_number_seq') AS \"Value\"").SingleAsync(ct);
+    private Task<long> NextSequenceAsync(CancellationToken ct) => SqlServerSequence.NextValueAsync(db, "work_order_number_seq", ct);
 }

@@ -1,7 +1,7 @@
 using MaintenanceCMMS.Application.Abstractions.Data;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
 using MaintenanceCMMS.Infrastructure.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -27,7 +27,7 @@ public sealed class SqlDataProvider : IDataProvider
 
     public Task InitializeAsync(CancellationToken cancellationToken)
     {
-        return ProviderType == DataProviderType.PostgreSql && _dbContext is not null
+        return ProviderType == DataProviderType.SqlServer && _dbContext is not null
             ? _dbContext.Database.MigrateAsync(cancellationToken)
             : Task.CompletedTask;
     }
@@ -36,7 +36,7 @@ public sealed class SqlDataProvider : IDataProvider
     {
         var connectionConfigured = ProviderType switch
         {
-            DataProviderType.PostgreSql => !string.IsNullOrWhiteSpace(_settings.PostgreSqlConnectionString),
+            DataProviderType.SqlServer => !string.IsNullOrWhiteSpace(_settings.SqlServerConnectionString),
             _ => !string.IsNullOrWhiteSpace(_settings.SqlServerConnectionString)
         };
 
@@ -46,11 +46,11 @@ public sealed class SqlDataProvider : IDataProvider
             errors.Add($"{ProviderType} connection string is not configured yet. Configure it in DataProvider settings or environment variables.");
         }
 
-        if (ProviderType == DataProviderType.PostgreSql)
+        if (ProviderType == DataProviderType.SqlServer)
         {
             if (_dbContext is null)
             {
-                errors.Add("CmmsDbContext is not registered. Check PostgreSQL provider configuration.");
+                errors.Add("CmmsDbContext is not registered. Check SQL Server provider configuration.");
             }
             else
             {
@@ -59,7 +59,7 @@ public sealed class SqlDataProvider : IDataProvider
                     var canConnect = await _dbContext.Database.CanConnectAsync(cancellationToken);
                     if (!canConnect)
                     {
-                        errors.Add("PostgreSQL connection could not be opened.");
+                        errors.Add("SQL Server connection could not be opened.");
                     }
 
                     var pending = await _dbContext.Database.GetPendingMigrationsAsync(cancellationToken);
@@ -80,22 +80,22 @@ public sealed class SqlDataProvider : IDataProvider
 
     public Task<IReadOnlyList<DataRow>> ReadRowsAsync(string schemaName, CancellationToken cancellationToken)
     {
-        throw new DomainException("PostgreSQL provider is active, but schema-row access is intentionally disabled. Migrate this module to a typed PostgreSQL repository or DbContext query.");
+        throw new DomainException("SQL Server provider is active, but schema-row access is intentionally disabled. Migrate this module to a typed SQL Server repository or DbContext query.");
     }
 
     public Task SaveRowsAsync(string schemaName, IReadOnlyCollection<DataRow> rows, CancellationToken cancellationToken)
     {
-        throw new DomainException("PostgreSQL provider is active, but schema-row writes are intentionally disabled. Migrate this module to a typed PostgreSQL repository or DbContext command.");
+        throw new DomainException("SQL Server provider is active, but schema-row writes are intentionally disabled. Migrate this module to a typed SQL Server repository or DbContext command.");
     }
 
     public Task<IReadOnlyList<T>> QueryAsync<T>(DataQuery query, CancellationToken cancellationToken)
     {
-        throw new DomainException("PostgreSQL provider is active, but generic SQL queries are not implemented. Use typed repositories or DbContext queries.");
+        throw new DomainException("SQL Server provider is active, but generic SQL queries are not implemented. Use typed repositories or DbContext queries.");
     }
 
     public Task SaveChangesAsync(UnitOfWorkChanges changes, CancellationToken cancellationToken)
     {
-        throw new DomainException("PostgreSQL provider is active, but generic unit-of-work changes are not implemented. Use typed repositories or DbContext transactions.");
+        throw new DomainException("SQL Server provider is active, but generic unit-of-work changes are not implemented. Use typed repositories or DbContext transactions.");
     }
 }
 

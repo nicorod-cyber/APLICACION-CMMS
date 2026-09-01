@@ -6,8 +6,8 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.OperationalUnits;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Assets;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.OperationalUnits;
@@ -42,7 +42,7 @@ public sealed class OperationalUnitService : IOperationalUnitService
         if (!string.IsNullOrWhiteSpace(query.Texto))
         {
             var term = query.Texto.Trim();
-            source = source.Where(x => EF.Functions.ILike(x.Code, "%" + term + "%") || EF.Functions.ILike(x.Name, "%" + term + "%"));
+            source = source.Where(x => EF.Functions.Like(x.Code, "%" + term + "%") || EF.Functions.Like(x.Name, "%" + term + "%"));
         }
         var total = await source.CountAsync(ct);
         var units = await source.OrderBy(x => x.Code).ThenBy(x => x.Id).Skip((page - 1) * pageSize).Take(pageSize)
@@ -181,6 +181,8 @@ public sealed class OperationalUnitService : IOperationalUnitService
     }
     public async Task<OperationalUnitCompositionResponse?> MountAsync(string unidadCodigo, MountOperationalUnitComponentRequest r, UserAccessContext u, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(db, async () =>
+        {
         ManageComposition(u);
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         await LockCompositionAsync(ct);
@@ -193,10 +195,14 @@ public sealed class OperationalUnitService : IOperationalUnitService
         await SaveCompositionAsync(ct); await tx.CommitAsync(ct);
         await Audit(u, "operational_unit.component_mounted", unit.Code, unit.Faena?.Code, ct);
         return await CompositionAsync(unit, ct);
-    }
+
+        });
+}
 
     public async Task<OperationalUnitCompositionResponse?> UnmountAsync(string unidadCodigo, string activoCodigo, UnmountOperationalUnitComponentRequest r, UserAccessContext u, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(db, async () =>
+        {
         ManageComposition(u);
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         await LockCompositionAsync(ct);
@@ -211,10 +217,14 @@ public sealed class OperationalUnitService : IOperationalUnitService
         await SaveCompositionAsync(ct); await tx.CommitAsync(ct);
         await Audit(u, "operational_unit.component_unmounted", unit.Code, unit.Faena?.Code, ct);
         return await CompositionAsync(unit, ct);
-    }
+
+        });
+}
 
     public async Task<OperationalUnitCompositionResponse?> ReplaceAsync(string unidadCodigo, ReplaceOperationalUnitComponentRequest r, UserAccessContext u, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(db, async () =>
+        {
         ManageComposition(u);
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         await LockCompositionAsync(ct);
@@ -232,10 +242,14 @@ public sealed class OperationalUnitService : IOperationalUnitService
         await SaveCompositionAsync(ct); await tx.CommitAsync(ct);
         await Audit(u, "operational_unit.component_replaced", unit.Code, unit.Faena?.Code, ct);
         return await CompositionAsync(unit, ct);
-    }
+
+        });
+}
 
     public async Task<OperationalUnitReadingResponse> AddReadingAsync(string codigo, CreateAssetReadingRequest request, UserAccessContext user, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(db, async () =>
+        {
         RegisterReadings(user);
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         var (unit, chassis, factory) = await RequiredComponentsAsync(codigo, user, ct, true);
@@ -255,7 +269,9 @@ public sealed class OperationalUnitService : IOperationalUnitService
         await tx.CommitAsync(ct);
         await Audit(user, "operational_unit.reading_registered", unit.Code, unit.Faena?.Code, ct);
         return new OperationalUnitReadingResponse(unit.Code, readings.Select(reading => ToReadingResponse(reading)).ToArray());
-    }
+
+        });
+}
 
     public async Task<IReadOnlyCollection<OperationalUnitCorrectableReadingResponse>> GetCorrectableReadingsAsync(string codigo, UserAccessContext user, CancellationToken ct)
     {
@@ -269,6 +285,8 @@ public sealed class OperationalUnitService : IOperationalUnitService
 
     public async Task<OperationalUnitReadingResponse> CorrectReadingAsync(string codigo, CorrectOperationalUnitReadingRequest request, UserAccessContext user, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(db, async () =>
+        {
         CorrectReadings(user);
         Require(request.LecturaChasisId, nameof(request.LecturaChasisId));
         Require(request.MotivoCorreccion, nameof(request.MotivoCorreccion));
@@ -293,7 +311,9 @@ public sealed class OperationalUnitService : IOperationalUnitService
         await tx.CommitAsync(ct);
         await Audit(user, "operational_unit.reading_corrected", unit.Code, unit.Faena?.Code, ct);
         return new OperationalUnitReadingResponse(unit.Code, corrections.Select(ToReadingResponse).ToArray());
-    }
+
+        });
+}
 
     public async Task<OperationalUnitReadingResponse> CorrectLatestReadingAsync(string codigo, CorrectAssetReadingRequest request, UserAccessContext user, CancellationToken ct)
     {
@@ -303,6 +323,8 @@ public sealed class OperationalUnitService : IOperationalUnitService
     }
     public async Task<OperationalUnitStateEventResponse> AddStateEventAsync(string codigo, CreateAssetStateEventRequest request, UserAccessContext user, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(db, async () =>
+        {
         MaintainAssets(user);
         Require(request.EstadoOperacionalCodigo, nameof(request.EstadoOperacionalCodigo));
         Require(request.Motivo, nameof(request.Motivo));
@@ -311,26 +333,30 @@ public sealed class OperationalUnitService : IOperationalUnitService
         var state = await db.AssetOperationalStates.SingleOrDefaultAsync(item => item.Code == Code(request.EstadoOperacionalCodigo) && item.IsActive, ct) ?? throw new DomainException("Estado operacional inexistente.");
         var occurred = request.FechaEventoUtc ?? DateTimeOffset.UtcNow;
         var events = new List<AssetStateEventEntity>();
+        var pendingStateChanges = new List<(AssetEntity Asset, AssetOperationalStateEntity State)>();
         foreach (var asset in new[] { chassis, factory })
         {
             var location = await db.AssetPhysicalLocationPeriods.AsNoTracking().SingleOrDefaultAsync(item => item.AssetId == asset.Id && item.ValidToUtc == null, ct) ?? throw new DomainException($"El activo {asset.Code} no tiene ubicación física vigente.");
             AssetOperationalPolicy.EnsureTransitionAllowed(asset.OperationalState.Code, state.Code);
             AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, location.LocationType, state.Code, state.Name);
             var previous = asset.OperationalState;
-            asset.OperationalStateId = state.Id;
-            asset.OperationalState = state;
-            asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
             var item = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = occurred, UserId = user.UserId, Reason = request.Motivo.Trim(), ReferenceType = "OPERATIONAL_UNIT", ReferenceId = unit.Id.ToString("D"), ReferenceText = unit.Code };
             db.AssetStateEvents.Add(item);
             events.Add(item);
+            pendingStateChanges.Add((asset, state));
         }
+        await db.SaveChangesAsync(ct);
         await SetAssetStateEventCorrelationAsync(events.Select(item => item.Id), ct);
+        foreach (var pending in pendingStateChanges) { pending.Asset.OperationalStateId = pending.State.Id; pending.Asset.OperationalState = pending.State; pending.Asset.UpdatedAtUtc = DateTimeOffset.UtcNow; }
         await OperationalUnitStateCalculator.RecalculateAsync(db, unit, $"UNIDAD:{unit.Code} {request.Motivo}", ct);
         await db.SaveChangesAsync(ct);
+        await ClearAssetStateEventCorrelationAsync(ct);
         await tx.CommitAsync(ct);
         await Audit(user, "operational_unit.state_changed", unit.Code, unit.Faena?.Code, ct);
         return new OperationalUnitStateEventResponse(unit.Code, events.Select(item => new AssetStateEventResponse(item.Id.ToString("D"), item.Asset.Code, item.PreviousStateId == null ? null : chassis.Id == item.AssetId ? chassis.OperationalState.Code : factory.OperationalState.Code, state.Code, item.OccurredAtUtc, item.Reason, user.UserId, item.ReferenceType, item.ReferenceId, item.ReferenceText)).ToArray());
-    }
+
+        });
+}
 
     public Task<IReadOnlyCollection<AssetTransferResponse>> TransferAsync(string codigo, TransferAssetRequest request, UserAccessContext user, CancellationToken ct)
     {
@@ -351,10 +377,12 @@ public sealed class OperationalUnitService : IOperationalUnitService
 
     private async Task<IReadOnlyCollection<AssetPhysicalLocationResponse>> MovePhysicalLocationAsync(string codigo, string targetType, string? workshopCode, DateTimeOffset effectiveAt, string? destinationStateCode, string? workOrderNumber, string? reason, string? observations, UserAccessContext user, CancellationToken ct)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(db, async () =>
+        {
         MaintainAssets(user);
         if (effectiveAt == default) throw new DomainException("La fecha efectiva es obligatoria.");
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
-        if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("LOCK TABLE vigencias_ubicacion_fisica_activo IN SHARE ROW EXCLUSIVE MODE", ct);
+        await SqlServerTransactionLock.AcquireExclusiveAsync(db, "cmms.asset-physical-location-periods", ct);
         var (unit, chassis, factory) = await RequiredComponentsAsync(codigo, user, ct);
         WorkshopEntity? workshop = null;
         FaenaEntity? faena = null;
@@ -379,6 +407,7 @@ public sealed class OperationalUnitService : IOperationalUnitService
         }
         if (currentLocations.Select(item => item.LocationType + ":" + (item.WorkshopId?.ToString() ?? item.FaenaId?.ToString() ?? string.Empty)).Distinct().Count() != 1) throw new DomainException("La unidad tiene una inconsistencia física preexistente; no se puede registrar un nuevo movimiento.");
         var stateEvents = new List<AssetStateEventEntity>();
+        var pendingStateChanges = new List<(AssetEntity Asset, AssetOperationalStateEntity State)>();
         foreach (var asset in components)
         {
             AssetOperationalPolicy.EnsureCompatibleWithPhysicalLocation(asset.Code, targetType, state.Code, state.Name);
@@ -389,21 +418,24 @@ public sealed class OperationalUnitService : IOperationalUnitService
             var previous = asset.OperationalState;
             if (previous.Id != state.Id)
             {
-                asset.OperationalStateId = state.Id;
-                asset.OperationalState = state;
                 var stateEvent = new AssetStateEventEntity { AssetId = asset.Id, PreviousStateId = previous.Id, NewStateId = state.Id, OccurredAtUtc = effectiveAt, UserId = user.UserId, Reason = Text(reason) ?? (targetType == "TALLER" ? "Ingreso efectivo a taller" : "Retorno efectivo a faena"), ReferenceType = "OPERATIONAL_UNIT", ReferenceId = unit.Id.ToString("D"), ReferenceText = unit.Code };
                 db.AssetStateEvents.Add(stateEvent);
                 stateEvents.Add(stateEvent);
+                pendingStateChanges.Add((asset, state));
             }
-            asset.UpdatedAtUtc = DateTimeOffset.UtcNow;
         }
+        await db.SaveChangesAsync(ct);
         await SetAssetStateEventCorrelationAsync(stateEvents.Select(item => item.Id), ct);
+        foreach (var pending in pendingStateChanges) { pending.Asset.OperationalStateId = pending.State.Id; pending.Asset.OperationalState = pending.State; pending.Asset.UpdatedAtUtc = DateTimeOffset.UtcNow; }
         await OperationalUnitStateCalculator.RecalculateAsync(db, unit, $"UNIDAD:{unit.Code} UBICACION_FISICA:{targetType}", ct);
         await db.SaveChangesAsync(ct);
+        await ClearAssetStateEventCorrelationAsync(ct);
         await tx.CommitAsync(ct);
         await Audit(user, targetType == "TALLER" ? "operational_unit.workshop_entered" : "operational_unit.returned_to_site", unit.Code, unit.Faena?.Code, ct);
         return components.Select(asset => new AssetPhysicalLocationResponse(asset.Code, targetType, targetType == "TALLER" ? workshop!.Name : faena!.Name, workshop?.Commune, effectiveAt, null, user.UserId, order?.WorkOrderNumber, Text(reason), Text(observations), unit.Code, components.Select(item => item.Code).ToArray())).ToArray();
-    }
+
+        });
+}
     private async Task MountCoreAsync(OperationalUnitEntity unit, string assetCode, string roleCode, string? workOrder, DateTimeOffset mountedAt, string? observations, string? reason, UserAccessContext u, CancellationToken ct)
     {
         var role = await db.OperationalUnitComponentRoles.SingleOrDefaultAsync(x => x.Code == Code(roleCode) && x.IsActive, ct) ?? throw new DomainException("Rol de componente inexistente.");
@@ -487,10 +519,10 @@ public sealed class OperationalUnitService : IOperationalUnitService
     private static void MaintainAssets(UserAccessContext user) { if (user.Permissions.Contains(AuthPermissions.ManageAssets, StringComparer.OrdinalIgnoreCase)) return; throw new UnauthorizedAccessException("No tiene permiso para administrar activos."); }
     private async Task SetAssetStateEventCorrelationAsync(IEnumerable<Guid> eventIds, CancellationToken ct)
     {
-        if (!db.Database.IsNpgsql()) return;
         var value = string.Join(",", eventIds.Distinct().OrderBy(item => item).Select(item => item.ToString("D")));
-        if (value.Length > 0) await db.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('cmms.asset_state_event_id', {value}, true)", ct);
+        if (value.Length > 0) await db.Database.ExecuteSqlInterpolatedAsync($"EXEC sys.sp_set_session_context @key=N'cmms.asset_state_event_ids', @value={value}", ct);
     }
+    private Task ClearAssetStateEventCorrelationAsync(CancellationToken ct) => db.Database.ExecuteSqlRawAsync("EXEC sys.sp_set_session_context @key=N'cmms.asset_state_event_ids', @value=NULL;", ct);
     private IQueryable<OperationalUnitEntity> Units() => db.OperationalUnits.Include(x => x.OperationalUnitType).Include(x => x.Faena).ThenInclude(x => x!.TechnicalLocation).Include(x => x.OperationalState).Include(x => x.DerivedFromAsset);
     private Task<OperationalUnitEntity?> FindUnitAsync(string code, CancellationToken ct) => Units().SingleOrDefaultAsync(x => x.Code == Code(code), ct);
 
@@ -526,8 +558,8 @@ public sealed class OperationalUnitService : IOperationalUnitService
         var correctionReady = false;
         if (composition.Completa && chassisId is not null)
         {
-            var factoryCode = composition.Vigentes.Single(item => Same(item.RolComponenteCodigo, "FABRICA")).ActivoCodigo;
-            Guid? factoryId = componentIds.TryGetValue(factoryCode, out var factoryAssetId) ? factoryAssetId : null;
+            var factoryCode = composition.Vigentes.SingleOrDefault(item => Same(item.RolComponenteCodigo, "FABRICA"))?.ActivoCodigo;
+            Guid? factoryId = factoryCode is not null && componentIds.TryGetValue(factoryCode, out var factoryAssetId) ? factoryAssetId : null;
             if (factoryId is not null)
             {
                 var componentAssetIds = new[] { chassisId.Value, factoryId.Value };
@@ -541,7 +573,7 @@ public sealed class OperationalUnitService : IOperationalUnitService
     }
     private async Task LockCompositionAsync(CancellationToken ct)
     {
-        if (db.Database.IsNpgsql()) await db.Database.ExecuteSqlRawAsync("LOCK TABLE componentes_unidad_operativa IN SHARE ROW EXCLUSIVE MODE", ct);
+        await SqlServerTransactionLock.AcquireExclusiveAsync(db, "cmms.operational-unit-composition", ct);
     }
 
     private async Task SaveCompositionAsync(CancellationToken ct)

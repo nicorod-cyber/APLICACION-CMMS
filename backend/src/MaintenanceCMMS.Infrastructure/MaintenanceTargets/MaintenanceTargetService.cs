@@ -2,7 +2,7 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.MaintenanceTargets;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.MaintenanceTargets;

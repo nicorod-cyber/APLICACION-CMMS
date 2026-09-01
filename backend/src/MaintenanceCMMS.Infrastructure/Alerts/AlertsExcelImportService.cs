@@ -2,8 +2,8 @@ using System.Globalization;
 using ClosedXML.Excel;
 using MaintenanceCMMS.Application.Alerts;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Alerts;
@@ -16,6 +16,8 @@ public sealed class AlertsExcelImportService : IAlertsExcelImportService
 
     public async Task<AlertsExcelImportResult> ImportAsync(AlertsExcelImportRequest request, CancellationToken cancellationToken)
     {
+        return await MaintenanceCMMS.Infrastructure.Data.SqlServer.SqlServerExecutionStrategy.ExecuteAsync(_dbContext, async () =>
+        {
         ValidatePaths(request);
         var templates = ReadRows(request.PdfTemplatesPath);
         var rules = ReadRows(request.AlertRulesPath);
@@ -41,7 +43,9 @@ public sealed class AlertsExcelImportService : IAlertsExcelImportService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return state.ToResult();
-    }
+
+        });
+}
 
     private async Task<AlertsExcelImportResult> RollbackAsync(
         Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction,

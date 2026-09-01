@@ -6,7 +6,7 @@ using MaintenanceCMMS.Application.Procurement;
 using MaintenanceCMMS.Application.Scheduling;
 using MaintenanceCMMS.Infrastructure.Auditing;
 using MaintenanceCMMS.Infrastructure.Availability;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Inventory;
 using MaintenanceCMMS.Infrastructure.PreventiveMaintenance;
 using MaintenanceCMMS.Infrastructure.Procurement;
@@ -16,7 +16,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Tests;
 
-/// <summary>Exercises the relational operational modules against a real PostgreSQL Testcontainer.</summary>
+/// <summary>Exercises the relational operational modules against a real SQL Server Testcontainer.</summary>
 public sealed class RelationalOperationalModulesTests
 {
     private static readonly UserAccessContext Admin = new("integration-admin", [AuthRoles.Admin], [], ["FAE-1"]);
@@ -24,7 +24,7 @@ public sealed class RelationalOperationalModulesTests
     [Fact]
     public async Task Availability_ContractAssignmentAndEvent_PersistAcrossContexts()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var service = new AvailabilityService(fixture.DbContext);
         var from = DateTimeOffset.UtcNow.AddHours(-2);
 
@@ -41,7 +41,7 @@ public sealed class RelationalOperationalModulesTests
     [Fact]
     public async Task Preventive_PlanAndReprogramHistory_PersistAcrossContexts()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var service = new PreventiveMaintenanceService(fixture.DbContext);
         var due = DateTimeOffset.UtcNow.AddDays(30);
 
@@ -58,7 +58,7 @@ public sealed class RelationalOperationalModulesTests
     [Fact]
     public async Task Preventive_Generation_CopiesChecklistTasksAsAnImmutableSnapshot()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var db = fixture.DbContext;
         var service = new PreventiveMaintenanceService(db);
         var template = await db.ChecklistTemplates.SingleAsync(x => x.Code == "TPL-BASE");
@@ -98,12 +98,12 @@ public sealed class RelationalOperationalModulesTests
     [Fact]
     public async Task Scheduling_WorkshopResponsible_AcceptsEligibleAdminOrSupervisor_AndRejectsInvalidAssignments()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var db = fixture.DbContext;
         var service = new SchedulingService(db);
         var administrator = await db.Users.SingleAsync(x => x.Username == "admin");
-        var supervisor = await db.Users.SingleAsync(x => x.Id == PostgreSqlWorkTestFixture.SupervisorUserId);
-        var technician = await db.Users.SingleAsync(x => x.Id == PostgreSqlWorkTestFixture.TechnicianOneUserId);
+        var supervisor = await db.Users.SingleAsync(x => x.Id == SqlServerWorkTestFixture.SupervisorUserId);
+        var technician = await db.Users.SingleAsync(x => x.Id == SqlServerWorkTestFixture.TechnicianOneUserId);
         var administratorRole = new RoleEntity { Code = AuthRoles.Admin, Name = "Administrador", Type = "System", IsActive = true };
         db.Roles.Add(administratorRole);
         db.UserRoles.Add(new UserRoleEntity { User = administrator, Role = administratorRole });
@@ -138,7 +138,7 @@ public sealed class RelationalOperationalModulesTests
     [Fact]
     public async Task Scheduling_DependencyRejectsDuplicateAndCycle_AndPersists()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var db = fixture.DbContext;
         var faena = await db.Faenas.SingleAsync(x => x.Code == "FAE-1");
         var asset = await db.Assets.SingleAsync(x => x.Code == "ACT-1");
@@ -150,7 +150,7 @@ public sealed class RelationalOperationalModulesTests
         await db.SaveChangesAsync();
 
         var service = new SchedulingService(db);
-        await service.UpsertWorkshopAsync(new("TAL-REL", "Taller relacional", 4, "Antofagasta", PostgreSqlWorkTestFixture.SupervisorUserId.ToString("D")), Admin, CancellationToken.None);
+        await service.UpsertWorkshopAsync(new("TAL-REL", "Taller relacional", 4, "Antofagasta", SqlServerWorkTestFixture.SupervisorUserId.ToString("D")), Admin, CancellationToken.None);
         var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(8), TimeSpan.Zero);
         await service.ScheduleWorkOrderAsync("OT-REL-1", new("TAL-REL", start, start.AddHours(2), 2, "Planificación"), Admin, CancellationToken.None);
         await service.ScheduleWorkOrderAsync("OT-REL-2", new("TAL-REL", start.AddHours(3), start.AddHours(5), 2, "Planificación"), Admin, CancellationToken.None);
@@ -166,8 +166,8 @@ public sealed class RelationalOperationalModulesTests
     [Fact]
     public async Task Procurement_SupplierRequestAndPurchaseOrder_PersistAcrossContexts()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
-        var audit = new PostgreSqlAuditService(fixture.DbContext, new AuditContextAccessor());
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
+        var audit = new SqlServerAuditService(fixture.DbContext, new AuditContextAccessor());
         var inventory = new InventoryService(fixture.DbContext, audit, new AuthorizationPolicyService());
         var service = new ProcurementService(fixture.DbContext, inventory, audit);
 

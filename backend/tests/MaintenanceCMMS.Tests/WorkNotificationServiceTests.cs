@@ -2,8 +2,8 @@ using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 using MaintenanceCMMS.Infrastructure.WorkNotifications;
 using Xunit;
@@ -98,7 +98,7 @@ public sealed class WorkNotificationServiceTests
     }
     private static async Task<Fixture> CreateFixtureAsync()
     {
-        var database = await PostgreSqlWorkTestFixture.CreateAsync();
+        var database = await SqlServerWorkTestFixture.CreateAsync();
         var service = new WorkNotificationService(database.DbContext, new NullAuditService());
         return new Fixture(database, database.DbContext, service);
     }
@@ -130,7 +130,7 @@ public sealed class WorkNotificationServiceTests
     private static DateTimeOffset Day(int offset) => new(2026, 1, 1 + offset, 0, 0, 0, TimeSpan.Zero);
 
     private sealed record Fixture(
-        PostgreSqlWorkTestFixture Database,
+        SqlServerWorkTestFixture Database,
         CmmsDbContext DbContext,
         WorkNotificationService Service) : IAsyncDisposable
     {

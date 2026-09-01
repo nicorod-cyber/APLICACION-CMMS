@@ -1,5 +1,5 @@
-﻿using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Domain.Common;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 
 namespace MaintenanceCMMS.Infrastructure.Assets;
 

@@ -5,13 +5,13 @@ using MaintenanceCMMS.Application.Inventory;
 using MaintenanceCMMS.Application.Procurement;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace MaintenanceCMMS.Infrastructure.Procurement;
 
-/// <summary>PostgreSQL-backed procurement aggregate. Excel is intentionally not a runtime dependency.</summary>
+/// <summary>SQL Server-backed procurement aggregate. Excel is intentionally not a runtime dependency.</summary>
 public sealed class ProcurementService : IProcurementService
 {
     private readonly CmmsDbContext _db;
@@ -33,7 +33,7 @@ public sealed class ProcurementService : IProcurementService
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var search = query.Search.Trim();
-            suppliers = suppliers.Where(x => EF.Functions.ILike(x.TaxId, $"%{search}%") || EF.Functions.ILike(x.Name, $"%{search}%") || (x.Contact != null && EF.Functions.ILike(x.Contact, $"%{search}%")));
+            suppliers = suppliers.Where(x => EF.Functions.Like(x.TaxId, $"%{search}%") || EF.Functions.Like(x.Name, $"%{search}%") || (x.Contact != null && EF.Functions.Like(x.Contact, $"%{search}%")));
         }
         return (await suppliers.OrderBy(x => x.Name).ToListAsync(ct)).Select(ToResponse).ToArray();
     }

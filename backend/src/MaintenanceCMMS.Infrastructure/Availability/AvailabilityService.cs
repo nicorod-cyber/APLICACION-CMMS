@@ -2,9 +2,9 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.MaintenanceTargets;
 using MaintenanceCMMS.Application.Availability;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
 using MaintenanceCMMS.Infrastructure.MaintenanceTargets;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Assets;
 using Microsoft.EntityFrameworkCore;
 
@@ -23,7 +23,7 @@ public sealed class AvailabilityService : IAvailabilityService
 
     public async Task<IReadOnlyCollection<AvailabilityContractResponse>> ListContractsAsync(AvailabilityContractQuery query, UserAccessContext user, CancellationToken ct)
     {
-        EnsureView(user); var contracts = ContractQuery(); if (!query.IncludeInactive) contracts = contracts.Where(x => x.IsActive); if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) contracts = contracts.Where(x => x.Faena.Code == Code(query.FaenaCodigo)); if (!string.IsNullOrWhiteSpace(query.Cliente)) contracts = contracts.Where(x => EF.Functions.ILike(x.Client, $"%{query.Cliente.Trim()}%"));
+        EnsureView(user); var contracts = ContractQuery(); if (!query.IncludeInactive) contracts = contracts.Where(x => x.IsActive); if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) contracts = contracts.Where(x => x.Faena.Code == Code(query.FaenaCodigo)); if (!string.IsNullOrWhiteSpace(query.Cliente)) contracts = contracts.Where(x => EF.Functions.Like(x.Client, $"%{query.Cliente.Trim()}%"));
         return (await contracts.OrderBy(x => x.Code).ToListAsync(ct)).Where(x => CanAccess(user, x.Faena.Code)).Select(ToContract).ToArray();
     }
 
@@ -167,7 +167,7 @@ public sealed class AvailabilityService : IAvailabilityService
     public async Task<AvailabilityDashboardResponse> GetDashboardAsync(AvailabilityQuery query, UserAccessContext user, CancellationToken ct)
     {
         EnsureView(user); var from = query.From ?? DateTimeOffset.UtcNow.AddMonths(-1); var to = query.To ?? DateTimeOffset.UtcNow; if (to <= from) throw new DomainException("El rango de fechas no es valido.");
-        var contractsQuery = ContractQuery().Where(x => x.IsActive); if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) contractsQuery = contractsQuery.Where(x => x.Faena.Code == Code(query.FaenaCodigo)); if (!string.IsNullOrWhiteSpace(query.ContractCode)) contractsQuery = contractsQuery.Where(x => x.Code == Code(query.ContractCode)); if (!string.IsNullOrWhiteSpace(query.Cliente)) contractsQuery = contractsQuery.Where(x => EF.Functions.ILike(x.Client, $"%{query.Cliente.Trim()}%"));
+        var contractsQuery = ContractQuery().Where(x => x.IsActive); if (!string.IsNullOrWhiteSpace(query.FaenaCodigo)) contractsQuery = contractsQuery.Where(x => x.Faena.Code == Code(query.FaenaCodigo)); if (!string.IsNullOrWhiteSpace(query.ContractCode)) contractsQuery = contractsQuery.Where(x => x.Code == Code(query.ContractCode)); if (!string.IsNullOrWhiteSpace(query.Cliente)) contractsQuery = contractsQuery.Where(x => EF.Functions.Like(x.Client, $"%{query.Cliente.Trim()}%"));
         var contracts = (await contractsQuery.ToListAsync(ct)).Where(x => CanAccess(user, x.Faena.Code)).ToArray(); var ids = contracts.Select(x => x.Id).ToArray(); var events = await EventQuery().Where(x => ids.Contains(x.ContractId) && x.StartsAtUtc <= to && (x.EndsAtUtc ?? to) >= from).ToListAsync(ct); var summaries = contracts.Select(c => Summarize(c, events.Where(e => e.ContractId == c.Id), from, to)).ToArray(); var allEvents = events.Select(ToEvent).ToArray();
         var totalCommittedAssets = summaries.Sum(x => x.EquiposComprometidos); var covered = summaries.Sum(x => x.EquiposCubiertos); var committedHours = summaries.Sum(x => x.HorasComprometidas); var availableHours = summaries.Sum(x => x.HorasDisponibles); var unavailable = Math.Max(0, committedHours - availableHours); var target = summaries.Length == 0 ? 0 : summaries.Average(x => x.DisponibilidadObjetivo); var quantity = totalCommittedAssets == 0 ? 1 : (decimal)covered / totalCommittedAssets; var hours = committedHours == 0 ? 1 : availableHours / committedHours;
         var causes = events.GroupBy(x => (AvailabilityCause)x.Cause).Select(g => new AvailabilityCauseSummary(g.Key, g.Sum(x => OverlapHours(x.StartsAtUtc, x.EndsAtUtc, from, to)), g.Count(), g.Any(x => !x.CanBeUsed && x.IsMaintenanceAttributable))).OrderByDescending(x => x.HorasNoDisponibles).ToArray(); var unavailableAssets = events.Where(x => !x.CanBeUsed).Select(x => new UnavailableAssetResponse(x.Contract.Code, x.Asset?.Code ?? x.OperationalUnit?.Code ?? string.Empty, x.Asset?.Name ?? x.OperationalUnit?.Name, x.Contract.Faena.Code, (AvailabilityCause)x.Cause, x.StartsAtUtc, x.EndsAtUtc, OverlapHours(x.StartsAtUtc, x.EndsAtUtc, from, to), x.IsMaintenanceAttributable, false, x.WorkOrder?.WorkOrderNumber)).ToArray();

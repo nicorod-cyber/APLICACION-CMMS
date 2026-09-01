@@ -1,7 +1,7 @@
 using MaintenanceCMMS.Application.Assets;
 using MaintenanceCMMS.Application.Documents;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Documents;
 using Microsoft.EntityFrameworkCore;
 

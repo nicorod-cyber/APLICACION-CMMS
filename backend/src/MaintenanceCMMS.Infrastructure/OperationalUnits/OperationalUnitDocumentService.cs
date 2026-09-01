@@ -4,8 +4,8 @@ using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Documents;
 using MaintenanceCMMS.Application.OperationalUnits;
 using MaintenanceCMMS.Domain.Common;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql;
-using MaintenanceCMMS.Infrastructure.Data.PostgreSql.Entities;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer;
+using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Documents;
 using Microsoft.EntityFrameworkCore;
 

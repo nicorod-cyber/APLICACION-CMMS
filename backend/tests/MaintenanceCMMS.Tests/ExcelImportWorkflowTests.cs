@@ -18,7 +18,7 @@ namespace MaintenanceCMMS.Tests;
 public sealed class ExcelImportWorkflowTests
 {
     [Fact]
-    public async Task UploadAsync_PersistsValidationErrorsInPostgreSql()
+    public async Task UploadAsync_PersistsValidationErrorsInSqlServer()
     {
         await using var fixture = await CreateFixtureAsync();
         var result = await fixture.Service.UploadAsync(new ExcelImportUploadCommand("faenas", "faenas.xlsx", Workbook(["Codigo"], [["F-001"]]), "admin", false), CancellationToken.None);
@@ -80,11 +80,11 @@ public sealed class ExcelImportWorkflowTests
 
     private static async Task<Fixture> CreateFixtureAsync()
     {
-        var database = await PostgreSqlWorkTestFixture.CreateAsync();
-        var audit = new PostgreSqlAuditService(database.DbContext, new AuditContextAccessor());
+        var database = await SqlServerWorkTestFixture.CreateAsync();
+        var audit = new SqlServerAuditService(database.DbContext, new AuditContextAccessor());
         var storage = new LocalSharePointSimulationService(database.DbContext, audit, Options.Create(new SharePointOptions { Provider = "LocalSimulation", LocalPath = Path.Combine(Path.GetTempPath(), "cmms-import-tests", Guid.NewGuid().ToString("N")) }));
-        var handlers = new IPostgreSqlImportHandler[] { new FaenaPostgreSqlImportHandler(database.DbContext), new AssetPostgreSqlImportHandler(database.DbContext), new TechnicalLocationPostgreSqlImportHandler(database.DbContext), new SparePartPostgreSqlImportHandler(database.DbContext), new WarehousePostgreSqlImportHandler(database.DbContext) };
-        return new Fixture(database, new ExcelImportWorkflowService(database.DbContext, new ExcelSchemaRegistry(), new PostgreSqlImportHandlerResolver(handlers), audit, storage));
+        var handlers = new ISqlServerImportHandler[] { new FaenaSqlServerImportHandler(database.DbContext), new AssetSqlServerImportHandler(database.DbContext), new TechnicalLocationSqlServerImportHandler(database.DbContext), new SparePartSqlServerImportHandler(database.DbContext), new WarehouseSqlServerImportHandler(database.DbContext) };
+        return new Fixture(database, new ExcelImportWorkflowService(database.DbContext, new ExcelSchemaRegistry(), new SqlServerImportHandlerResolver(handlers), audit, storage));
     }
 
     private static byte[] Workbook(string[] headers, string[][] rows)
@@ -103,6 +103,6 @@ public sealed class ExcelImportWorkflowTests
     private static string[] FaenaRow(string code, string locationCode, string state, string zone = "Zona 0") =>
         [code, "Faena nueva", locationCode, "Ubicacion " + locationCode, zone, "Cliente", "CC-01", "Operacion", "Antofagasta", "Antofagasta", "-23.6500", "-70.4000", "admin", state];
 
-    private sealed record Fixture(PostgreSqlWorkTestFixture Database, IExcelImportWorkflowService Service) : IAsyncDisposable
+    private sealed record Fixture(SqlServerWorkTestFixture Database, IExcelImportWorkflowService Service) : IAsyncDisposable
     { public ValueTask DisposeAsync() => Database.DisposeAsync(); }
 }

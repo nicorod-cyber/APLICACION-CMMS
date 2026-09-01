@@ -15,7 +15,7 @@ public sealed class DocumentaryComplianceTests
     private const string FaenaCode = "FAE-1";
     private static readonly UserAccessContext Admin = new("admin", [AuthRoles.Admin], [AuthPermissions.ManageDocuments, AuthPermissions.ConfigureDocumentTypes], [FaenaCode]);
     private static readonly UserAccessContext Planner = new(
-        PostgreSqlWorkTestFixture.PlannerUserId.ToString("D"),
+        SqlServerWorkTestFixture.PlannerUserId.ToString("D"),
         [AuthRoles.Planner],
         [AuthPermissions.ManageDocuments, AuthPermissions.ReviewDocuments, AuthPermissions.ValidateDocuments, AuthPermissions.RejectDocuments, AuthPermissions.ManageDocumentRequirements],
         [FaenaCode]);
@@ -23,9 +23,9 @@ public sealed class DocumentaryComplianceTests
     [Fact]
     public async Task DocumentaryEngine_At45Days_IsIdempotentAndKeepsOriginVersions()
     {
-        await using var fixture = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var fixture = await SqlServerWorkTestFixture.CreateAsync();
         var db = fixture.DbContext;
-        var audit = new PostgreSqlAuditService(db, new AuditContextAccessor());
+        var audit = new SqlServerAuditService(db, new AuditContextAccessor());
         var documents = new DocumentService(db, audit, new AuthorizationPolicyService());
         var matrices = new DocumentRequirementMatrixService(db);
         var engine = new DocumentaryWorkOrderService(db);

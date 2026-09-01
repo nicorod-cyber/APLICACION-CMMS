@@ -10,7 +10,7 @@ public sealed class AlertsExcelImportTests
     [Fact]
     public async Task ImportAsync_ImportsCurrentExcelIdempotently()
     {
-        await using var database = await PostgreSqlWorkTestFixture.CreateAsync();
+        await using var database = await SqlServerWorkTestFixture.CreateAsync();
         var importer = new AlertsExcelImportService(database.DbContext);
         var request = new AlertsExcelImportRequest(
             FindDataFile("pdf_templates.xlsx"),
