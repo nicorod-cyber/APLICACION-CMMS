@@ -106,11 +106,17 @@ public sealed class SqlServerStructuralBootstrap : ISqlServerStructuralBootstrap
             }
             else
             {
-                entity.Code = definition.Code;
-                entity.Name = definition.Name;
-                entity.Severity = definition.Severity;
-                entity.IsActive = true;
-                entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
+                if (!string.Equals(entity.Code, definition.Code, StringComparison.Ordinal) ||
+                    !string.Equals(entity.Name, definition.Name, StringComparison.Ordinal) ||
+                    entity.Severity != definition.Severity ||
+                    !entity.IsActive)
+                {
+                    entity.Code = definition.Code;
+                    entity.Name = definition.Name;
+                    entity.Severity = definition.Severity;
+                    entity.IsActive = true;
+                    entity.UpdatedAtUtc = DateTimeOffset.UtcNow;
+                }
             }
         }
     }
