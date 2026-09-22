@@ -83,8 +83,8 @@ Los logs locales están bajo `.codex-tmp/`; TRX bajo `TestResults/security/`. So
 
 ## Riesgos pendientes y configuración de producción
 
-1. **Router / SCA (Medium):** react-router-dom 6.30.6 mantiene GHSA-wrjc-x8rr-h8h6 y GHSA-337j-9hxr-rhxg en su árbol. El segundo describe SSR y esta SPA usa createBrowserRouter, pero eso no elimina el aviso SCA ni justifica una exclusión general. La solución propuesta requiere Router 7.18.4 y regenerar lockfile, build, unit tests y E2E.
-2. **Contenedores (Medium/High según exposición):** siguen imágenes actuales y ejecución de aplicación/contenedores web sin el cambio propuesto a usuario no root. Se preparó un parche independiente para Node 22, Nginx unprivileged e internal port 8080 manteniendo puertos externos. Deben probarse permisos de volúmenes, health checks y escaneo de imágenes por digest.
+1. **Router / SCA (resuelto el 22-09-2026):** react-router-dom quedó fijado en 7.18.4, el lockfile fue regenerado con npm y `npm audit` reportó cero vulnerabilidades.
+2. **Contenedores (resuelto parcialmente el 22-09-2026):** backend, frontend y proxy ejecutan sin root; Node/Nginx/.NET/SQL están fijados por digest y los bind mounts fueron probados. El SCA de imágenes continúa pendiente porque Docker Scout requirió envío a un servicio externo y la revisión automática bloqueó esa operación.
 3. **TLS/hosts/SQL (High si se usan defaults fuera de piloto):** AllowedHosts base sigue siendo `*`; no hay garantía de terminación TLS ni transporte SQL verificado en cada despliegue. Los defaults de piloto/Development no deben usarse como configuración corporativa. Faltan nombres DNS, certificados y cuenta SQL del ambiente real. No se impusieron gates de arranque que pudieran dejar una instalación existente inaccesible.
 4. **Archivos:** magic bytes y estructura básica no son antivirus ni CDR. PDF puede contener acciones o adjuntos; imágenes deben decodificarse/re-encodearse si el modelo de amenaza lo exige. Integrar antivirus/cuarentena y límites de concurrencia antes de procesar archivos de orígenes no confiables. La comprobación de enlaces simbólicos no elimina una carrera si otro proceso privilegiado puede alterar el directorio.
 5. **Identidad y navegador:** sessionStorage conserva bearer y sigue expuesto ante una futura XSS. No se migró a cookies porque cambia el modelo CSRF/sesión. Probar carga para PBKDF2 y validación online de sesiones; considerar rate limiting distribuido para múltiples réplicas. Validar seed admin mediante secret manager y política operacional.
@@ -107,9 +107,9 @@ DataProvider__SqlServerConnectionString=Server=sql.empresa.example;Database=CMMS
 
 Usar certificado válido y resolver DNS acorde a su SAN. Mantener credenciales de migración separadas de runtime: el arranque actual ejecuta bootstrap/migraciones y su separación requiere diseñar el despliegue, no quitar permisos sin adaptar ese flujo. Terminar HTTPS en un proxy corporativo, restringir acceso directo al backend y confiar exclusivamente en proxies identificados. Swagger se habilita únicamente en Development. El HSTS del backend requiere que la solicitud sea reconocida como HTTPS; si TLS termina en el borde, configurar HSTS allí y revisar forwarded headers confiables.
 
-### Aprobación pendiente
+### Propuesta aplicada
 
-La revisión automática de aprobación rechazó los cambios conjuntos de versiones mayores/contenedores y los gates de configuración productiva por riesgo de compatibilidad y disponibilidad. Se aplicaron las correcciones independientes aceptadas. Se solicitó al usuario autorización expresa para la propuesta concreta Router/Node/contenedores; hasta recibir respuesta no se aplica. El parche de revisión se mantiene separado en `APPSEC-pending-deployment-and-router.patch`; no contiene el lockfile actualizado ni representa una migración ya validada.
+La propuesta Router/Node/Nginx/backend no-root fue autorizada y aplicada el 22-09-2026. Los resultados completos están en `APPSEC-DEPLOYMENT-HARDENING-2026-09-22.md`.
 
 ## Fuentes consultadas
 

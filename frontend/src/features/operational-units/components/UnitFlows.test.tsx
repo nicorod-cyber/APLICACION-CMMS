@@ -76,7 +76,7 @@ describe("UnitCompositionDialogs", () => {
 
 describe("UnitMaintenanceActions", () => {
   it("navigates to canonical notice and work-order forms with the unit target", () => {
-    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><UnitMaintenanceActions unitCode="CFA-1" /><Location /></MemoryRouter>);
+    render(<MemoryRouter><UnitMaintenanceActions unitCode="CFA-1" /><Location /></MemoryRouter>);
     fireEvent.click(screen.getByRole("button", { name: "Crear aviso" }));
     expect(screen.getByTestId("location")).toHaveTextContent("/avisos?targetType=OperationalUnit&targetCode=CFA-1");
     fireEvent.click(screen.getByRole("button", { name: "Crear OT" }));

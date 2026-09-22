@@ -6,7 +6,8 @@ test("security headers and authenticated navigation work together", async ({ pag
   test.skip(!username || !password, "Synthetic E2E credentials are required.");
   const system = await page.request.get("/api/system/info");
   expect(system.ok()).toBeTruthy();
-  test.skip((await system.json()).environment?.toLowerCase() === "pilot", "Do not run against Pilot.");
+  const isPilot = (await system.json()).environment?.toLowerCase() === "pilot";
+  test.skip(isPilot && process.env.E2E_ALLOW_PILOT_READONLY !== "true", "Set E2E_ALLOW_PILOT_READONLY=true for this read-only navigation smoke.");
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => {

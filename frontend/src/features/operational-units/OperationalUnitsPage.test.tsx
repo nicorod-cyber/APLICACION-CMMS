@@ -11,7 +11,7 @@ const permissions = [auth.AUTH_PERMISSIONS.manageOperationalUnits, auth.AUTH_PER
 let responseOverride: ((path: string, init?: RequestInit) => Promise<unknown> | undefined) | undefined;
 
 function Location() { const location = useLocation(); return <output data-testid="location">{location.pathname + location.search}</output>; }
-function renderPage() { return render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><OperationalUnitsPage /><Location /></QueryClientProvider></MemoryRouter>); }
+function renderPage() { return render(<MemoryRouter><QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><OperationalUnitsPage /><Location /></QueryClientProvider></MemoryRouter>); }
 function mockApi() { return vi.spyOn(auth, "apiFetch").mockImplementation((path: string, init?: RequestInit) => {
   const overridden = responseOverride?.(path, init);
   if (overridden) return overridden as never;
