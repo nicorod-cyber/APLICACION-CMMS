@@ -82,6 +82,7 @@ internal static class RolePermissionCatalog
             AuthPermissions.ViewCosts),
 
         Role(AuthRoles.MaintenanceSupervisor, "Supervisor mantenimiento", "Supervisor",
+            AuthPermissions.ViewFaenas,
             AuthPermissions.RegisterAssetReadings,
             AuthPermissions.CorrectAssetReadings,
             AuthPermissions.ViewOperationalUnits,
@@ -97,6 +98,7 @@ internal static class RolePermissionCatalog
             AuthPermissions.CloseWorkOrders),
 
         Role(AuthRoles.Technician, "Tecnico", "Technician",
+            AuthPermissions.ViewFaenas,
             AuthPermissions.ViewAssignedWorkOrders,
             AuthPermissions.ExecuteAssignedWorkOrders,
             AuthPermissions.RegisterWorkOrderLabor,
@@ -118,6 +120,7 @@ internal static class RolePermissionCatalog
             AuthPermissions.ViewOperationalUnits),
 
         Role(AuthRoles.FaenaViewer, "Consulta faena", "Viewer",
+            AuthPermissions.ViewFaenas,
             AuthPermissions.ViewOperationalUnits)
     ];
 

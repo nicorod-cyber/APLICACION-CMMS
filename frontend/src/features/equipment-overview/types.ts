@@ -40,6 +40,9 @@ export type EquipmentOverviewRow = {
   usageMeasurementType?: string | null;
   lastReading?: number | null;
   usageUnit?: string | null;
+  lastReadingAtUtc?: string | null;
+  readingAvailable: boolean;
+  readingUnavailableReason?: string | null;
   lastPreventiveType?: string | null;
   usageSinceLastPreventive?: number | null;
   approximateNextMaintenanceDate?: string | null;
@@ -47,6 +50,7 @@ export type EquipmentOverviewRow = {
   sernageomin?: DocumentRequirementStatus | null;
   dgmn?: DocumentRequirementStatus | null;
   fireSuppression?: DocumentRequirementStatus | null;
+  components?: string[] | null;
 };
 
 export type EquipmentOverviewFiltersValue = {

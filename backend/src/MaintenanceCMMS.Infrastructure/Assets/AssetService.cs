@@ -245,8 +245,21 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                 x.Brand,
                 x.ManufacturingYear,
                 x.UsageMeasurementType,
-                _db.AssetReadings.Where(r => r.AssetId == x.Id && !r.IsAnomalous).OrderByDescending(r => r.ReadAtUtc).Select(r => (decimal?)r.Value).FirstOrDefault(),
+                _db.AssetReadings
+                    .Where(reading => reading.AssetId == x.Id && !_db.AssetReadings.Any(correction => correction.CorrectedReadingId == reading.Id))
+                    .OrderByDescending(reading => reading.ReadAtUtc).ThenByDescending(reading => reading.CreatedAtUtc)
+                    .Select(reading => (decimal?)reading.Value).FirstOrDefault(),
                 x.UsageMeasurementType == "HOROMETRO" ? "h" : x.UsageMeasurementType == "KILOMETRAJE" ? "km" : null,
+                _db.AssetReadings
+                    .Where(reading => reading.AssetId == x.Id && !_db.AssetReadings.Any(correction => correction.CorrectedReadingId == reading.Id))
+                    .OrderByDescending(reading => reading.ReadAtUtc).ThenByDescending(reading => reading.CreatedAtUtc)
+                    .Select(reading => (DateTimeOffset?)reading.ReadAtUtc).FirstOrDefault(),
+                x.OperationalState.Code != AssetOperationalPolicy.DecommissionedStateCode && (x.UsageMeasurementType == "HOROMETRO" || x.UsageMeasurementType == "KILOMETRAJE"),
+                x.OperationalState.Code == AssetOperationalPolicy.DecommissionedStateCode
+                    ? "El equipo está dado de baja."
+                    : x.UsageMeasurementType != "HOROMETRO" && x.UsageMeasurementType != "KILOMETRAJE"
+                        ? "El equipo no tiene una medición de uso válida configurada."
+                        : null,
                 null,
                 null,
                 null,
@@ -286,6 +299,9 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                 null,
                 null,
                 null,
+                false,
+                "La unidad no tiene una composición CHASIS/FÁBRICA apta para registrar lecturas.",
+                null,
                 null,
                 null,
                 "No existe una consolidacion preventiva o documental aprobada para la unidad compuesta.",
@@ -296,15 +312,71 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
                 null))
             .ToArrayAsync(ct);
 
-        var chassisByUnit = (await _db.OperationalUnitComponents.AsNoTracking()
-            .Where(component => unitIds.Contains(component.OperationalUnitId) && component.RemovedAtUtc == null && component.ComponentRole.Code == "CHASIS")
-            .Select(component => new { component.OperationalUnitId, component.Asset.Brand, component.Asset.ManufacturingYear })
+        var componentDetailsByUnit = (await _db.OperationalUnitComponents.AsNoTracking()
+            .Where(component => unitIds.Contains(component.OperationalUnitId) && component.RemovedAtUtc == null)
+            .OrderBy(component => component.ComponentRole.Code)
+            .ThenBy(component => component.Asset.Code)
+            .Select(component => new
+            {
+                component.OperationalUnitId,
+                RoleCode = component.ComponentRole.Code,
+                component.Asset.Code,
+                component.Asset.Brand,
+                component.Asset.ManufacturingYear,
+                component.Asset.UsageMeasurementType,
+                OperationalStateCode = component.Asset.OperationalState.Code,
+                LastReading = _db.AssetReadings
+                    .Where(reading => reading.AssetId == component.AssetId && !_db.AssetReadings.Any(correction => correction.CorrectedReadingId == reading.Id))
+                    .OrderByDescending(reading => reading.ReadAtUtc).ThenByDescending(reading => reading.CreatedAtUtc)
+                    .Select(reading => (decimal?)reading.Value).FirstOrDefault(),
+                LastReadingAtUtc = _db.AssetReadings
+                    .Where(reading => reading.AssetId == component.AssetId && !_db.AssetReadings.Any(correction => correction.CorrectedReadingId == reading.Id))
+                    .OrderByDescending(reading => reading.ReadAtUtc).ThenByDescending(reading => reading.CreatedAtUtc)
+                    .Select(reading => (DateTimeOffset?)reading.ReadAtUtc).FirstOrDefault()
+            })
             .ToArrayAsync(ct))
             .GroupBy(component => component.OperationalUnitId)
-            .ToDictionary(group => group.Key, group => group.First());
-        unitRows = unitRows.Select(row => Guid.TryParse(row.OperationalUnitId, out var unitId) && chassisByUnit.TryGetValue(unitId, out var chassis)
-            ? row with { Brand = chassis.Brand, ManufacturingYear = chassis.ManufacturingYear }
-            : row).ToArray();
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        unitRows = unitRows.Select(row =>
+        {
+            if (!Guid.TryParse(row.OperationalUnitId, out var unitId) || !componentDetailsByUnit.TryGetValue(unitId, out var components))
+            {
+                return row;
+            }
+
+            var chassisCandidates = components.Where(component => string.Equals(component.RoleCode, "CHASIS", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var factoryCandidates = components.Where(component => string.Equals(component.RoleCode, "FABRICA", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var chassis = chassisCandidates.Length == 1 ? chassisCandidates[0] : null;
+            var factory = factoryCandidates.Length == 1 ? factoryCandidates[0] : null;
+            string? unavailableReason = null;
+            if (chassis is null || factory is null)
+            {
+                unavailableReason = "La unidad requiere exactamente un CHASIS y una FÁBRICA vigentes.";
+            }
+            else if (!string.Equals(chassis.UsageMeasurementType, "HOROMETRO", StringComparison.OrdinalIgnoreCase)
+                     || !string.Equals(factory.UsageMeasurementType, "HOROMETRO", StringComparison.OrdinalIgnoreCase))
+            {
+                unavailableReason = "CHASIS y FÁBRICA deben tener horómetro configurado.";
+            }
+            else if (!AssetOperationalPolicy.AllowsReadings(chassis.OperationalStateCode)
+                     || !AssetOperationalPolicy.AllowsReadings(factory.OperationalStateCode))
+            {
+                unavailableReason = "CHASIS y FÁBRICA deben estar vigentes para registrar lecturas.";
+            }
+
+            return row with
+            {
+                Brand = chassis?.Brand,
+                ManufacturingYear = chassis?.ManufacturingYear,
+                UsageMeasurementType = string.Equals(chassis?.UsageMeasurementType, "HOROMETRO", StringComparison.OrdinalIgnoreCase) ? "HOROMETRO" : null,
+                LastReading = chassis?.LastReading,
+                UsageUnit = string.Equals(chassis?.UsageMeasurementType, "HOROMETRO", StringComparison.OrdinalIgnoreCase) ? "h" : null,
+                LastReadingAtUtc = chassis?.LastReadingAtUtc,
+                ReadingAvailable = unavailableReason is null,
+                ReadingUnavailableReason = unavailableReason,
+                Components = components.Select(component => component.Code).ToArray()
+            };
+        }).ToArray();
         var componentLocations = await (from component in _db.OperationalUnitComponents.AsNoTracking()
                    join period in _db.AssetPhysicalLocationPeriods.AsNoTracking() on component.AssetId equals period.AssetId
                    where unitIds.Contains(component.OperationalUnitId) && component.RemovedAtUtc == null && period.ValidToUtc == null
@@ -348,22 +420,13 @@ var criticalities = await _db.WorkCatalogs.AsNoTracking()
             };
         }).ToArray();
 
-        var componentsByUnit = (await _db.OperationalUnitComponents.AsNoTracking()
-                .Where(x => unitIds.Contains(x.OperationalUnitId) && x.RemovedAtUtc == null)
-                .OrderBy(x => x.ComponentRole.Code)
-                .ThenBy(x => x.Asset.Code)
-                .Select(x => new { x.OperationalUnitId, x.Asset.Code })
-                .ToArrayAsync(ct))
-                .GroupBy(x => x.OperationalUnitId)
-                .ToDictionary(x => x.Key, x => (IReadOnlyCollection<string>)x.Select(component => component.Code).ToArray());
-
         var rowsById = assetRows.Concat(unitRows).ToDictionary(x => x.RowId);
         var items = pageKeys.Select(key =>
         {
             var rowId = key.AssetId?.ToString("D") ?? key.OperationalUnitId!.Value.ToString("D");
             var row = rowsById[rowId];
             row = key.AssetId.HasValue ? row with { TechnicalReview = documentProjection.ForAsset(key.AssetId.Value, RegulatoryDocumentCategory.TechnicalReview), Sernageomin = documentProjection.ForAsset(key.AssetId.Value, RegulatoryDocumentCategory.Sernageomin), Dgmn = documentProjection.ForAsset(key.AssetId.Value, RegulatoryDocumentCategory.Dgmn), FireSuppression = documentProjection.ForAsset(key.AssetId.Value, RegulatoryDocumentCategory.FireSuppression) } : row with { TechnicalReview = documentProjection.ForUnit(key.OperationalUnitId!.Value, RegulatoryDocumentCategory.TechnicalReview), Sernageomin = documentProjection.ForUnit(key.OperationalUnitId!.Value, RegulatoryDocumentCategory.Sernageomin), Dgmn = documentProjection.ForUnit(key.OperationalUnitId!.Value, RegulatoryDocumentCategory.Dgmn), FireSuppression = documentProjection.ForUnit(key.OperationalUnitId!.Value, RegulatoryDocumentCategory.FireSuppression) };
-            return key.OperationalUnitId.HasValue && componentsByUnit.TryGetValue(key.OperationalUnitId.Value, out var components) ? row with { Components = components } : row;
+            return row;
         }).ToArray();
 
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);

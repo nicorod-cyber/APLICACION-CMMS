@@ -518,15 +518,28 @@ public sealed class AssetServiceTests
         db.AddRange(unitType, chassisRole, factoryRole);
         await db.SaveChangesAsync();
 
-        var direct = new AssetEntity { Code = "SUMMARY-DIRECT", Name = "Directo resumen", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = corrective.Id, Brand = "Directa", ManufacturingYear = 2020 };
-        var chassis = new AssetEntity { Code = "SUMMARY-CHASIS-1", Name = "Chasis actual", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = "Marca chasis", ManufacturingYear = 2021 };
-        var factory = new AssetEntity { Code = "SUMMARY-FABRICA", Name = "Fabrica", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = "No debe usarse", ManufacturingYear = 1999 };
+        var direct = new AssetEntity { Code = "SUMMARY-DIRECT", Name = "Directo resumen", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = corrective.Id, Brand = "Directa", ManufacturingYear = 2020, UsageMeasurementType = "KILOMETRAJE" };
+        var chassis = new AssetEntity { Code = "SUMMARY-CHASIS-1", Name = "Chasis actual", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = "Marca chasis", ManufacturingYear = 2021, UsageMeasurementType = "HOROMETRO" };
+        var factory = new AssetEntity { Code = "SUMMARY-FABRICA", Name = "Fabrica", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = "No debe usarse", ManufacturingYear = 1999, UsageMeasurementType = "HOROMETRO" };
         var unit = new OperationalUnitEntity { Code = "SUMMARY-UNIDAD", Name = "Unidad resumen", OperationalUnitTypeId = unitType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id };
-        db.AddRange(direct, chassis, factory, unit);
+        var incompleteChassis = new AssetEntity { Code = "SUMMARY-INCOMPLETE-CHASIS", Name = "Chasis incompleto", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, UsageMeasurementType = "HOROMETRO" };
+        var incompleteUnit = new OperationalUnitEntity { Code = "SUMMARY-INCOMPLETE", Name = "Unidad incompleta", OperationalUnitTypeId = unitType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id };
+        db.AddRange(direct, chassis, factory, unit, incompleteChassis, incompleteUnit);
         await db.SaveChangesAsync();
         db.OperationalUnitComponents.AddRange(
             new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = chassis.Id, ComponentRoleId = chassisRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" },
-            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = factory.Id, ComponentRoleId = factoryRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" });
+            new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = factory.Id, ComponentRoleId = factoryRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" },
+            new OperationalUnitComponentEntity { OperationalUnitId = incompleteUnit.Id, AssetId = incompleteChassis.Id, ComponentRoleId = chassisRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" });
+        await db.SaveChangesAsync();
+        var directReadAt = DateTimeOffset.UtcNow.AddHours(-3);
+        var originalReadAt = DateTimeOffset.UtcNow.AddHours(-2);
+        var correctionReadAt = DateTimeOffset.UtcNow.AddHours(-1);
+        var original = new AssetReadingEntity { AssetId = chassis.Id, ReadAtUtc = originalReadAt, Value = 100m, Source = "MANUAL", RegisteredByUserId = "admin" };
+        db.AssetReadings.AddRange(
+            new AssetReadingEntity { AssetId = direct.Id, ReadAtUtc = directReadAt, Value = 84521m, Source = "MANUAL", RegisteredByUserId = "admin" },
+            original);
+        await db.SaveChangesAsync();
+        db.AssetReadings.Add(new AssetReadingEntity { AssetId = chassis.Id, ReadAtUtc = correctionReadAt, Value = 110m, Source = "MANUAL", RegisteredByUserId = "admin", IsCorrection = true, CorrectedReadingId = original.Id, CorrectionReason = "Ajuste probado", AuthorizedByUserId = "admin" });
         await db.SaveChangesAsync();
 
         var page = await fixture.Service.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "SUMMARY"), Admin, CancellationToken.None);
@@ -534,13 +547,26 @@ public sealed class AssetServiceTests
         var projectedUnit = Assert.Single(page.Items.Where(item => item.Code == unit.Code));
         Assert.Equal("Marca chasis", projectedUnit.Brand);
         Assert.Equal((short)2021, projectedUnit.ManufacturingYear);
+        Assert.Equal("HOROMETRO", projectedUnit.UsageMeasurementType);
+        Assert.Equal("h", projectedUnit.UsageUnit);
+        Assert.Equal(110m, projectedUnit.LastReading);
+        Assert.Equal(correctionReadAt, projectedUnit.LastReadingAtUtc);
+        Assert.True(projectedUnit.ReadingAvailable);
+        Assert.Null(projectedUnit.ReadingUnavailableReason);
+        var projectedDirect = Assert.Single(page.Items.Where(item => item.Code == direct.Code));
+        Assert.Equal(84521m, projectedDirect.LastReading);
+        Assert.Equal(directReadAt, projectedDirect.LastReadingAtUtc);
+        Assert.True(projectedDirect.ReadingAvailable);
+        var projectedIncomplete = Assert.Single(page.Items.Where(item => item.Code == incompleteUnit.Code));
+        Assert.False(projectedIncomplete.ReadingAvailable);
+        Assert.Contains("CHASIS", projectedIncomplete.ReadingUnavailableReason);
         Assert.Equal(page.TotalCount, summary.Total);
         Assert.Equal(1, summary.NonOperational);
         Assert.Equal(0, summary.ExpiringDocuments);
 
         var currentChassis = await db.OperationalUnitComponents.SingleAsync(component => component.AssetId == chassis.Id);
         currentChassis.RemovedAtUtc = DateTimeOffset.UtcNow;
-        var replacement = new AssetEntity { Code = "SUMMARY-CHASIS-2", Name = "Chasis reemplazo", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = null, ManufacturingYear = null };
+        var replacement = new AssetEntity { Code = "SUMMARY-CHASIS-2", Name = "Chasis reemplazo", AssetTypeId = assetType.Id, FaenaId = faena.Id, OperationalStateId = operating.Id, Brand = null, ManufacturingYear = null, UsageMeasurementType = null };
         db.Assets.Add(replacement);
         await db.SaveChangesAsync();
         db.OperationalUnitComponents.Add(new OperationalUnitComponentEntity { OperationalUnitId = unit.Id, AssetId = replacement.Id, ComponentRoleId = chassisRole.Id, InstalledAtUtc = DateTimeOffset.UtcNow, InstalledByUserId = "admin" });
@@ -549,6 +575,8 @@ public sealed class AssetServiceTests
         projectedUnit = Assert.Single((await fixture.Service.ListEquipmentOverviewAsync(new EquipmentOverviewQuery(Search: "SUMMARY-UNIDAD"), Admin, CancellationToken.None)).Items);
         Assert.Null(projectedUnit.Brand);
         Assert.Null(projectedUnit.ManufacturingYear);
+        Assert.False(projectedUnit.ReadingAvailable);
+        Assert.Contains("horómetro", projectedUnit.ReadingUnavailableReason, StringComparison.OrdinalIgnoreCase);
     }
     private sealed class ThrowingDocumentaryWorkOrderService : IDocumentaryWorkOrderService
     {

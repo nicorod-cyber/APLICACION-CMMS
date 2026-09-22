@@ -130,12 +130,18 @@ public sealed class AuthAndAuthorizationTests
 
         AssertNewPermissions(roles[AuthRoles.Admin], [AuthPermissions.ManageAssetCatalogs, AuthPermissions.ManageAssetAttributes, AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings, AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition, AuthPermissions.ManageDocumentRequirements]);
         AssertNewPermissions(roles[AuthRoles.Planner], [AuthPermissions.ManageAssetAttributes, AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings, AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition, AuthPermissions.ManageDocumentRequirements]);
-        AssertNewPermissions(roles[AuthRoles.MaintenanceSupervisor], [AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings, AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition]);
-        AssertNewPermissions(roles[AuthRoles.Technician], [AuthPermissions.RegisterAssetReadings, AuthPermissions.ViewOperationalUnits]);
+        AssertNewPermissions(roles[AuthRoles.MaintenanceSupervisor], [AuthPermissions.ViewFaenas, AuthPermissions.RegisterAssetReadings, AuthPermissions.CorrectAssetReadings, AuthPermissions.ViewOperationalUnits, AuthPermissions.ManageOperationalUnits, AuthPermissions.ManageOperationalUnitComposition]);
+        AssertNewPermissions(roles[AuthRoles.Technician], [AuthPermissions.ViewFaenas, AuthPermissions.RegisterAssetReadings, AuthPermissions.ViewOperationalUnits]);
         AssertNewPermissions(roles[AuthRoles.Management], [AuthPermissions.ViewOperationalUnits]);
-        AssertNewPermissions(roles[AuthRoles.FaenaViewer], [AuthPermissions.ViewOperationalUnits]);
+        AssertNewPermissions(roles[AuthRoles.FaenaViewer], [AuthPermissions.ViewFaenas, AuthPermissions.ViewOperationalUnits]);
         AssertNewPermissions(roles[AuthRoles.Warehouse], []);
         AssertNewPermissions(roles[AuthRoles.WarehouseSupervisor], []);
+        foreach (var roleCode in new[] { AuthRoles.MaintenanceSupervisor, AuthRoles.Technician, AuthRoles.FaenaViewer })
+        {
+            Assert.DoesNotContain(AuthPermissions.CreateFaenas, roles[roleCode].Permissions);
+            Assert.DoesNotContain(AuthPermissions.EditFaenas, roles[roleCode].Permissions);
+            Assert.DoesNotContain(AuthPermissions.DeactivateFaenas, roles[roleCode].Permissions);
+        }
     }
     [Fact]
     public void CanAccessWorkOrder_ReturnsFalse_WhenTechnicianIsNotAssigned()
@@ -173,6 +179,7 @@ public sealed class AuthAndAuthorizationTests
         {
             AuthPermissions.ManageAssetCatalogs,
             AuthPermissions.ManageAssetAttributes,
+            AuthPermissions.ViewFaenas,
             AuthPermissions.RegisterAssetReadings,
             AuthPermissions.CorrectAssetReadings,
             AuthPermissions.ViewOperationalUnits,

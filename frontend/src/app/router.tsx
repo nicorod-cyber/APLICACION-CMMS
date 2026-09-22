@@ -1,6 +1,7 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { FaenasPage } from "../features/faenas/FaenasPage";
+import { FaenaDetailPage } from "../features/faenas/FaenaDetailPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { ProtectedRoute } from "../features/auth/ProtectedRoute";
 import { AUTH_PERMISSIONS, AUTH_ROLES } from "../features/auth/authStore";
@@ -68,6 +69,7 @@ export const router = createBrowserRouter([
         element: <DashboardPage />
       },
       { path: "activos", element: <AssetsPage /> },
+      { path: "faenas/:codigo", element: <ProtectedRoute permissions={[AUTH_PERMISSIONS.viewFaenas]}><FaenaDetailPage /></ProtectedRoute> },
       { path: "equipos/activos/:code", element: <EquipmentAssetDetailPage /> },
       { path: "equipos/unidades/:code", element: <CompositeUnitDetailPage /> },
       { path: "equipos-operacionales", element: <ProtectedRoute roles={[AUTH_ROLES.admin, AUTH_ROLES.planner, AUTH_ROLES.maintenanceSupervisor, AUTH_ROLES.management, AUTH_ROLES.faenaViewer]}><MaintenanceTargetsPage /></ProtectedRoute> },

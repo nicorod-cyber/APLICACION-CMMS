@@ -186,7 +186,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   if (!response.ok) {
     const message = await readErrorMessage(response);
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   if (response.status === 204) {
@@ -194,6 +194,13 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   return (await response.json()) as T;
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
 }
 
 function isExpired(expiresAtUtc: string | null) {
