@@ -5,6 +5,8 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.28" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
     <PackageReference Include="Testcontainers.MsSql" Version="3.10.0" />
     <PackageReference Include="xunit" Version="2.8.1" />
@@ -14,6 +16,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\MaintenanceCMMS.Api\MaintenanceCMMS.Api.csproj" />
     <ProjectReference Include="..\..\src\MaintenanceCMMS.Application\MaintenanceCMMS.Application.csproj" />
     <ProjectReference Include="..\..\src\MaintenanceCMMS.Domain\MaintenanceCMMS.Domain.csproj" />
     <ProjectReference Include="..\..\src\MaintenanceCMMS.Infrastructure\MaintenanceCMMS.Infrastructure.csproj" />

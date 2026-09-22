@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text.Encodings.Web;
 using MaintenanceCMMS.Application.Alerts;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
@@ -49,7 +50,7 @@ public sealed class PdfTemplateService : IPdfTemplateService
         var template = await _dbContext.PdfTemplates.SingleOrDefaultAsync(item => item.Code == id, cancellationToken);
         if (template is null) return null;
         var previous = template.HtmlTemplate;
-        template.Name = request.Name.Trim(); template.EventType = request.EventType.Trim(); template.SubjectTemplate = request.SubjectTemplate.Trim(); template.HtmlTemplate = request.HtmlTemplate.Trim(); template.IsActive = request.Active; template.TemplateVersion++; template.UpdatedAtUtc = DateTimeOffset.UtcNow; template.UpdatedByUserId = user.UserId;
+        template.Name = request.Name.Trim(); template.EventType = request.EventType.Trim(); template.SubjectTemplate = request.SubjectTemplate.Trim(); template.HtmlTemplate = SafeTemplateHtml.Sanitize(request.HtmlTemplate.Trim()); template.IsActive = request.Active; template.TemplateVersion++; template.UpdatedAtUtc = DateTimeOffset.UtcNow; template.UpdatedByUserId = user.UserId;
         await _dbContext.SaveChangesAsync(cancellationToken);
         await _auditService.RecordAsync(new AuditEventRequest(user.UserId, "pdf_template.updated", AuditModules.Pdfs, "PdfTemplate", template.Code, previous, template.HtmlTemplate, Severity: AuditSeverity.Medium, Reason: request.Reason), cancellationToken);
         return ToResponse(template);
@@ -72,8 +73,11 @@ public sealed class PdfTemplateService : IPdfTemplateService
 
     internal static string RenderTemplate(string template, IReadOnlyDictionary<string, string?> data)
     {
-        return PlaceholderPattern.Replace(template, match => data.TryGetValue(match.Groups[1].Value, out var value) ? value ?? string.Empty : match.Value);
+        return SafeTemplateHtml.Sanitize(PlaceholderPattern.Replace(template, match => data.TryGetValue(match.Groups[1].Value, out var value) ? HtmlEncoder.Default.Encode(value ?? string.Empty) : match.Value));
     }
+
+    internal static string RenderSubject(string template, IReadOnlyDictionary<string, string?> data) =>
+        PlaceholderPattern.Replace(template, match => data.TryGetValue(match.Groups[1].Value, out var value) ? (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ") : match.Value);
 
     private async Task EnsureDefaultTemplateAsync(CancellationToken cancellationToken)
     {
@@ -112,4 +116,4 @@ public sealed class PdfTemplateService : IPdfTemplateService
     };
 
     private static PdfTemplateResponse ToResponse(PdfTemplateEntity item) => new(item.Code, item.Name, item.EventType, item.SubjectTemplate, item.HtmlTemplate, item.IsActive, item.UpdatedAtUtc ?? item.CreatedAtUtc);
-}
+}

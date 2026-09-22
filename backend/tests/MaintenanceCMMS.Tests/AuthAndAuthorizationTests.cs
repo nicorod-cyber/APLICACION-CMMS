@@ -44,7 +44,7 @@ public sealed class AuthAndAuthorizationTests
 
         await fixture.IdentityStore.UpsertUserAsync(admin! with { IsLocked = true }, CancellationToken.None);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             fixture.AuthService.LoginAsync(new LoginRequest("admin", "Test.Admin123!"), CancellationToken.None));
     }
 

@@ -84,7 +84,8 @@ public sealed class ExcelDataProvider : IDataProvider
                 }
                 catch (Exception ex)
                 {
-                    errors.Add($"{schema.FileName}: {ex.Message}");
+                    System.Diagnostics.Trace.TraceError("Excel validation failed: {0}", ex.GetType().Name);
+                    errors.Add($"{schema.FileName}: No fue posible validar el archivo.");
                 }
             }
 
@@ -227,9 +228,9 @@ public sealed class ExcelDataProvider : IDataProvider
             stream.CopyTo(copy);
             return new XLWorkbook(new MemoryStream(copy.ToArray()));
         }
-        catch (IOException ex)
+        catch (IOException)
         {
-            throw new DomainException($"No se pudo abrir '{schema.FileName}'. Cierra el archivo Excel si esta abierto y vuelve a intentar. Detalle: {ex.Message}");
+            throw new DomainException($"No se pudo abrir '{schema.FileName}'. Cierra el archivo Excel si esta abierto y vuelve a intentar.");
         }
     }
 
@@ -239,9 +240,9 @@ public sealed class ExcelDataProvider : IDataProvider
         {
             workbook.SaveAs(GetPath(schema));
         }
-        catch (IOException ex)
+        catch (IOException)
         {
-            throw new DomainException($"No se pudo guardar '{schema.FileName}'. Cierra el archivo Excel si esta abierto y vuelve a intentar. Detalle: {ex.Message}");
+            throw new DomainException($"No se pudo guardar '{schema.FileName}'. Cierra el archivo Excel si esta abierto y vuelve a intentar.");
         }
     }
 

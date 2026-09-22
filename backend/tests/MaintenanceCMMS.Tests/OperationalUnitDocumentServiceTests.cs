@@ -126,7 +126,7 @@ public sealed class OperationalUnitDocumentServiceTests
         });
         await db.SaveChangesAsync();
 
-        var bytes = new byte[] { 1, 2, 3 };
+        var bytes = SecurityTestFiles.Pdf;
         await Assert.ThrowsAsync<DomainException>(() => documents.UploadAssetAsync(asset.Code, new DocumentUploadContent("EXP-REQ", "exp.pdf", "application/pdf", bytes, DateOnly.FromDateTime(DateTime.UtcNow), null), Admin, CancellationToken.None));
         await Assert.ThrowsAsync<DomainException>(() => documents.UploadAssetAsync(asset.Code, new DocumentUploadContent("EXP-REQ", "exp.pdf", "application/pdf", bytes, DateOnly.FromDateTime(DateTime.UtcNow), DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1))), Admin, CancellationToken.None));
 

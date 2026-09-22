@@ -94,6 +94,12 @@ public sealed class SqlServerIdentityStore : IIdentityStore
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task RevokeSessionsAsync(string userId, CancellationToken ct)
+    {
+        if (!Guid.TryParse(userId, out var id)) return;
+        await _dbContext.Users.Where(u => u.Id == id).ExecuteUpdateAsync(s => s.SetProperty(u => u.UpdatedAtUtc, DateTimeOffset.UtcNow), ct);
+    }
+
     public async Task<IReadOnlyList<RoleDefinition>> ListRolesAsync(CancellationToken cancellationToken)
     {
         var roles = await _dbContext.Roles

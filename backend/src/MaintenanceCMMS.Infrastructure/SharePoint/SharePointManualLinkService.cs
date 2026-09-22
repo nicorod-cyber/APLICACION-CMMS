@@ -25,6 +25,7 @@ public sealed class SharePointManualLinkService : SharePointStorageBase
         DocumentStorageSaveRequest request,
         CancellationToken cancellationToken)
     {
+        UploadPolicy.Validate(request.FileName, request.ContentType, request.Content, request.Purpose == DocumentStoragePurpose.Evidence, request.EntityType == "WorkOrderSignature" ? 2 * 1024 * 1024 : request.Purpose == DocumentStoragePurpose.Evidence ? 10 * 1024 * 1024 : UploadPolicy.MaximumBytes);
         var relativeFolder = BuildRelativeFolder(new DocumentStoragePathRequest(
             request.Module,
             request.EntityType,
@@ -65,7 +66,7 @@ public sealed class SharePointManualLinkService : SharePointStorageBase
         ManualDocumentLinkRequest request,
         CancellationToken cancellationToken)
     {
-        DomainGuard.AgainstEmpty(request.Url, nameof(request.Url));
+        DocumentUrlPolicy.RequireHttps(request.Url, Options.AllowedHosts);
         if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var parsed) ||
             parsed.Scheme is not ("http" or "https"))
         {

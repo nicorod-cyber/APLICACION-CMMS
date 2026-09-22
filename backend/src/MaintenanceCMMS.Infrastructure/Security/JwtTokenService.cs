@@ -15,6 +15,7 @@ public sealed class JwtTokenService : IJwtTokenService
     public JwtTokenService(IOptions<JwtOptions> options)
     {
         _options = options.Value;
+        SessionSecurity.ValidateOptions(_options);
     }
 
     public LoginResponse CreateToken(UserAccount user, IReadOnlyCollection<string> permissions)
@@ -29,6 +30,8 @@ public sealed class JwtTokenService : IJwtTokenService
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, user.Id),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
+            new(SessionSecurity.StampClaim, SessionSecurity.Stamp(user, _options)),
             new(ClaimTypes.NameIdentifier, user.Id),
             new(ClaimTypes.Name, user.Username),
             new(ClaimTypes.Email, user.Email),

@@ -20,7 +20,7 @@ public sealed class FileMetadataSqlServerTests
         var storage = CreateStorage(database.DbContext, root);
 
         var stored = await storage.SaveDocumentAsync(new DocumentStorageSaveRequest(
-            "Documents", "Activo", "ACT-1", "evidencia.txt", "text/plain", "contenido"u8.ToArray(), "tester",
+            "Documents", "Activo", "ACT-1", "evidencia.png", "image/png", SecurityTestFiles.Png, "tester",
             DocumentStoragePurpose.Evidence, "FAE-1", "ACT-1"), CancellationToken.None);
 
         await using var secondContext = database.NewContext();
@@ -33,7 +33,7 @@ public sealed class FileMetadataSqlServerTests
         Assert.Equal(stored.FileKey, metadata!.FileKey);
         Assert.Single(related);
         Assert.NotNull(download);
-        Assert.Equal("contenido", System.Text.Encoding.UTF8.GetString(download!.Content));
+        Assert.Equal(SecurityTestFiles.Png, download!.Content);
         Assert.Equal(1, await secondContext.Files.CountAsync());
         Assert.NotNull((await secondContext.Files.SingleAsync()).Checksum);
     }
@@ -45,7 +45,7 @@ public sealed class FileMetadataSqlServerTests
         var root = Path.Combine(Path.GetTempPath(), "cmms-file-delete-tests", Guid.NewGuid().ToString("N"));
         var storage = CreateStorage(database.DbContext, root);
         var stored = await storage.SaveDocumentAsync(new DocumentStorageSaveRequest(
-            "Documents", "Activo", "ACT-1", "referenciado.txt", "text/plain", "contenido"u8.ToArray(), "tester"), CancellationToken.None);
+            "Documents", "Activo", "ACT-1", "referenciado.png", "image/png", SecurityTestFiles.Png, "tester"), CancellationToken.None);
         var file = await database.DbContext.Files.SingleAsync();
         var documentType = new DocumentTypeEntity { Code = "TEST", Name = "Test", IsActive = true };
         var document = new DocumentEntity { Code = "DOC-FILE", Title = "Documento", DocumentType = documentType, CreatedByUserId = "tester" };
@@ -76,7 +76,7 @@ public sealed class FileMetadataSqlServerTests
         var storage = CreateStorage(database.DbContext, root);
 
         await Assert.ThrowsAnyAsync<Exception>(() => storage.SaveDocumentAsync(new DocumentStorageSaveRequest(
-            "Documents", "Activo", new string('x', 241), "fallo.txt", "text/plain", "contenido"u8.ToArray(), "tester"), CancellationToken.None));
+            "Documents", "Activo", new string('x', 241), "fallo.png", "image/png", SecurityTestFiles.Png, "tester"), CancellationToken.None));
 
         Assert.Empty(Directory.Exists(root) ? Directory.GetFiles(root, "*", SearchOption.AllDirectories) : []);
         Assert.Empty(await database.DbContext.Files.ToArrayAsync());

@@ -14,7 +14,7 @@ namespace MaintenanceCMMS.Infrastructure.SharePoint;
 
 public sealed class GraphSharePointService : SharePointStorageBase
 {
-    private static readonly HttpClient HttpClient = new();
+    private static readonly HttpClient HttpClient = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(100) };
 
     public GraphSharePointService(CmmsDbContext dbContext, IAuditService auditService, IOptions<SharePointOptions> options)
         : base(dbContext, auditService, options.Value) { }
@@ -24,6 +24,7 @@ public sealed class GraphSharePointService : SharePointStorageBase
 
     public override async Task<DocumentStorageInfo> SaveDocumentAsync(DocumentStorageSaveRequest request, CancellationToken cancellationToken)
     {
+        UploadPolicy.Validate(request.FileName, request.ContentType, request.Content, request.Purpose == DocumentStoragePurpose.Evidence, request.EntityType == "WorkOrderSignature" ? 2 * 1024 * 1024 : request.Purpose == DocumentStoragePurpose.Evidence ? 10 * 1024 * 1024 : UploadPolicy.MaximumBytes);
         DomainGuard.AgainstEmpty(request.FileName, nameof(request.FileName));
         if (request.Content.Length == 0) throw new DomainException("El documento no contiene bytes para guardar.");
         EnsureConfigured();
@@ -50,7 +51,7 @@ public sealed class GraphSharePointService : SharePointStorageBase
 
     public override async Task<DocumentStorageInfo> SaveManualLinkAsync(ManualDocumentLinkRequest request, CancellationToken cancellationToken)
     {
-        DomainGuard.AgainstEmpty(request.Url, nameof(request.Url));
+        DocumentUrlPolicy.RequireHttps(request.Url, Options.AllowedHosts);
         var relativeFolder = BuildRelativeFolder(new DocumentStoragePathRequest(request.Module, request.EntityType, request.EntityId, request.Purpose, request.FaenaCodigo, request.ActivoCodigo, request.OtNumero));
         var safeName = SanitizeFileName(request.FileName);
         var fileKey = BuildUniqueFileKey(relativeFolder, safeName);
@@ -65,7 +66,7 @@ public sealed class GraphSharePointService : SharePointStorageBase
         var client = HttpClient;
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildContentUrl(BuildRemotePath(item.FileKey)));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetAccessTokenAsync(cancellationToken));
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await DownloadResponseAsync(request, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         await EnsureSuccessAsync(response, "descargar el archivo desde Microsoft Graph", cancellationToken);
         return new DocumentStorageDownload(item.FileName, item.ContentType, await response.Content.ReadAsByteArrayAsync(cancellationToken));
@@ -97,6 +98,7 @@ public sealed class GraphSharePointService : SharePointStorageBase
         using var sessionJson = JsonDocument.Parse(await sessionResponse.Content.ReadAsStreamAsync(cancellationToken));
         var uploadUrl = sessionJson.RootElement.TryGetProperty("uploadUrl", out var uploadUrlElement) ? uploadUrlElement.GetString() : null;
         if (string.IsNullOrWhiteSpace(uploadUrl)) throw new DomainException("Microsoft Graph no devolvio una URL de carga.");
+        RequireTransferUrl(uploadUrl);
         var chunkSize = Math.Max(320 * 1024, Options.UploadChunkBytes); chunkSize -= chunkSize % (320 * 1024); if (chunkSize == 0) chunkSize = 320 * 1024;
         GraphItem? completed = null;
         for (var offset = 0; offset < content.Length; offset += chunkSize)
@@ -146,21 +148,42 @@ public sealed class GraphSharePointService : SharePointStorageBase
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, string operation, CancellationToken cancellationToken)
     {
         if (response.IsSuccessStatusCode) return;
-        var detail = await response.Content.ReadAsStringAsync(cancellationToken);
-        throw new DomainException($"No fue posible {operation}. Microsoft Graph respondio {(int)response.StatusCode}: {detail[..Math.Min(500, detail.Length)]}");
+        await Task.CompletedTask;
+        throw new DomainException($"No fue posible {operation}. Microsoft Graph respondio {(int)response.StatusCode}.");
     }
 
-    private string BuildRemotePath(string fileKey) { var root = Options.BaseFolder.Trim().Trim('/'); return string.IsNullOrWhiteSpace(root) ? fileKey.Trim('/') : $"{root}/{fileKey.Trim('/')}"; }
+    private string BuildRemotePath(string fileKey) { if (ValidateRelativePath(fileKey).Count > 0 || fileKey.Contains('%') || fileKey.Contains(':')) throw new DomainException("Clave documental no valida."); var root = Options.BaseFolder.Trim().Trim('/'); return string.IsNullOrWhiteSpace(root) ? fileKey.Trim('/') : $"{root}/{fileKey.Trim('/')}"; }
     private string BuildContentUrl(string remotePath) => BuildItemUrl(remotePath) + ":/content";
     private string BuildItemUrl(string remotePath)
     {
-        var graphBase = Options.GraphBaseUrl.TrimEnd('/');
+        var graphBase = DocumentUrlPolicy.RequireHttps(Options.GraphBaseUrl, ["graph.microsoft.com"]).AbsoluteUri.TrimEnd('/');
         var path = string.Join('/', remotePath.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString));
         return $"{graphBase}/sites/{Uri.EscapeDataString(Options.SiteId)}/drives/{Uri.EscapeDataString(Options.DriveId)}/root:/{path}";
     }
     private void EnsureConfigured()
     {
         if (string.IsNullOrWhiteSpace(Options.TenantId) || string.IsNullOrWhiteSpace(Options.ClientId) || string.IsNullOrWhiteSpace(Options.ClientSecret) || string.IsNullOrWhiteSpace(Options.SiteId) || string.IsNullOrWhiteSpace(Options.DriveId)) throw new DomainException("El proveedor Microsoft Graph requiere TenantId, ClientId, ClientSecret, SiteId y DriveId.");
+    }
+    private void RequireTransferUrl(string value)
+    {
+        var uri = DocumentUrlPolicy.RequireHttps(value);
+        var hosts = Options.GraphTransferHosts;
+        if (uri.Port != 443 || (hosts.Length > 0 ? !hosts.Contains(uri.IdnHost, StringComparer.OrdinalIgnoreCase) : !uri.IdnHost.EndsWith(".sharepoint.com", StringComparison.OrdinalIgnoreCase)))
+            throw new DomainException("Microsoft Graph devolvio un host de transferencia no autorizado.");
+    }
+    private async Task<HttpResponseMessage> DownloadResponseAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        for (var redirects = 0; (int)response.StatusCode is 301 or 302 or 303 or 307 or 308; redirects++)
+        {
+            var location = response.Headers.Location;
+            response.Dispose();
+            if (redirects >= 3 || location is null || !location.IsAbsoluteUri) throw new DomainException("Redireccion de descarga no valida.");
+            RequireTransferUrl(location.AbsoluteUri);
+            using var transfer = new HttpRequestMessage(HttpMethod.Get, location);
+            response = await HttpClient.SendAsync(transfer, HttpCompletionOption.ResponseHeadersRead, ct);
+        }
+        return response;
     }
     private sealed record GraphItem(string? WebUrl);
 }

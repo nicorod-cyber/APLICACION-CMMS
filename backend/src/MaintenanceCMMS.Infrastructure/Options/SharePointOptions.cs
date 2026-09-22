@@ -2,6 +2,8 @@ namespace MaintenanceCMMS.Infrastructure.Options;
 
 public sealed class SharePointOptions
 {
+    public string[] AllowedHosts { get; init; } = [];
+    public string[] GraphTransferHosts { get; init; } = [];
     public string Provider { get; init; } = "LocalSimulation";
     public string LocalPath { get; init; } = "data/sharepoint-simulated";
     public string ManualRootUrl { get; init; } = string.Empty;

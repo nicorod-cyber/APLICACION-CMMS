@@ -43,7 +43,7 @@ public sealed class UserManagementService : IUserManagementService
         CancellationToken cancellationToken)
     {
         ValidateUserInput(request.Username, request.Email, request.DisplayName);
-        DomainGuard.AgainstEmpty(request.Password, nameof(request.Password));
+        PasswordPolicy.EnsureValid(request.Password);
 
         var existingUsername = await _identityStore.FindUserByUsernameAsync(request.Username, cancellationToken);
         if (existingUsername is not null)

@@ -1,0 +1,89 @@
+--- a/infra/docker/backend.Dockerfile
++++ b/infra/docker/backend.Dockerfile
+@@ -24,5 +24,7 @@
+ EXPOSE 8080
+ 
+ COPY --from=build /app/publish .
++RUN mkdir -p /app/data/imports /app/data/templates /app/data/sharepoint-simulated /app/logs && chown -R app:app /app/data /app/logs
++USER app
+ ENTRYPOINT ["dotnet", "MaintenanceCMMS.Api.dll"]
+ 
+--- a/infra/docker/frontend.Dockerfile
++++ b/infra/docker/frontend.Dockerfile
+@@ -1,4 +1,4 @@
+-FROM node:20-alpine AS build
++FROM node:22-alpine AS build
+ WORKDIR /app
+ 
+ COPY frontend/package.json ./
+@@ -8,7 +8,7 @@
+ COPY frontend ./
+ RUN npm run build
+ 
+-FROM nginx:1.27-alpine AS runtime
++FROM nginxinc/nginx-unprivileged:stable-alpine AS runtime
+ COPY infra/nginx/frontend.conf /etc/nginx/conf.d/default.conf
+ COPY --from=build /app/dist /usr/share/nginx/html
+-EXPOSE 80
++EXPOSE 8080
+--- a/infra/nginx/frontend.conf
++++ b/infra/nginx/frontend.conf
+@@ -1,5 +1,5 @@
+ server {
+-    listen 80;
++    listen 8080;
+     server_name _;
+     server_tokens off;
+     client_max_body_size 25m;
+--- a/infra/nginx/default.conf
++++ b/infra/nginx/default.conf
+@@ -1,5 +1,5 @@
+ server {
+-    listen 80;
++    listen 8080;
+     server_name _;
+ 
+     client_max_body_size 25m;
+@@ -23,7 +23,7 @@
+     }
+ 
+     location / {
+-        proxy_pass http://frontend:80/;
++        proxy_pass http://frontend:8080/;
+         proxy_http_version 1.1;
+         proxy_set_header Host $host;
+         proxy_set_header X-Real-IP $remote_addr;
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -70,17 +70,17 @@
+       dockerfile: infra/docker/frontend.Dockerfile
+     container_name: maintenance-cmms-frontend
+     ports:
+-      - "5173:80"
++      - "5173:8080"
+     depends_on:
+       - backend
+ 
+   nginx:
+-    image: nginx:1.27-alpine
++    image: nginxinc/nginx-unprivileged:stable-alpine
+     container_name: maintenance-cmms-nginx
+     volumes:
+       - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+     ports:
+-      - "8080:80"
++      - "8080:8080"
+     depends_on:
+       - backend
+       - frontend
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -19,7 +19,7 @@
+     "lucide-react": "^0.468.0",
+     "react": "^18.3.1",
+     "react-dom": "^18.3.1",
+-    "react-router-dom": "^6.30.6",
++    "react-router-dom": "^7.18.4",
+     "zustand": "^4.5.5"
+   },
+   "devDependencies": {

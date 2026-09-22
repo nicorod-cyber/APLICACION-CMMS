@@ -24,13 +24,13 @@ async function login(page: Page, username = admin) {
 async function openAsset(page: Page) {
   await login(page);
   await page.goto(`/equipos/activos/${encodeURIComponent(requireValue(assetCode, "E2E_ASSET_CODE"))}`);
-  await expect(page.getByRole("heading")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 }
 
 async function openUnit(page: Page) {
   await login(page);
   await page.goto(`/equipos/unidades/${encodeURIComponent(requireValue(unitCode, "E2E_UNIT_CODE"))}`);
-  await expect(page.getByRole("heading")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -79,7 +79,7 @@ test("opens document management and versions", async ({ page }) => {
 
 test("opens composite-unit detail and shared editor", async ({ page }) => {
   await openUnit(page);
-  await page.getByRole("button", { name: "Editar identificacion" }).click();
+  await page.getByRole("button", { name: /Editar identificaci/ }).click();
   await expect(page.getByRole("dialog", { name: /Editar identific/ })).toBeVisible();
 });
 
@@ -108,7 +108,7 @@ test("viewer cannot open restricted unit mutations", async ({ page }) => {
   const username = requireValue(viewer, "E2E_VIEWER_USERNAME");
   await login(page, username);
   await page.goto(`/equipos/unidades/${encodeURIComponent(requireValue(unitCode, "E2E_UNIT_CODE"))}`);
-  await expect(page.getByRole("button", { name: "Editar identificacion" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /Editar identificaci/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Trasladar unidad completa" })).toBeDisabled();
 });
 

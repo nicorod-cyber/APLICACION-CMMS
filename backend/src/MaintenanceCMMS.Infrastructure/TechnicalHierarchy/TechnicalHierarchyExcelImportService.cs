@@ -111,7 +111,8 @@ public sealed class TechnicalHierarchyExcelImportService : ITechnicalHierarchyEx
         catch (Exception ex)
         {
             await transaction.RollbackAsync(ct);
-            errors.Add(ex.Message);
+            System.Diagnostics.Trace.TraceError("Hierarchy import failed: {0}", ex.GetType().Name);
+            errors.Add(ex is DomainException ? ex.Message : "No fue posible aplicar la importacion.");
             return Result(files, rowsRead, 0, 0, rowsRead, warnings, errors, missing);
         }
 

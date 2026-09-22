@@ -1,3 +1,4 @@
+import { SafeHtml } from "../../shared/security/SafeHtml";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { BellRing, CheckCircle2, Eye, FileText, Mail, RefreshCw, Save, Send, XCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -679,7 +680,7 @@ function NotificationsView({
               <Detail label="PDF" value={selected.pdfFileKey ?? "-"} />
               <Detail label="Ruta" value={selected.pdfPath ?? "-"} />
             </dl>
-            <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-700 dark:bg-slate-950 dark:text-slate-200" dangerouslySetInnerHTML={{ __html: selected.body }} />
+            <SafeHtml className="rounded-md bg-slate-50 p-3 text-sm text-slate-700 dark:bg-slate-950 dark:text-slate-200" html={selected.body} />
             {selected.error ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{selected.error}</div> : null}
           </>
         ) : null}
@@ -767,7 +768,7 @@ function TemplatesView({
         </form>
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <h2 className="text-base font-semibold text-slate-950 dark:text-white">Vista previa</h2>
-          <div className="mt-4 min-h-96 overflow-auto rounded-md bg-slate-50 p-4 text-sm text-slate-800 dark:bg-slate-950 dark:text-slate-100" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+          <SafeHtml className="mt-4 min-h-96 overflow-auto rounded-md bg-slate-50 p-4 text-sm text-slate-800 dark:bg-slate-950 dark:text-slate-100" html={previewHtml} />
         </section>
       </div>
     </section>

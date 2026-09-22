@@ -36,7 +36,7 @@ public sealed class EmailService : IEmailService
             {
                 From = new MailAddress(ResolveSender()),
                 Subject = message.Subject,
-                Body = message.HtmlBody,
+                Body = SafeTemplateHtml.Sanitize(message.HtmlBody),
                 IsBodyHtml = true
             };
 
@@ -52,7 +52,8 @@ public sealed class EmailService : IEmailService
         }
         catch (Exception ex)
         {
-            return new EmailSendResult(false, provider, null, ex.Message);
+            System.Diagnostics.Trace.TraceError("Mail delivery failed: {0}", ex.GetType().Name);
+            return new EmailSendResult(false, provider, null, "No fue posible enviar la notificacion.");
         }
     }
 

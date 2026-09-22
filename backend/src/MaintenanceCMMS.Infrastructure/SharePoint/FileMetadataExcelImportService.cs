@@ -1,3 +1,5 @@
+using MaintenanceCMMS.Infrastructure.Options;
+using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.Text.Json;
 using ClosedXML.Excel;
@@ -12,10 +14,12 @@ namespace MaintenanceCMMS.Infrastructure.SharePoint;
 public sealed class FileMetadataExcelImportService : IFileMetadataExcelImportService
 {
     private readonly CmmsDbContext _dbContext;
+    private readonly SharePointOptions _options;
 
-    public FileMetadataExcelImportService(CmmsDbContext dbContext)
+    public FileMetadataExcelImportService(CmmsDbContext dbContext, IOptions<SharePointOptions>? options = null)
     {
         _dbContext = dbContext;
+        _options = options?.Value ?? new SharePointOptions();
     }
 
     public async Task<FileMetadataExcelImportResult> ImportAsync(
@@ -179,7 +183,7 @@ public sealed class FileMetadataExcelImportService : IFileMetadataExcelImportSer
             WorkOrderNumber = workOrderNumber,
             LogicalPath = relativePath,
             PhysicalLocation = EmptyToNull(Value(row, columns, "LocalPath")),
-            LogicalUri = EmptyToNull(Value(row, columns, "Url")) ?? SharePointStorageBase.BuildVirtualUrl(fileKey),
+            LogicalUri = DocumentUrlPolicy.RequireDocumentLink(EmptyToNull(Value(row, columns, "Url")) ?? SharePointStorageBase.BuildVirtualUrl(fileKey), _options.AllowedHosts),
             MimeType = EmptyToNull(Value(row, columns, "ContentType")) ?? "application/octet-stream",
             SizeBytes = sizeBytes,
             Checksum = checksum,

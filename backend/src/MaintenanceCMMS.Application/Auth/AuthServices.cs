@@ -44,6 +44,12 @@ public interface IIdentityStore
 
     Task UpsertUserAsync(UserAccount user, CancellationToken cancellationToken);
 
+    async Task RevokeSessionsAsync(string userId, CancellationToken ct)
+    {
+        var account = await FindUserByIdAsync(userId, ct);
+        if (account is not null) await UpsertUserAsync(account with { UpdatedAtUtc = DateTimeOffset.UtcNow }, ct);
+    }
+
     Task<IReadOnlyList<RoleDefinition>> ListRolesAsync(CancellationToken cancellationToken);
 
     Task UpsertRolesAsync(IReadOnlyCollection<RoleDefinition> roles, CancellationToken cancellationToken);

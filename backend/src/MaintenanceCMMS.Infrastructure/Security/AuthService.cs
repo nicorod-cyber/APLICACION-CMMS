@@ -9,6 +9,7 @@ namespace MaintenanceCMMS.Infrastructure.Security;
 
 public sealed class AuthService : IAuthService
 {
+    private static readonly string DummyHash = new PasswordHasher().Hash(Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
     private readonly IIdentityStore _identityStore;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IJwtTokenService _jwtTokenService;
@@ -31,10 +32,13 @@ public sealed class AuthService : IAuthService
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken)
     {
+        if (request.Username is null || request.Username.Length > 320 || request.Password is null || request.Password.Length > 1024)
+            throw new UnauthorizedAccessException("Usuario o clave invalidos.");
         var username = Normalize(request.Username);
         var user = await _identityStore.FindUserByUsernameAsync(username, cancellationToken);
 
-        if (user is null || !_passwordHasher.Verify(request.Password, user.PasswordHash))
+        var passwordValid = _passwordHasher.Verify(request.Password, user?.PasswordHash ?? DummyHash);
+        if (user is null || !passwordValid)
         {
             await _auditService.RecordAsync(new AuditEventRequest(
                 username,
@@ -61,9 +65,14 @@ public sealed class AuthService : IAuthService
                 Success: false,
                 Detail: "Usuario bloqueado o inactivo"), cancellationToken);
 
-            throw new InvalidOperationException("Usuario bloqueado o inactivo.");
+            throw new UnauthorizedAccessException("Usuario o clave invalidos.");
         }
 
+        if (PasswordHasher.NeedsRehash(user.PasswordHash))
+        {
+            await _identityStore.UpsertUserAsync(user with { PasswordHash = _passwordHasher.Hash(request.Password), UpdatedAtUtc = DateTimeOffset.UtcNow }, cancellationToken);
+            user = await _identityStore.FindUserByIdAsync(user.Id, cancellationToken) ?? throw new UnauthorizedAccessException();
+        }
         var permissions = await ResolvePermissionsAsync(user.Roles, cancellationToken);
         var response = _jwtTokenService.CreateToken(user, permissions);
 
@@ -149,7 +158,8 @@ public sealed class AuthService : IAuthService
     }
     public async Task LogoutAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
-        var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "anonymous";
+        var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? throw new UnauthorizedAccessException();
+        await _identityStore.RevokeSessionsAsync(userId, cancellationToken);
         await _auditService.RecordAsync(new AuditEventRequest(
             userId,
             "auth.logout",

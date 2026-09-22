@@ -47,7 +47,7 @@ public abstract class SharePointStorageBase : IDocumentStorageService
             SupportsUpload,
             RequiresManualLink,
             IsGraphConfigured(),
-            Mode == DocumentStorageMode.LocalSimulation ? ResolveLocalRoot() : Options.ManualRootUrl,
+            Mode == DocumentStorageMode.LocalSimulation ? string.Empty : Options.ManualRootUrl,
             string.IsNullOrWhiteSpace(Options.SiteUrl) ? null : Options.SiteUrl);
     }
 
@@ -172,7 +172,8 @@ public abstract class SharePointStorageBase : IDocumentStorageService
             return null;
         }
 
-        var content = await File.ReadAllBytesAsync(item.LocalPath, cancellationToken);
+        var safePath = StoragePathPolicy.Resolve(ResolveLocalRoot(), item.LocalPath, allowAbsolute: true);
+        var content = await File.ReadAllBytesAsync(safePath, cancellationToken);
         return new DocumentStorageDownload(item.FileName, item.ContentType, content);
     }
 
@@ -251,6 +252,7 @@ public abstract class SharePointStorageBase : IDocumentStorageService
             throw new DomainException("La clave logica del archivo ya existe.");
         }
 
+        if (!string.IsNullOrWhiteSpace(url)) url = DocumentUrlPolicy.RequireDocumentLink(url, Options.AllowedHosts);
         var previousVersion = await _dbContext.Files
             .Where(item => item.LogicalPath == relativePath && item.FileName == fileName)
             .Select(item => (int?)item.FileVersion)
@@ -302,7 +304,7 @@ public abstract class SharePointStorageBase : IDocumentStorageService
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(file.PhysicalLocation) || !File.Exists(file.PhysicalLocation)) return Task.FromResult(false);
-        File.Delete(file.PhysicalLocation);
+        File.Delete(StoragePathPolicy.Resolve(ResolveLocalRoot(), file.PhysicalLocation, allowAbsolute: true));
         return Task.FromResult(true);
     }
     protected static string ComputeChecksum(byte[] content) => Convert.ToHexString(SHA256.HashData(content));
@@ -336,9 +338,7 @@ public abstract class SharePointStorageBase : IDocumentStorageService
 
     protected static string SanitizeFileName(string value)
     {
-        value = Path.GetFileName(value);
-        foreach (var invalid in Path.GetInvalidFileNameChars()) value = value.Replace(invalid, '-');
-        return string.IsNullOrWhiteSpace(value) ? "documento.bin" : value.Trim();
+        return StoragePathPolicy.SafeFileName(value);
     }
 
     internal static string BuildVirtualUrl(string relativePath) => $"/api/sharepoint/download?fileKey={Uri.EscapeDataString(relativePath)}";
@@ -418,4 +418,4 @@ public abstract class SharePointStorageBase : IDocumentStorageService
 
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
     private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-}
+}

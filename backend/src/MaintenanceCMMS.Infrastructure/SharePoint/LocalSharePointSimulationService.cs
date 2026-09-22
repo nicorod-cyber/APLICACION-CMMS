@@ -25,6 +25,7 @@ public sealed class LocalSharePointSimulationService : SharePointStorageBase
         DocumentStorageSaveRequest request,
         CancellationToken cancellationToken)
     {
+        UploadPolicy.Validate(request.FileName, request.ContentType, request.Content, request.Purpose == DocumentStoragePurpose.Evidence, request.EntityType == "WorkOrderSignature" ? 2 * 1024 * 1024 : request.Purpose == DocumentStoragePurpose.Evidence ? 10 * 1024 * 1024 : UploadPolicy.MaximumBytes);
         DomainGuard.AgainstEmpty(request.FileName, nameof(request.FileName));
         if (request.Content.Length == 0)
         {
@@ -47,7 +48,7 @@ public sealed class LocalSharePointSimulationService : SharePointStorageBase
 
         var safeName = SanitizeFileName(request.FileName);
         var fileKey = BuildUniqueFileKey(relativeFolder, safeName);
-        var localPath = Path.Combine(ResolveLocalRoot(), fileKey.Replace('/', Path.DirectorySeparatorChar));
+        var localPath = StoragePathPolicy.Resolve(ResolveLocalRoot(), fileKey);
         var directory = Path.GetDirectoryName(localPath) ?? ResolveLocalRoot();
         Directory.CreateDirectory(directory);
         await File.WriteAllBytesAsync(localPath, request.Content, cancellationToken);
@@ -116,7 +117,7 @@ public sealed class LocalSharePointSimulationService : SharePointStorageBase
             throw new DomainException($"Ruta SharePoint invalida: {string.Join("; ", errors)}");
         }
 
-        var localPath = Path.Combine(ResolveLocalRoot(), relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var localPath = StoragePathPolicy.Resolve(ResolveLocalRoot(), relativePath);
         var existed = Directory.Exists(localPath);
         Directory.CreateDirectory(localPath);
 
@@ -132,7 +133,7 @@ public sealed class LocalSharePointSimulationService : SharePointStorageBase
         ManualDocumentLinkRequest request,
         CancellationToken cancellationToken)
     {
-        DomainGuard.AgainstEmpty(request.Url, nameof(request.Url));
+        DocumentUrlPolicy.RequireHttps(request.Url, Options.AllowedHosts);
         var relativeFolder = BuildRelativeFolder(new DocumentStoragePathRequest(
             request.Module,
             request.EntityType,

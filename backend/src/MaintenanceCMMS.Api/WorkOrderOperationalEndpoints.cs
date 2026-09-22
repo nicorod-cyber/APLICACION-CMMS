@@ -59,6 +59,7 @@ internal static class WorkOrderOperationalEndpoints
     {
         try
         {
+            if(await service.GetByIdAsync(numeroOt,UserAccessContext.FromClaims(principal),ct) is null)return Results.NotFound();
             var form=await request.ReadFormAsync(ct);var file=form.Files.GetFile("file");if(file is null||file.Length==0)return Results.Problem(statusCode:400,detail:"Debe adjuntar un archivo.");if(file.Length>10*1024*1024)return Results.Problem(statusCode:400,detail:"El archivo supera 10 MB.");if(string.IsNullOrWhiteSpace(file.ContentType)||!file.ContentType.StartsWith("image/",StringComparison.OrdinalIgnoreCase))return Results.Problem(statusCode:400,detail:"Solo se permiten imágenes.");
             await using var stream=file.OpenReadStream();using var memory=new MemoryStream();await stream.CopyToAsync(memory,ct);var actor=UserAccessContext.FromClaims(principal);var saved=await storage.SaveEvidenceAsync(new DocumentStorageSaveRequest("WorkOrders","WorkOrderEvidence",$"{numeroOt}:{codigoTarea}",file.FileName,file.ContentType,memory.ToArray(),actor.UserId,DocumentStoragePurpose.Evidence,OtNumero:numeroOt),ct);var fileId=await db.Files.Where(x=>x.FileKey==saved.FileKey).Select(x=>x.Id).SingleAsync(ct);var response=await service.RegisterUploadedEvidenceAsync(numeroOt,codigoTarea,new UploadWorkOrderEvidenceRequest(form["tipo"].FirstOrDefault()??string.Empty,form["descripcion"].FirstOrDefault(),DateTimeOffset.TryParse(form["fechaCapturaUtc"].FirstOrDefault(),out var captured)?captured:null),fileId,actor,ct);return response is null?Results.NotFound():Results.Ok(response);
         }
@@ -68,6 +69,7 @@ internal static class WorkOrderOperationalEndpoints
     {
         try
         {
+            if(await service.GetByIdAsync(numeroOt,UserAccessContext.FromClaims(principal),ct) is null)return Results.NotFound();
             var form=await request.ReadFormAsync(ct);var file=form.Files.GetFile("file");if(file is null||file.Length==0)return Results.Problem(statusCode:400,detail:"Debe adjuntar una firma.");if(file.Length>2*1024*1024)return Results.Problem(statusCode:400,detail:"La firma supera 2 MB.");if(string.IsNullOrWhiteSpace(file.ContentType)||!file.ContentType.StartsWith("image/",StringComparison.OrdinalIgnoreCase))return Results.Problem(statusCode:400,detail:"La firma debe ser imagen.");
             await using var stream=file.OpenReadStream();using var memory=new MemoryStream();await stream.CopyToAsync(memory,ct);var actor=UserAccessContext.FromClaims(principal);var saved=await storage.SaveEvidenceAsync(new DocumentStorageSaveRequest("WorkOrders","WorkOrderSignature",numeroOt,file.FileName,file.ContentType,memory.ToArray(),actor.UserId,DocumentStoragePurpose.Evidence,OtNumero:numeroOt),ct);var fileId=await db.Files.Where(x=>x.FileKey==saved.FileKey).Select(x=>x.Id).SingleAsync(ct);var response=await service.RegisterOwnSignatureAsync(numeroOt,new RegisterOwnWorkOrderSignatureRequest(form["comentario"].FirstOrDefault()),fileId,actor,ct);return response is null?Results.NotFound():Results.Ok(response);
         }
@@ -77,6 +79,19 @@ internal static class WorkOrderOperationalEndpoints
     {try{var value=await action();return value is null?Results.NotFound():Results.Ok(value);}catch(Exception ex){return Error(ex);}}
     private static async Task<IResult> Many<T>(Func<Task<IReadOnlyCollection<T>>> action)
     {try{return Results.Ok(await action());}catch(Exception ex){return Error(ex);}}
-    private static IResult Error(Exception ex)=>ex switch
-    {UnauthorizedAccessException=>Results.Problem(statusCode:403,detail:ex.Message),DomainException=>Results.Problem(statusCode:422,detail:ex.Message),_=>Results.Problem(statusCode:500,title:"Error interno.")};
+    private static IResult Error(Exception ex) => new OperationalErrorResult(ex);
+
+    private sealed class OperationalErrorResult(Exception exception) : IResult
+    {
+        public async Task ExecuteAsync(HttpContext context)
+        {
+            var status = exception is UnauthorizedAccessException ? 403 : exception is DomainException ? 422 : 500;
+            if (status == 500)
+                context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("WorkOrderOperations")
+                    .LogError("Work-order request failed. TraceId: {TraceId}; ErrorType: {ErrorType}", context.TraceIdentifier, exception.GetType().Name);
+            await Results.Problem(statusCode: status, title: status == 500 ? "Error interno." : null,
+                detail: status == 500 ? null : exception.Message,
+                extensions: new Dictionary<string, object?> { ["traceId"] = context.TraceIdentifier }).ExecuteAsync(context);
+        }
+    }
 }

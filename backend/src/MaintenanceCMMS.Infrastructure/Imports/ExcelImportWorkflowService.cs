@@ -30,6 +30,7 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
     public async Task<ExcelImportPreviewResult> UploadAsync(ExcelImportUploadCommand command, CancellationToken ct)
     {
         DomainGuard.AgainstEmpty(command.Entity, nameof(command.Entity)); DomainGuard.AgainstEmpty(command.OriginalFileName, nameof(command.OriginalFileName)); DomainGuard.AgainstEmpty(command.UploadedBy, nameof(command.UploadedBy));
+        UploadPolicy.Validate(command.OriginalFileName, ContentType, command.Content);
         var schema = Schema(command.Entity); var handler = _handlers.GetRequired(schema.SchemaName); var workbook = ReadWorkbook(command.Content, schema);
         var input = workbook.Rows.Select((values, index) => new SqlServerImportRow(index + 2, values)).ToArray();
         var preview = await PreviewAsync(schema, handler, workbook.Headers, input, ct);
@@ -71,7 +72,7 @@ public sealed class ExcelImportWorkflowService : IExcelImportWorkflowService
         }
         catch (Exception ex) when (ex is not DomainException)
         {
-            _db.ChangeTracker.Clear(); var failed = await LoadAsync(key, true, ct) ?? throw new InvalidOperationException("No se encontró la importación tras revertir la transacción."); failed.Status = (int)ImportStatus.Failed; failed.RejectReason = ex.Message.Length > 2000 ? ex.Message[..2000] : ex.Message; _db.ImportEvents.Add(Event(failed.Id, failed.Status, approvedBy, "La aplicación falló; no se confirmaron cambios del maestro.")); await _db.SaveChangesAsync(ct); await AuditAsync(approvedBy, "import.failed", failed, AuditSeverity.Critical, ex.Message, ct); throw;
+            _db.ChangeTracker.Clear(); var failed = await LoadAsync(key, true, ct) ?? throw new InvalidOperationException("No se encontró la importación tras revertir la transacción."); failed.Status = (int)ImportStatus.Failed; failed.RejectReason = "Error interno al aplicar la importacion. Consulte la auditoria de la operacion."; _db.ImportEvents.Add(Event(failed.Id, failed.Status, approvedBy, "La aplicación falló; no se confirmaron cambios del maestro.")); await _db.SaveChangesAsync(ct); await AuditAsync(approvedBy, "import.failed", failed, AuditSeverity.Critical, ex.Message, ct); throw;
         }
         await AuditAsync(approvedBy, "import.applied", entity, AuditSeverity.Critical, "Aprobación de importación Excel", ct); return ToPreview(entity);
 

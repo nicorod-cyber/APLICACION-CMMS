@@ -70,7 +70,8 @@ public sealed class SqlDataProvider : IDataProvider
                 }
                 catch (Exception ex)
                 {
-                    errors.Add(ex.Message);
+                    System.Diagnostics.Trace.TraceError("Data validation failed: {0}", ex.GetType().Name);
+                    errors.Add("No fue posible validar los datos.");
                 }
             }
         }

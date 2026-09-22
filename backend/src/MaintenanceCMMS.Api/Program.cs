@@ -30,6 +30,7 @@ using MaintenanceCMMS.Application.WorkOrders;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
 using MaintenanceCMMS.Infrastructure;
+using MaintenanceCMMS.Infrastructure.Security;
 using MaintenanceCMMS.Infrastructure.Data.SqlServer;
 using MaintenanceCMMS.Infrastructure.Data.Excel;
 using MaintenanceCMMS.Infrastructure.Options;
@@ -51,12 +52,15 @@ builder.Host.UseSerilog((context, services, loggerConfiguration) =>
         .ReadFrom.Configuration(context.Configuration)
         .ReadFrom.Services(services)
         .Enrich.FromLogContext()
-        .WriteTo.Console();
+        .WriteTo.Console(new Serilog.Formatting.Json.JsonFormatter());
 });
 
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddHealthChecks();
+builder.Services.AddLoginRateLimiting(builder.Configuration);
+builder.Services.AddScoped<FileAccessPolicy>();
+builder.WebHost.ConfigureKestrel(options => { options.AddServerHeader = false; options.Limits.MaxRequestBodySize = 25 * 1024 * 1024; });
 var preventiveJobsEnabled = builder.Configuration.GetValue("PreventiveMaintenance:JobsEnabled", true);
 var documentaryJobsEnabled = builder.Configuration.GetValue("DocumentCompliance:JobsEnabled", true);
 if (preventiveJobsEnabled || documentaryJobsEnabled)
@@ -116,6 +120,7 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
+SessionSecurity.ValidateOptions(jwtOptions);
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -129,7 +134,19 @@ builder.Services
             ValidIssuer = jwtOptions.Issuer,
             ValidAudience = jwtOptions.Audience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Secret)),
-            ClockSkew = TimeSpan.FromMinutes(2)
+            ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
+            RequireSignedTokens = true,
+            RequireExpirationTime = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var store = context.HttpContext.RequestServices.GetRequiredService<IIdentityStore>();
+                if (context.Principal is null || !await SessionSecurity.ValidateAsync(context.Principal, store, jwtOptions, context.HttpContext.RequestAborted))
+                    context.Fail("Sesion no valida.");
+            }
         };
     });
 
@@ -278,8 +295,8 @@ builder.Services.AddCors(options =>
     {
         policy
             .WithOrigins(allowedOrigins!)
-            .AllowAnyHeader()
-            .AllowAnyMethod();
+            .WithHeaders("Authorization", "Content-Type", "X-Faena-Codigo")
+            .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
     });
 });
 
@@ -362,9 +379,7 @@ if (app.Environment.IsDevelopment() && builder.Configuration.GetValue("Database:
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
     var error = context.Features.Get<IExceptionHandlerFeature>()?.Error;
-    var statusCode = error is BadHttpRequestException
-        ? StatusCodes.Status400BadRequest
-        : StatusCodes.Status500InternalServerError;
+    var statusCode = error switch { DomainException => 400, BadHttpRequestException bad => bad.StatusCode, UnauthorizedAccessException => 403, _ => 500 };
 
     if (statusCode == StatusCodes.Status400BadRequest)
     {
@@ -384,11 +399,13 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
     await Results.Problem(
             statusCode: statusCode,
             title: statusCode == StatusCodes.Status400BadRequest ? "Solicitud invalida." : "Error interno del servidor.",
-            detail: statusCode == StatusCodes.Status400BadRequest ? "La solicitud no es valida." : null,
+            detail: error is DomainException domain ? domain.Message : statusCode == StatusCodes.Status400BadRequest ? "La solicitud no es valida." : null,
             extensions: new Dictionary<string, object?> { ["traceId"] = context.TraceIdentifier })
         .ExecuteAsync(context);
 }));
 
+app.UseMiddleware<SecurityHeadersMiddleware>();
+if (!app.Environment.IsDevelopment()) app.UseHsts();
 app.UseSerilogRequestLogging();
 
 if (app.Environment.IsDevelopment())
@@ -399,12 +416,14 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors("Frontend");
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseMiddleware<AuditContextMiddleware>();
 app.UseMiddleware<FaenaAuthorizationMiddleware>();
+app.UseMiddleware<UploadValidationMiddleware>();
 
-var api = app.MapGroup("/api");
+var api = app.MapGroup("/api").AddEndpointFilter<ImportPathFilter>();
 
 api.MapPost("/auth/login", async (LoginRequest request, IAuthService authService, CancellationToken cancellationToken) =>
     {
@@ -416,11 +435,8 @@ api.MapPost("/auth/login", async (LoginRequest request, IAuthService authService
         {
             return Results.Unauthorized();
         }
-        catch (InvalidOperationException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
     })
+    .RequireRateLimiting("login")
     .AllowAnonymous()
     .WithName("Login");
 
@@ -3423,7 +3439,7 @@ documentsApi.MapPost("/{id}/annul", async (
     .WithName("AnnulDocument");
 
 var sharePointApi = api.MapGroup("/sharepoint")
-    .RequireAuthorization();
+    .RequireAuthorization().AddEndpointFilter<SharePointAccessFilter>();
 
 sharePointApi.MapGet("/status", (IDocumentStorageService documentStorageService) =>
         Results.Ok(documentStorageService.GetProviderInfo()))
@@ -4481,3 +4497,5 @@ public sealed record SharePointManualLinkApiRequest(
 public partial class Program
 {
 }
+
+public partial class Program { }

@@ -1,3 +1,5 @@
+using MaintenanceCMMS.Infrastructure.Options;
+using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.Text.Json;
 using MaintenanceCMMS.Application.Auditing;
@@ -17,6 +19,7 @@ public sealed class DocumentService : IDocumentService
     private readonly IAuditService _auditService;
     private readonly IAuthorizationPolicyService _authorizationPolicyService;
     private readonly IDocumentStorageService? _documentStorageService;
+    private readonly SharePointOptions _sharePointOptions;
 
     public DocumentService(
         CmmsDbContext dbContext,
@@ -30,12 +33,14 @@ public sealed class DocumentService : IDocumentService
         CmmsDbContext dbContext,
         IAuditService auditService,
         IAuthorizationPolicyService authorizationPolicyService,
-        IDocumentStorageService? documentStorageService)
+        IDocumentStorageService? documentStorageService,
+        IOptions<SharePointOptions>? sharePointOptions = null)
     {
         _dbContext = dbContext;
         _auditService = auditService;
         _authorizationPolicyService = authorizationPolicyService;
         _documentStorageService = documentStorageService;
+        _sharePointOptions = sharePointOptions?.Value ?? new SharePointOptions();
     }
 
     public async Task<IReadOnlyCollection<DocumentTypeResponse>> ListTypesAsync(CancellationToken cancellationToken)
@@ -1179,7 +1184,7 @@ public sealed class DocumentService : IDocumentService
         await RecordAuditAsync(user, "document.version.created", document.Id.ToString("D"), null, Serialize(file), observations ?? "Nueva version documental", cancellationToken);
     }
 
-    private static FileMetadataEntity CreateFile(
+    private FileMetadataEntity CreateFile(
         string? fileKey,
         string? sharePointUrl,
         string? originalName,
@@ -1189,7 +1194,7 @@ public sealed class DocumentService : IDocumentService
         UserAccessContext user)
     {
         var key = EmptyToNull(fileKey) ?? EmptyToNull(sharePointUrl) ?? Guid.NewGuid().ToString("N");
-        var uri = EmptyToNull(sharePointUrl) ?? key;
+        var uri = !string.IsNullOrWhiteSpace(sharePointUrl) ? DocumentUrlPolicy.RequireDocumentLink(sharePointUrl, _sharePointOptions.AllowedHosts) : key.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? DocumentUrlPolicy.RequireHttps(key, _sharePointOptions.AllowedHosts).AbsoluteUri : "/api/sharepoint/download?fileKey=" + Uri.EscapeDataString(key);
         var fileName = EmptyToNull(originalName) ?? Path.GetFileName(key) ?? key;
         var provider = uri.StartsWith("http", StringComparison.OrdinalIgnoreCase) || uri.StartsWith("sharepoint:", StringComparison.OrdinalIgnoreCase)
             ? "ManualLink"
