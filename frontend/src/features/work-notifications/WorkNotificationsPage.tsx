@@ -1,632 +1,73 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { AlertTriangle, Bell, CheckCircle2, ClipboardList, RefreshCw, Send, Wrench, XCircle } from "lucide-react";
-import { apiFetch } from "../auth/authStore";
-import { FaenaSelect } from "../faenas/FaenaSelect";
-import { MaintenanceTargetSelect, type MaintenanceTargetReference } from "../maintenance-targets/MaintenanceTargetSelect";
-import { Dialog } from "../../shared/ui/Dialog";
+import { FormEvent, useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { ApiError, apiFetch } from "../auth/authStore";
 
-type WorkNotificationType =
-  | "Falla"
-  | "CondicionDetectada"
-  | "Documental"
-  | "Preventivo"
-  | "Mejora"
-  | "Inspeccion"
-  | "ApoyoOperacional";
+export type NoticeStatus = "Borrador" | "PendientePlanificacion" | "DevueltoFaena" | "EnGestion" | "Cerrado" | "Rechazado" | "Anulado";
+export type Notice = { avisoId: string; estado: NoticeStatus; faenaCodigo: string; activoCodigo?: string | null; unidadOperativaCodigo?: string | null; fechaDeteccion: string; trabajos: { id: string }[] };
+type Asset = { codigo: string; nombre: string; faenaCodigo: string };
+type Unit = { codigo: string; nombre: string; faenaCodigo?: string | null };
+type Equipment = { value: string; kind: "asset" | "unit"; codigo: string; nombre: string; faenaCodigo?: string | null };
+type DraftItem = { descripcion: string; observaciones: string; rolComponente: "Fabrica" | "Chasis" | "" };
 
-type WorkNotificationStatus = "Creado" | "EnEvaluacion" | "Aprobado" | "Rechazado" | "ConvertidoOT" | "Anulado";
-type Priority = "Baja" | "Media" | "Alta" | "Critica";
-type FailureClassification = "ConDetencion" | "SinDetencion" | "ConRestriccion" | "DocumentalHabilitante" | "Repetitiva";
-
-type WorkNotification = {
-  avisoId: string;
-  estado: WorkNotificationStatus;
-  tipo: WorkNotificationType;
-  faenaCodigo: string;
-  activoCodigo?: string | null;
-  unidadOperativaCodigo?: string | null;
-  objetivo?: { tipo: "Asset" | "OperationalUnit"; codigo: string; nombre: string } | null;
-  sistema?: string | null;
-  subsistema?: string | null;
-  componente?: string | null;
-  descripcion: string;
-  prioridad: Priority;
-  criticidad: Priority;
-  solicitante: string;
-  evidenciaInicial?: string | null;
-  fechaDeteccion: string;
-  fechaCreacion: string;
-  clasificacionFalla: FailureClassification;
-  evaluadoPor?: string | null;
-  evaluadoEnUtc?: string | null;
-  aprobadoPor?: string | null;
-  aprobadoEnUtc?: string | null;
-  rechazadoPor?: string | null;
-  rechazadoEnUtc?: string | null;
-  motivoRechazo?: string | null;
-  numeroOT?: string | null;
-  convertidoPor?: string | null;
-  convertidoEnUtc?: string | null;
-  observaciones?: string | null;
-};
-
-type AssetSummary = {
-  codigo: string;
-  nombre: string;
-  faenaCodigo: string;
-  ubicacionTecnicaCodigo?: string | null;
-  tipoActivo: string;
-  criticidad?: string | null;
-  estadoOperacional: string;
-};
-
-type OperationalUnitSummary = { codigo: string; nombre: string; faenaCodigo?: string | null };
-
-type ConversionResponse = {
-  aviso: WorkNotification;
-  numeroOT: string;
-};
-
-type NotificationForm = {
-  tipo: WorkNotificationType;
-  faenaCodigo: string;
-  activoCodigo: string;
-  unidadOperativaCodigo: string;
-  objetivo: MaintenanceTargetReference | null;
-  sistema: string;
-  subsistema: string;
-  componente: string;
-  descripcion: string;
-  prioridad: Priority;
-  criticidad: Priority;
-  clasificacionFalla: FailureClassification;
-  evidenciaInicial: string;
-  fechaDeteccion: string;
-};
-
-const emptyForm: NotificationForm = {
-  tipo: "Falla",
-  faenaCodigo: "",
-  activoCodigo: "",
-  unidadOperativaCodigo: "",
-  objetivo: null,
-  sistema: "",
-  subsistema: "",
-  componente: "",
-  descripcion: "",
-  prioridad: "Media",
-  criticidad: "Media",
-  clasificacionFalla: "SinDetencion",
-  evidenciaInicial: "",
-  fechaDeteccion: new Date().toISOString().slice(0, 10)
-};
-
-const typeLabels: Record<WorkNotificationType, string> = {
-  Falla: "Falla",
-  CondicionDetectada: "Condicion detectada",
-  Documental: "Documental",
-  Preventivo: "Preventivo",
-  Mejora: "Mejora",
-  Inspeccion: "Inspeccion",
-  ApoyoOperacional: "Apoyo operacional"
-};
-
-const statusLabels: Record<WorkNotificationStatus, string> = {
-  Creado: "Creado",
-  EnEvaluacion: "En evaluacion",
-  Aprobado: "Aprobado",
-  Rechazado: "Rechazado",
-  ConvertidoOT: "Convertido a OT",
-  Anulado: "Anulado"
-};
-
-const failureLabels: Record<FailureClassification, string> = {
-  ConDetencion: "Con detencion",
-  SinDetencion: "Sin detencion",
-  ConRestriccion: "Con restriccion",
-  DocumentalHabilitante: "Documental habilitante",
-  Repetitiva: "Repetitiva"
-};
-
-const priorityValues: Priority[] = ["Baja", "Media", "Alta", "Critica"];
-const closedStatuses: WorkNotificationStatus[] = ["Rechazado", "ConvertidoOT", "Anulado"];
+const statusLabel: Record<NoticeStatus, string> = { Borrador: "Borrador", PendientePlanificacion: "Pendiente planificación", DevueltoFaena: "Devuelto a faena", EnGestion: "En gestión", Cerrado: "Cerrado", Rechazado: "Rechazado", Anulado: "Anulado" };
 
 export function WorkNotificationsPage() {
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { avisoId } = useParams();
-  const targetCode = searchParams.get("targetCode");
-  const targetType = searchParams.get("targetType");
-  const [notifications, setNotifications] = useState<WorkNotification[]>([]);
-  const [assets, setAssets] = useState<AssetSummary[]>([]);
-  const [operationalUnits, setOperationalUnits] = useState<OperationalUnitSummary[]>([]);
-  const [selectedId, setSelectedId] = useState(avisoId ?? "");
-  const [createOpen, setCreateOpen] = useState(Boolean(searchParams.get("targetCode")));
-  const [form, setForm] = useState<NotificationForm>(emptyForm);
-  const [filters, setFilters] = useState({ status: "", type: "", priority: "", faenaCodigo: "", includeClosed: false, supervisorInbox: true });
-  const [reason, setReason] = useState("");
-  const [conversion, setConversion] = useState({ fechaProgramada: "", tipoMantenimiento: "" });
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [rows, setRows] = useState<Notice[]>([]);
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [filter, setFilter] = useState({ text: "", status: "", faena: "", equipo: "" });
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ faenaCodigo: "", activoCodigo: "", unidadOperativaCodigo: "", fechaDeteccion: "", estadoOperacional: "Operativo", fueraServicioDesde: "", restriccionOperacional: "", lecturaMedidor: "", observaciones: "", trabajos: [{ descripcion: "", observaciones: "", rolComponente: "" } as DraftItem] });
 
-  useEffect(() => {
-    void loadAll();
-  }, [filters.status, filters.type, filters.priority, filters.faenaCodigo, filters.includeClosed, filters.supervisorInbox]);
-
-  useEffect(() => {
-    setSelectedId(avisoId ?? "");
-  }, [avisoId]);
-
-  useEffect(() => {
-    if (!avisoId) return;
-    void apiFetch<WorkNotification>(`/api/work-notifications/${encodeURIComponent(avisoId)}`)
-      .then((notification) => setNotifications((current) => [...current.filter((item) => item.avisoId !== notification.avisoId), notification]))
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "No fue posible cargar el aviso solicitado."));
-  }, [avisoId]);
-
-  useEffect(() => {
-    if (!targetCode || (targetType !== "Asset" && targetType !== "OperationalUnit")) return;
-    const isAsset = targetType === "Asset";
-    const endpoint = isAsset ? "/api/assets/" + encodeURIComponent(targetCode) : "/api/operational-units/" + encodeURIComponent(targetCode);
-    void apiFetch<{ codigo?: string; faenaCodigo?: string | null; criticidad?: string | null; resumen?: { codigo: string; faenaCodigo?: string | null; criticidad?: string | null } }>(endpoint)
-      .then(result => {
-        const target = result.resumen ?? result;
-        const selectedCode = target.codigo;
-        if (!selectedCode) throw new Error("El objetivo seleccionado no contiene código.");
-        setForm(current => current.objetivo ? current : {
-          ...current,
-          activoCodigo: isAsset ? selectedCode : current.activoCodigo,
-          unidadOperativaCodigo: isAsset ? current.unidadOperativaCodigo : selectedCode,
-          objetivo: { tipo: isAsset ? "Asset" : "OperationalUnit", codigo: selectedCode },
-          faenaCodigo: target.faenaCodigo ?? current.faenaCodigo,
-          criticidad: normalizePriority(target.criticidad) ?? current.criticidad
-        });
-      })
-      .catch(error => setError(error instanceof Error ? error.message : "No fue posible preseleccionar el objetivo."));
-  }, [targetCode, targetType]);
-  const assetByCode = useMemo(() => new Map(assets.map((item) => [item.codigo, item])), [assets]);
-  const unitByCode = useMemo(() => new Map(operationalUnits.map((item) => [item.codigo, item])), [operationalUnits]);
-  const selected = useMemo(() => notifications.find((item) => item.avisoId === selectedId) ?? null, [notifications, selectedId]);
-  const asset = selected?.activoCodigo ? assetByCode.get(selected.activoCodigo) : null;
-  const operationalUnit = selected?.unidadOperativaCodigo ? unitByCode.get(selected.unidadOperativaCodigo) : null;
-
-  const counters = useMemo(() => {
-    return {
-      inbox: notifications.filter((item) => item.estado === "Creado" || item.estado === "EnEvaluacion").length,
-      approved: notifications.filter((item) => item.estado === "Aprobado").length,
-      critical: notifications.filter((item) => item.prioridad === "Critica" || item.criticidad === "Critica").length,
-      converted: notifications.filter((item) => item.estado === "ConvertidoOT").length
-    };
-  }, [notifications]);
-
-  async function loadAll() {
-    setIsLoading(true);
-    setError(null);
+  const load = async () => {
     try {
+      setError(null);
       const query = new URLSearchParams();
-      if (filters.status) query.set("status", filters.status);
-      if (filters.type) query.set("type", filters.type);
-      if (filters.priority) query.set("priority", filters.priority);
-      if (filters.faenaCodigo) query.set("faenaCodigo", filters.faenaCodigo);
-      query.set("includeClosed", String(filters.includeClosed));
-      query.set("supervisorInbox", String(filters.supervisorInbox));
+      if (filter.text) query.set("texto", filter.text);
+      if (filter.status) query.set("status", filter.status);
+      if (filter.faena) query.set("faenaCodigo", filter.faena);
+      if (filter.equipo) query.set("equipoCodigo", filter.equipo);
+      setRows(await apiFetch<Notice[]>(`/api/work-notifications/?${query}`));
+    } catch (e) { setError(e instanceof Error ? e.message : "No fue posible cargar avisos."); }
+  };
+  useEffect(() => { void load(); }, []);
+  useEffect(() => { void Promise.all([apiFetch<{ items: Asset[] }>("/api/assets?page=1&pageSize=100"), apiFetch<{ items: Unit[] }>("/api/operational-units?page=1&pageSize=100")]).then(([a, u]) => { setAssets(a.items); setUnits(u.items); }); }, []);
 
-      const [notificationResult, assetResult, unitResult] = await Promise.all([
-        apiFetch<WorkNotification[]>(`/api/work-notifications?${query}`),
-        apiFetch<{ items: AssetSummary[] }>("/api/assets?page=1&pageSize=100").then((page) => page.items).catch(() => [] as AssetSummary[]),
-        apiFetch<{ items: OperationalUnitSummary[] }>("/api/operational-units?page=1&pageSize=100").then((page) => page.items).catch(() => [] as OperationalUnitSummary[])
-      ]);
-      setNotifications(notificationResult);
-      setAssets(assetResult);
-      setOperationalUnits(unitResult);
-
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "No fue posible cargar avisos.");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function submitNotification(event: FormEvent) {
+  const equipment: Equipment[] = [...assets.map(a => ({ value: `asset:${a.codigo}`, kind: "asset" as const, codigo: a.codigo, nombre: a.nombre, faenaCodigo: a.faenaCodigo })), ...units.map(u => ({ value: `unit:${u.codigo}`, kind: "unit" as const, codigo: u.codigo, nombre: u.nombre, faenaCodigo: u.faenaCodigo }))].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  const selectedEquipment = form.activoCodigo ? `asset:${form.activoCodigo}` : form.unidadOperativaCodigo ? `unit:${form.unidadOperativaCodigo}` : "";
+  const selectedIsUnit = form.unidadOperativaCodigo.length > 0;
+  const selectEquipment = (value: string) => {
+    const selected = equipment.find(item => item.value === value);
+    setForm({ ...form, activoCodigo: selected?.kind === "asset" ? selected.codigo : "", unidadOperativaCodigo: selected?.kind === "unit" ? selected.codigo : "", faenaCodigo: selected?.faenaCodigo ?? "" });
+  };
+  const updateItem = (index: number, changes: Partial<DraftItem>) => setForm({ ...form, trabajos: form.trabajos.map((item, i) => i === index ? { ...item, ...changes } : item) });
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    await saveAction(async () => {
-      const created = await apiFetch<WorkNotification>("/api/work-notifications", {
-        method: "POST",
-        body: JSON.stringify({
-          tipo: form.tipo,
-          descripcion: form.descripcion,
-          prioridad: form.prioridad,
-          criticidad: form.criticidad,
-          clasificacionFalla: form.clasificacionFalla,
-          faenaCodigo: emptyToNull(form.faenaCodigo),
-          activoCodigo: emptyToNull(form.activoCodigo),
-          unidadOperativaCodigo: emptyToNull(form.unidadOperativaCodigo),
-          sistema: emptyToNull(form.sistema),
-          subsistema: emptyToNull(form.subsistema),
-          componente: emptyToNull(form.componente),
-          evidenciaInicial: emptyToNull(form.evidenciaInicial),
-          fechaDeteccion: toIsoOrNull(form.fechaDeteccion)
-        })
-      });
-      setForm(emptyForm);
-      setSelectedId(created.avisoId);
-      setCreateOpen(false);
-      setMessage(`Aviso ${created.avisoId} creado.`);
-      navigate(`/avisos/${encodeURIComponent(created.avisoId)}`);
-    });
-  }
-
-  async function runNotificationAction(path: string, success: string) {
-    if (!selected) return;
-    await saveAction(async () => {
-      const updated = await apiFetch<WorkNotification>(`/api/work-notifications/${encodeURIComponent(selected.avisoId)}${path}`, {
-        method: "POST",
-        body: JSON.stringify({ reason })
-      });
-      setSelectedId(updated.avisoId);
-      setReason("");
-      setMessage(success);
-    });
-  }
-
-  async function convertToWorkOrder() {
-    if (!selected) return;
-    await saveAction(async () => {
-      const result = await apiFetch<ConversionResponse>(`/api/work-notifications/${encodeURIComponent(selected.avisoId)}/convert-to-work-order`, {
-        method: "POST",
-        body: JSON.stringify({
-          reason,
-          fechaProgramada: toIsoOrNull(conversion.fechaProgramada),
-          tipoMantenimiento: emptyToNull(conversion.tipoMantenimiento)
-        })
-      });
-      setSelectedId(result.aviso.avisoId);
-      setReason("");
-      setConversion({ fechaProgramada: "", tipoMantenimiento: "" });
-      setMessage(`Aviso convertido a ${result.numeroOT}.`);
-    });
-  }
-
-  async function saveAction(action: () => Promise<void>) {
-    setIsSaving(true);
-    setError(null);
-    setMessage(null);
+    if (saving) return;
     try {
-      await action();
-      await loadAll();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "No fue posible completar la accion.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
+      setSaving(true);
+      const created = await apiFetch<Notice>("/api/work-notifications/", { method: "POST", body: JSON.stringify({ ...form, fechaDeteccion: form.fechaDeteccion ? new Date(form.fechaDeteccion).toISOString() : null, fueraServicioDesde: form.fueraServicioDesde ? new Date(form.fueraServicioDesde).toISOString() : null, lecturaMedidor: form.lecturaMedidor ? Number(form.lecturaMedidor) : null, trabajos: form.trabajos.map(item => ({ ...item, rolComponente: item.rolComponente || null })) }) });
+      navigate(`/avisos/${encodeURIComponent(created.avisoId)}`);
+    } catch (e) { setError(e instanceof ApiError && e.status >= 500 ? "No fue posible guardar el borrador. Intenta nuevamente más tarde." : e instanceof Error ? e.message : "No fue posible guardar el borrador."); }
+    finally { setSaving(false); }
+  };
 
-  function applyAsset(code: string) {
-    const nextAsset = assetByCode.get(code);
-    setForm({
-      ...form,
-      activoCodigo: code,
-      faenaCodigo: nextAsset?.faenaCodigo ?? form.faenaCodigo,
-      criticidad: normalizePriority(nextAsset?.criticidad) ?? form.criticidad
-    });
-  }
-
-  function applyOperationalUnit(code: string) {
-    const nextUnit = unitByCode.get(code);
-    setForm({ ...form, unidadOperativaCodigo: code, faenaCodigo: nextUnit?.faenaCodigo ?? form.faenaCodigo });
-  }
-
-  return (
-    <section className="stack">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">Mantenimiento operativo</p>
-          <h1>Avisos de trabajo</h1>
-          <p>Registro, evaluacion y conversion de condiciones detectadas a ordenes de trabajo.</p>
-        </div>
-        <div className="toolbar">
-          {!avisoId ? <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}><Bell size={18} /> Nuevo aviso</button> : <button className="secondary-button" type="button" onClick={() => navigate("/avisos")}>Volver a avisos</button>}
-          <button className="secondary-button" type="button" onClick={() => void loadAll()}>
-            <RefreshCw size={18} /> Actualizar
-          </button>
-        </div>
-      </header>
-
-      <section className="kpi-grid xl:grid-cols-4">
-        <Metric icon={<Bell size={18} />} label="Bandeja supervisor" value={counters.inbox} />
-        <Metric icon={<CheckCircle2 size={18} />} label="Aprobados" value={counters.approved} />
-        <Metric icon={<AlertTriangle size={18} />} label="Criticos" value={counters.critical} />
-        <Metric icon={<Wrench size={18} />} label="Convertidos OT" value={counters.converted} />
-      </section>
-
-      {message ? <div className="success-banner">{message}</div> : null}
-      {error ? <div className="error-banner">{error}</div> : null}
-
-      {!avisoId ? <div className="two-column-layout">
-        <section className="panel stack">
-          <p className="text-sm text-slate-600 dark:text-slate-300">Cree avisos desde una ventana emergente para mantener el listado enfocado en consulta.</p>
-          <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}><Bell size={18} /> Nuevo aviso</button>
-          <Dialog open={createOpen} title="Nuevo aviso" onClose={() => setCreateOpen(false)} busy={isSaving} className="max-w-5xl">
-        <form className="stack" onSubmit={submitNotification}>
-          <div className="section-heading">
-            <h2>Crear aviso</h2>
-          </div>
-          <div className="form-grid">
-            <label>
-              Tipo
-              <select value={form.tipo} onChange={(event) => setForm({ ...form, tipo: event.target.value as WorkNotificationType })}>
-                {Object.entries(typeLabels).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <FaenaSelect emptyLabel="Selecciona faena" value={form.faenaCodigo} onChange={(value) => setForm({ ...form, faenaCodigo: value })} />
-            <MaintenanceTargetSelect
-              value={form.objetivo}
-              faenaCodigo={form.faenaCodigo}
-              onChange={(objetivo, target) => setForm({ ...form, objetivo, faenaCodigo: target?.faenaCodigo ?? form.faenaCodigo, criticidad: normalizePriority(target?.criticidad) ?? form.criticidad })}
-              label="Objetivo de mantenimiento"
-            />
-            <label>
-              Fecha deteccion
-              <input type="date" value={form.fechaDeteccion} onChange={(event) => setForm({ ...form, fechaDeteccion: event.target.value })} required />
-            </label>
-            <label>
-              Sistema
-              <input value={form.sistema} onChange={(event) => setForm({ ...form, sistema: event.target.value })} />
-            </label>
-            <label>
-              Subsistema
-              <input value={form.subsistema} onChange={(event) => setForm({ ...form, subsistema: event.target.value })} />
-            </label>
-            <label>
-              Componente
-              <input value={form.componente} onChange={(event) => setForm({ ...form, componente: event.target.value })} />
-            </label>
-            <label>
-              Prioridad
-              <select value={form.prioridad} onChange={(event) => setForm({ ...form, prioridad: event.target.value as Priority })}>
-                {priorityValues.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Criticidad
-              <select value={form.criticidad} onChange={(event) => setForm({ ...form, criticidad: event.target.value as Priority })}>
-                {priorityValues.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Clasificacion falla
-              <select value={form.clasificacionFalla} onChange={(event) => setForm({ ...form, clasificacionFalla: event.target.value as FailureClassification })}>
-                {Object.entries(failureLabels).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Evidencia inicial
-              <input value={form.evidenciaInicial} onChange={(event) => setForm({ ...form, evidenciaInicial: event.target.value })} placeholder="URL o referencia" />
-            </label>
-            <label className="span-2">
-              Descripcion
-              <textarea value={form.descripcion} onChange={(event) => setForm({ ...form, descripcion: event.target.value })} required />
-            </label>
-          </div>
-          <button className="primary-button" type="submit" disabled={isSaving}>
-            <Send size={18} /> Crear aviso
-          </button>
-        </form>
-          </Dialog>
-        </section>
-
-        <section className="panel stack">
-          <div className="section-heading">
-            <h2>Bandeja supervisores</h2>
-            <span>{notifications.length} avisos</span>
-          </div>
-          <div className="toolbar">
-            <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
-              <option value="">Todos los estados</option>
-              {Object.entries(statusLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })}>
-              <option value="">Todos los tipos</option>
-              {Object.entries(typeLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <select value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}>
-              <option value="">Todas las prioridades</option>
-              {priorityValues.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-            <label className="check-row">
-              <input type="checkbox" checked={filters.supervisorInbox} onChange={(event) => setFilters({ ...filters, supervisorInbox: event.target.checked })} />
-              Bandeja
-            </label>
-            <label className="check-row">
-              <input type="checkbox" checked={filters.includeClosed} onChange={(event) => setFilters({ ...filters, includeClosed: event.target.checked })} />
-              Cerrados
-            </label>
-          </div>
-          <FaenaSelect value={filters.faenaCodigo} onChange={(value) => setFilters({ ...filters, faenaCodigo: value })} />
-
-          {isLoading ? <p className="text-sm text-slate-500 dark:text-slate-400">Cargando avisos...</p> : null}
-          <div className="data-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Aviso</th>
-                  <th>Contexto</th>
-                  <th>Estado</th>
-                  <th>Prioridad</th>
-                  <th>OT</th>
-                </tr>
-              </thead>
-              <tbody>
-                {notifications.map((item) => {
-                  const rowAsset = item.activoCodigo ? assetByCode.get(item.activoCodigo) : null;
-                  const rowUnit = item.unidadOperativaCodigo ? unitByCode.get(item.unidadOperativaCodigo) : null;
-                  return (
-                    <tr key={item.avisoId} className={selected?.avisoId === item.avisoId ? "selected-row" : ""} onClick={() => navigate(`/avisos/${encodeURIComponent(item.avisoId)}`)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); navigate(`/avisos/${encodeURIComponent(item.avisoId)}`); } }} tabIndex={0} aria-label={`Abrir aviso ${item.avisoId}`}>
-                      <td>
-                        <strong>{item.avisoId}</strong>
-                        <small>{item.descripcion}</small>
-                      </td>
-                      <td>
-                        <strong>{item.objetivo?.nombre ?? rowAsset?.nombre ?? rowUnit?.nombre ?? "Sin objetivo"}</strong>
-                        <small>{[item.faenaCodigo, item.sistema, item.subsistema, item.componente].filter(Boolean).join(" / ") || "-"}</small>
-                      </td>
-                      <td>
-                        <span className={`status-pill ${closedStatuses.includes(item.estado) ? (item.estado === "ConvertidoOT" ? "success" : "danger") : ""}`}>
-                          {statusLabels[item.estado]}
-                        </span>
-                      </td>
-                      <td>
-                        <strong>{item.prioridad}</strong>
-                        <small>{failureLabels[item.clasificacionFalla]}</small>
-                      </td>
-                      <td>{item.numeroOT ?? "-"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div> : null}
-
-      {avisoId && selected ? (
-        <section className="panel stack">
-          <div className="section-heading">
-            <div>
-              <div><p className="eyebrow">Avisos / {selected.avisoId}</p><h2>{selected.avisoId} - {typeLabels[selected.tipo]}</h2></div>
-              <p>{selected.descripcion}</p>
-            </div>
-            <span className={`status-pill ${selected.estado === "ConvertidoOT" ? "success" : closedStatuses.includes(selected.estado) ? "danger" : ""}`}>
-              {statusLabels[selected.estado]}
-            </span>
-          </div>
-
-          <div className="detail-grid">
-            <Info label="Faena" value={selected.faenaCodigo || "-"} />
-            {selected.activoCodigo ? <Link className="text-sm font-medium text-teal-700 underline dark:text-teal-300" to={`/equipos/activos/${encodeURIComponent(selected.activoCodigo)}`}>{asset ? `${asset.nombre} (${asset.codigo})` : selected.activoCodigo}</Link> : <Info label="Activo" value="-" />}
-            {selected.unidadOperativaCodigo ? <Link className="text-sm font-medium text-teal-700 underline dark:text-teal-300" to={`/equipos/unidades/${encodeURIComponent(selected.unidadOperativaCodigo)}`}>{operationalUnit ? `${operationalUnit.nombre} (${operationalUnit.codigo})` : selected.unidadOperativaCodigo}</Link> : <Info label="Unidad operativa" value="-" />}
-            <Info label="Ubicacion tecnica" value={asset?.ubicacionTecnicaCodigo ?? "-"} />
-            <Info label="Sistema" value={[selected.sistema, selected.subsistema, selected.componente].filter(Boolean).join(" / ") || "-"} />
-            <Info label="Prioridad" value={selected.prioridad} />
-            <Info label="Criticidad" value={selected.criticidad} />
-            <Info label="Clasificacion" value={failureLabels[selected.clasificacionFalla]} />
-            <Info label="Fecha deteccion" value={formatDate(selected.fechaDeteccion)} />
-            <Info label="Solicitante" value={selected.solicitante} />
-            <Info label="Evidencia" value={selected.evidenciaInicial ?? "-"} />
-            <Info label="Aprobado por" value={selected.aprobadoPor ?? "-"} />
-            <Info label="OT generada" value={selected.numeroOT ?? "-"} />
-            {selected.numeroOT ? <Link className="text-sm font-medium text-teal-700 underline dark:text-teal-300" to={`/ot/${encodeURIComponent(selected.numeroOT)}`}>Abrir OT {selected.numeroOT}</Link> : null}
-          </div>
-
-          <div className="form-grid">
-            <label>
-              Motivo accion
-              <input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Motivo auditado" />
-            </label>
-            <label>
-              Fecha programada OT
-              <input type="date" value={conversion.fechaProgramada} onChange={(event) => setConversion({ ...conversion, fechaProgramada: event.target.value })} />
-            </label>
-            <label>
-              Tipo mantenimiento OT
-              <select value={conversion.tipoMantenimiento} onChange={(event) => setConversion({ ...conversion, tipoMantenimiento: event.target.value })}>
-                <option value="">Automatico</option>
-                <option value="Corrective">Correctivo</option>
-                <option value="Preventive">Preventivo</option>
-                <option value="Inspection">Inspeccion</option>
-                <option value="Predictive">Predictivo</option>
-              </select>
-            </label>
-          </div>
-
-          <div className="toolbar">
-            <button className="secondary-button" type="button" disabled={isSaving || selected.estado !== "Creado"} onClick={() => void runNotificationAction("/evaluate", "Aviso en evaluacion.")}>
-              <ClipboardList size={18} /> Evaluar
-            </button>
-            <button className="secondary-button" type="button" disabled={isSaving || !["Creado", "EnEvaluacion"].includes(selected.estado)} onClick={() => void runNotificationAction("/approve", "Aviso aprobado.")}>
-              <CheckCircle2 size={18} /> Aprobar
-            </button>
-            <button className="secondary-button" type="button" disabled={isSaving || selected.estado !== "Aprobado"} onClick={() => void convertToWorkOrder()}>
-              <Wrench size={18} /> Convertir a OT
-            </button>
-            <button className="danger-button" type="button" disabled={isSaving || selected.estado === "ConvertidoOT" || selected.estado === "Anulado"} onClick={() => void runNotificationAction("/reject", "Aviso rechazado.")}>
-              <XCircle size={18} /> Rechazar
-            </button>
-          </div>
-        </section>
-      ) : null}
-    </section>
-  );
-}
-
-function Metric({ icon, label, value }: { icon: JSX.Element; label: string; value: number }) {
-  return (
-    <article className="metric-card">
-      {icon}
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="info-item">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function emptyToNull(value: string) {
-  return value.trim() ? value.trim() : null;
-}
-
-function toIsoOrNull(value: string) {
-  return value ? new Date(`${value}T00:00:00Z`).toISOString() : null;
-}
-
-function formatDate(value?: string | null) {
-  return value ? new Date(value).toLocaleDateString() : "-";
-}
-
-function normalizePriority(value?: string | null): Priority | null {
-  if (!value) return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "critica" || normalized === "critico") return "Critica";
-  if (normalized === "alta" || normalized === "alto") return "Alta";
-  if (normalized === "baja" || normalized === "bajo") return "Baja";
-  if (normalized === "media" || normalized === "medio") return "Media";
-  return null;
+  return <section className="space-y-4">
+    <header className="flex items-end justify-between"><div><h1 className="text-2xl font-semibold">Avisos</h1><p className="text-sm text-slate-500 dark:text-slate-400">Trabajos y fallas levantados por faena.</p></div><button className="primary-button" onClick={() => setCreating(true)}>+ Nuevo Aviso</button></header>
+    {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
+    <section className="panel p-4"><div className="grid gap-3 md:grid-cols-4"><input className="input" placeholder="Buscar número o trabajo" value={filter.text} onChange={e => setFilter({ ...filter, text: e.target.value })}/><select className="input" value={filter.status} onChange={e => setFilter({ ...filter, status: e.target.value })}><option value="">Todos los estados</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input className="input" placeholder="Faena" value={filter.faena} onChange={e => setFilter({ ...filter, faena: e.target.value })}/><button className="secondary-button" onClick={() => void load()}>Aplicar filtros</button></div></section>
+    <section className="panel overflow-x-auto"><table className="data-table min-w-[720px]"><thead><tr><th>Número Aviso</th><th>Equipo</th><th>Faena</th><th>Estado</th><th>Fecha</th><th>Trabajos</th></tr></thead><tbody>{rows.map(n => { const code = n.activoCodigo ?? n.unidadOperativaCodigo; const equipmentName = equipment.find(item => item.codigo === code)?.nombre ?? code ?? "-"; return <tr key={n.avisoId}><td><Link className="text-teal-700 underline dark:text-teal-300" to={`/avisos/${encodeURIComponent(n.avisoId)}`}>{n.avisoId}</Link></td><td>{equipmentName}</td><td>{n.faenaCodigo}</td><td>{statusLabel[n.estado]}</td><td>{new Date(n.fechaDeteccion).toLocaleDateString()}</td><td>{n.trabajos.length}</td></tr>; })}{rows.length === 0 && <tr><td colSpan={6}>No hay avisos que coincidan.</td></tr>}</tbody></table></section>
+    {creating && <div className="fixed inset-0 z-50 overflow-auto bg-slate-950/60 p-4 text-slate-900 dark:bg-black/70 dark:text-slate-100 sm:p-6"><form className="mx-auto max-w-3xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:p-6" onSubmit={submit}><h2 className="text-xl font-semibold text-slate-950 dark:text-white">Nuevo Aviso</h2><div className="mt-4 grid gap-3 md:grid-cols-2">
+      <label className="text-sm font-medium text-slate-700 dark:text-slate-200 md:col-span-2">Equipo<select required className="input mt-1 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" value={selectedEquipment} onChange={e => selectEquipment(e.target.value)}><option value="">Seleccione equipo</option>{equipment.map(item => <option key={item.value} value={item.value}>{item.nombre}</option>)}</select></label>
+      <label className="text-sm font-medium text-slate-700 dark:text-slate-200">Fecha detección<input className="input mt-1 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" type="datetime-local" value={form.fechaDeteccion} onChange={e => setForm({ ...form, fechaDeteccion: e.target.value })}/></label>
+      <label className="text-sm font-medium text-slate-700 dark:text-slate-200">Condición operacional<select className="input mt-1 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" value={form.estadoOperacional} onChange={e => setForm({ ...form, estadoOperacional: e.target.value })}><option value="Operativo">Operativo</option><option value="OperativoConAlerta">Operativo con alerta</option><option value="FueraDeServicio">Fuera de servicio</option></select></label>
+      {form.estadoOperacional === "FueraDeServicio" && <label className="text-sm font-medium text-slate-700 dark:text-slate-200">Fuera de servicio desde<input required className="input mt-1 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" type="datetime-local" value={form.fueraServicioDesde} onChange={e => setForm({ ...form, fueraServicioDesde: e.target.value })}/></label>}
+      {form.estadoOperacional === "OperativoConAlerta" && <label className="text-sm font-medium text-slate-700 dark:text-slate-200">Restricción operacional<input required className="input mt-1 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" value={form.restriccionOperacional} onChange={e => setForm({ ...form, restriccionOperacional: e.target.value })}/></label>}
+      <label className="text-sm font-medium text-slate-700 dark:text-slate-200">Lectura (si aplica)<input className="input mt-1 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" type="number" min="0" value={form.lecturaMedidor} onChange={e => setForm({ ...form, lecturaMedidor: e.target.value })}/></label><label className="text-sm font-medium text-slate-700 dark:text-slate-200">Observaciones<textarea className="input mt-1 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" value={form.observaciones} onChange={e => setForm({ ...form, observaciones: e.target.value })}/></label></div>
+      <h3 className="mt-5 font-semibold text-slate-900 dark:text-white">Trabajos</h3>{form.trabajos.map((item, index) => <div key={index} className="mt-2 grid gap-2 rounded border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-3"><input required className="input dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" placeholder="Descripción de falla / trabajo requerido" value={item.descripcion} onChange={e => updateItem(index, { descripcion: e.target.value })}/><input className="input dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" placeholder="Observaciones" value={item.observaciones} onChange={e => updateItem(index, { observaciones: e.target.value })}/>{selectedIsUnit ? <select required className="input dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100" value={item.rolComponente} onChange={e => updateItem(index, { rolComponente: e.target.value as DraftItem["rolComponente"] })}><option value="">Fábrica o chasis</option><option value="Fabrica">FÁBRICA</option><option value="Chasis">CHASIS</option></select> : <button type="button" className="secondary-button" disabled={form.trabajos.length === 1} onClick={() => setForm({ ...form, trabajos: form.trabajos.filter((_, i) => i !== index) })}>Eliminar</button>}</div>)}
+      <button type="button" className="secondary-button mt-3" onClick={() => setForm({ ...form, trabajos: [...form.trabajos, { descripcion: "", observaciones: "", rolComponente: "" }] })}>+ Agregar trabajo</button><div className="mt-5 flex gap-2"><button className="primary-button" disabled={saving}>{saving ? "Guardando…" : "Guardar borrador"}</button><button className="secondary-button" type="button" disabled={saving} onClick={() => setCreating(false)}>Cancelar</button></div></form></div>}
+  </section>;
 }

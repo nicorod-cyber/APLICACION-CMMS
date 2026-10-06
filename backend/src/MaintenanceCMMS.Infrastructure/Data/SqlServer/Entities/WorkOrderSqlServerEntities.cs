@@ -52,6 +52,57 @@ public sealed class WorkNotificationEntity : SqlServerEntity
     public string? ConvertedByUserId { get; set; }
     public DateTimeOffset? ConvertedAtUtc { get; set; }
     public string? Observations { get; set; }
+    // Redesign fields. Legacy columns above are intentionally retained until migrated data is retired.
+    public string? OperationalStatus { get; set; }
+    public DateTimeOffset? OutOfServiceSinceUtc { get; set; }
+    public string? OperationalRestriction { get; set; }
+    public decimal? MeterReading { get; set; }
+    public Guid? MeterReadingId { get; set; }
+    public List<WorkNotificationItemEntity> Items { get; set; } = [];
+    public List<WorkNotificationStatusHistoryEntity> StatusHistory { get; set; } = [];
+}
+
+public sealed class WorkNotificationItemEntity : SqlServerEntity
+{
+    public Guid NotificationId { get; set; }
+    public WorkNotificationEntity Notification { get; set; } = null!;
+    public int Sequence { get; set; }
+    public Guid AffectedAssetId { get; set; }
+    public AssetEntity AffectedAsset { get; set; } = null!;
+    public string AffectedAssetCodeSnapshot { get; set; } = string.Empty;
+    public string AffectedAssetNameSnapshot { get; set; } = string.Empty;
+    public string? ComponentRoleSnapshot { get; set; }
+    public Guid? TechnicalSystemId { get; set; }
+    public Guid? TechnicalSubsystemId { get; set; }
+    public Guid? TechnicalComponentId { get; set; }
+    public string Description { get; set; } = string.Empty;
+    public string? Observations { get; set; }
+    public string Status { get; set; } = "PendientePlanificacion";
+    public Guid? WorkOrderId { get; set; }
+    public WorkOrderEntity? WorkOrder { get; set; }
+    public Guid? WorkOrderTaskId { get; set; }
+    public WorkOrderTaskEntity? WorkOrderTask { get; set; }
+    public List<WorkNotificationEvidenceEntity> Evidences { get; set; } = [];
+}
+
+public sealed class WorkNotificationEvidenceEntity : SqlServerEntity
+{
+    public Guid WorkNotificationItemId { get; set; }
+    public WorkNotificationItemEntity WorkNotificationItem { get; set; } = null!;
+    public Guid FileId { get; set; }
+    public FileMetadataEntity File { get; set; } = null!;
+    public string UploadedByUserId { get; set; } = string.Empty;
+}
+
+public sealed class WorkNotificationStatusHistoryEntity : SqlServerEntity
+{
+    public Guid NotificationId { get; set; }
+    public WorkNotificationEntity Notification { get; set; } = null!;
+    public string? PreviousStatus { get; set; }
+    public string NewStatus { get; set; } = string.Empty;
+    public string UserId { get; set; } = string.Empty;
+    public DateTimeOffset OccurredAtUtc { get; set; }
+    public string? Reason { get; set; }
 }
 
 public sealed class WorkOrderEntity : SqlServerEntity

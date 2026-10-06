@@ -51,8 +51,7 @@ builder.Host.UseSerilog((context, services, loggerConfiguration) =>
     loggerConfiguration
         .ReadFrom.Configuration(context.Configuration)
         .ReadFrom.Services(services)
-        .Enrich.FromLogContext()
-        .WriteTo.Console(new Serilog.Formatting.Json.JsonFormatter());
+        .Enrich.FromLogContext();
 });
 
 builder.Services.AddApplicationServices();
@@ -379,7 +378,7 @@ if (app.Environment.IsDevelopment() && builder.Configuration.GetValue("Database:
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
     var error = context.Features.Get<IExceptionHandlerFeature>()?.Error;
-    var statusCode = error switch { DomainException => 400, BadHttpRequestException bad => bad.StatusCode, UnauthorizedAccessException => 403, _ => 500 };
+    var statusCode = error switch { DomainException => 400, BadHttpRequestException bad => bad.StatusCode, UnauthorizedAccessException => 403, WorkNotificationConcurrencyException => 409, _ => 500 };
 
     if (statusCode == StatusCodes.Status400BadRequest)
     {
@@ -398,8 +397,8 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 
     await Results.Problem(
             statusCode: statusCode,
-            title: statusCode == StatusCodes.Status400BadRequest ? "Solicitud invalida." : "Error interno del servidor.",
-            detail: error is DomainException domain ? domain.Message : statusCode == StatusCodes.Status400BadRequest ? "La solicitud no es valida." : null,
+            title: statusCode == StatusCodes.Status400BadRequest ? "Solicitud invalida." : statusCode == StatusCodes.Status409Conflict ? "Conflicto de concurrencia." : "Error interno del servidor.",
+            detail: error is DomainException domain ? domain.Message : error is WorkNotificationConcurrencyException ? "El aviso fue modificado por otro usuario. Actualiza la información antes de continuar." : statusCode == StatusCodes.Status400BadRequest ? "La solicitud no es valida." : null,
             extensions: new Dictionary<string, object?> { ["traceId"] = context.TraceIdentifier })
         .ExecuteAsync(context);
 }));
@@ -2159,15 +2158,11 @@ var workNotificationsApi = api.MapGroup("/work-notifications")
 
 workNotificationsApi.MapGet("/", async (
         WorkNotificationStatus? status,
-        WorkNotificationType? type,
         string? faenaCodigo,
-        string? activoCodigo,
-        string? unidadOperativaCodigo,
-        MaintenanceTargetType? tipoObjetivo,
-        string? objetivoCodigo,
-        WorkNotificationPriority? priority,
-        bool? includeClosed,
-        bool? supervisorInbox,
+        string? equipoCodigo,
+        DateTimeOffset? desdeUtc,
+        DateTimeOffset? hastaUtc,
+        string? texto,
         ClaimsPrincipal user,
         IWorkNotificationService service,
         CancellationToken cancellationToken) =>
@@ -2175,7 +2170,7 @@ workNotificationsApi.MapGet("/", async (
         try
         {
             return Results.Ok(await service.ListAsync(
-                new WorkNotificationQuery(status, type, faenaCodigo, activoCodigo, priority, includeClosed ?? false, supervisorInbox ?? false, unidadOperativaCodigo, tipoObjetivo, objetivoCodigo),
+                new WorkNotificationQuery(status, faenaCodigo, equipoCodigo, desdeUtc, hastaUtc, texto),
                 UserAccessContext.FromClaims(user),
                 cancellationToken));
         }
@@ -2223,54 +2218,28 @@ workNotificationsApi.MapPost("/", async (
         {
             return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
         }
+        catch (WorkNotificationConcurrencyException)
+        {
+            return WorkNotificationConcurrencyConflict();
+        }
     })
     .WithName("CreateWorkNotification");
 
-workNotificationsApi.MapPost("/{id}/evaluate", async (
-        string id,
-        WorkNotificationActionRequest request,
-        ClaimsPrincipal user,
-        IWorkNotificationService service,
-        CancellationToken cancellationToken) =>
-    {
-        try
-        {
-            var result = await service.EvaluateAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
-    })
-    .WithName("EvaluateWorkNotification");
+workNotificationsApi.MapPut("/{id}/draft", async (string id, UpdateWorkNotificationDraftRequest request, ClaimsPrincipal user, IWorkNotificationService service, CancellationToken cancellationToken) =>
+    await WorkNotificationResultAsync(() => service.UpdateDraftAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken)))
+    .WithName("UpdateWorkNotificationDraft");
 
-workNotificationsApi.MapPost("/{id}/approve", async (
-        string id,
-        WorkNotificationActionRequest request,
-        ClaimsPrincipal user,
-        IWorkNotificationService service,
-        CancellationToken cancellationToken) =>
-    {
-        try
-        {
-            var result = await service.ApproveAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
-    })
-    .WithName("ApproveWorkNotification");
+workNotificationsApi.MapPost("/{id}/submit", async (string id, ClaimsPrincipal user, IWorkNotificationService service, CancellationToken cancellationToken) =>
+    await WorkNotificationResultAsync(() => service.SubmitAsync(id, UserAccessContext.FromClaims(user), cancellationToken)))
+    .WithName("SubmitWorkNotification");
+
+workNotificationsApi.MapPost("/{id}/return", async (string id, WorkNotificationActionRequest request, ClaimsPrincipal user, IWorkNotificationService service, CancellationToken cancellationToken) =>
+    await WorkNotificationResultAsync(() => service.ReturnToSiteAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken)))
+    .WithName("ReturnWorkNotificationToSite");
+
+workNotificationsApi.MapPost("/{id}/accept", async (string id, ClaimsPrincipal user, IWorkNotificationService service, CancellationToken cancellationToken) =>
+    await WorkNotificationResultAsync(() => service.AcceptForManagementAsync(id, UserAccessContext.FromClaims(user), cancellationToken)))
+    .WithName("AcceptWorkNotificationForManagement");
 
 workNotificationsApi.MapPost("/{id}/reject", async (
         string id,
@@ -2278,45 +2247,8 @@ workNotificationsApi.MapPost("/{id}/reject", async (
         ClaimsPrincipal user,
         IWorkNotificationService service,
         CancellationToken cancellationToken) =>
-    {
-        try
-        {
-            var result = await service.RejectAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
-    })
+    await WorkNotificationResultAsync(() => service.RejectAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken)))
     .WithName("RejectWorkNotification");
-
-workNotificationsApi.MapPost("/{id}/convert-to-work-order", async (
-        string id,
-        ConvertWorkNotificationToWorkOrderRequest request,
-        ClaimsPrincipal user,
-        IWorkNotificationService service,
-        CancellationToken cancellationToken) =>
-    {
-        try
-        {
-            var result = await service.ConvertToWorkOrderAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
-    })
-    .WithName("ConvertWorkNotificationToWorkOrder");
 
 workNotificationsApi.MapPost("/{id}/annul", async (
         string id,
@@ -2324,21 +2256,7 @@ workNotificationsApi.MapPost("/{id}/annul", async (
         ClaimsPrincipal user,
         IWorkNotificationService service,
         CancellationToken cancellationToken) =>
-    {
-        try
-        {
-            var result = await service.AnnulAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        }
-        catch (DomainException ex)
-        {
-            return Results.BadRequest(new { message = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
-        }
-    })
+    await WorkNotificationResultAsync(() => service.AnnulAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken)))
     .WithName("AnnulWorkNotification");
 
 var workOrdersApi = api.MapGroup("/work-orders")
@@ -4455,6 +4373,34 @@ static bool TryParseDocumentDate(string? value, out DateOnly? date)
     date = parsed;
     return true;
 }
+
+static async Task<IResult> WorkNotificationResultAsync(Func<Task<WorkNotificationResponse?>> action)
+{
+    try
+    {
+        var result = await action();
+        return result is null ? Results.NotFound() : Results.Ok(result);
+    }
+    catch (DomainException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+    }
+    catch (WorkNotificationConcurrencyException)
+    {
+        return WorkNotificationConcurrencyConflict();
+    }
+}
+
+static IResult WorkNotificationConcurrencyConflict() =>
+    Results.Conflict(new
+    {
+        code = "WORK_NOTIFICATION_CONCURRENCY_CONFLICT",
+        message = "El aviso fue modificado por otro usuario. Actualiza la información antes de continuar."
+    });
 static bool ParseEnumOrDefault<TEnum>(string? value, out TEnum parsed)
     where TEnum : struct, Enum
 {

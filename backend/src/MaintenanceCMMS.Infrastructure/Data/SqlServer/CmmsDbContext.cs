@@ -45,6 +45,9 @@ public sealed class CmmsDbContext : DbContext
     public DbSet<DocumentFaenaEntity> DocumentFaenas => Set<DocumentFaenaEntity>();
     public DbSet<WorkCatalogEntity> WorkCatalogs => Set<WorkCatalogEntity>();
     public DbSet<WorkNotificationEntity> WorkNotifications => Set<WorkNotificationEntity>();
+    public DbSet<WorkNotificationItemEntity> WorkNotificationItems => Set<WorkNotificationItemEntity>();
+    public DbSet<WorkNotificationEvidenceEntity> WorkNotificationEvidences => Set<WorkNotificationEvidenceEntity>();
+    public DbSet<WorkNotificationStatusHistoryEntity> WorkNotificationStatusHistory => Set<WorkNotificationStatusHistoryEntity>();
     public DbSet<WorkOrderEntity> WorkOrders => Set<WorkOrderEntity>();
     public DbSet<WorkOrderAssetEntity> WorkOrderAssets => Set<WorkOrderAssetEntity>();
     public DbSet<WorkOrderTaskEntity> WorkOrderTasks => Set<WorkOrderTaskEntity>();

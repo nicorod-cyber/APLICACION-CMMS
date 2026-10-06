@@ -159,7 +159,7 @@ internal sealed class SqlServerWorkTestFixture : IAsyncDisposable
 
     private static void AddCatalog(CmmsDbContext db, string category, string code)
     {
-        if (db.WorkCatalogs.Local.Any(x => x.Category == category && x.Code == code)) return;
+        if (db.WorkCatalogs.Local.Any(x => x.Category == category && x.Code == code) || db.WorkCatalogs.Any(x => x.Category == category && x.Code == code)) return;
         db.WorkCatalogs.Add(new WorkCatalogEntity { Category = category, Code = code, Name = code, IsActive = true, SortOrder = db.WorkCatalogs.Local.Count(x => x.Category == category) + 1 });
     }
 

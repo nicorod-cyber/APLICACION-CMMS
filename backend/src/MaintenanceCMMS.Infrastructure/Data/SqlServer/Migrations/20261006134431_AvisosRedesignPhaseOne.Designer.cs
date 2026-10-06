@@ -4,16 +4,19 @@ using MaintenanceCMMS.Infrastructure.Data.SqlServer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
 
-namespace MaintenanceCMMS.Infrastructure.Data.SqlServer.Migrations._ModelDiff
+namespace MaintenanceCMMS.Infrastructure.Data.SqlServer.Migrations
 {
     [DbContext(typeof(CmmsDbContext))]
-    partial class CmmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261006134431_AvisosRedesignPhaseOne")]
+    partial class AvisosRedesignPhaseOne
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

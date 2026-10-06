@@ -57,11 +57,16 @@ public sealed class WorkNotificationConfiguration : IEntityTypeConfiguration<Wor
         builder.Property(e => e.ConvertedByUserId).HasColumnName("convertido_por_usuario_id").HasMaxLength(120);
         builder.Property(e => e.ConvertedAtUtc).HasColumnName("convertido_at_utc").HasColumnType("datetimeoffset");
         builder.Property(e => e.Observations).HasColumnName("observaciones").HasMaxLength(2000);
+        builder.Property(e => e.OperationalStatus).HasColumnName("estado_operacional").HasMaxLength(40);
+        builder.Property(e => e.OutOfServiceSinceUtc).HasColumnName("fuera_servicio_desde_utc").HasColumnType("datetimeoffset");
+        builder.Property(e => e.OperationalRestriction).HasColumnName("restriccion_operacional").HasMaxLength(1000);
+        builder.Property(e => e.MeterReading).HasColumnName("lectura_medidor").HasPrecision(18, 2);
+        builder.Property(e => e.MeterReadingId).HasColumnName("lectura_medidor_id");
         builder.HasIndex(e => e.NotificationNumber).IsUnique();
         builder.HasIndex(e => e.FaenaId);
         builder.HasIndex(e => e.AssetId);
         builder.HasIndex(e => e.OperationalUnitId);
-        builder.HasIndex(e => e.WorkOrderId).IsUnique().HasFilter("orden_trabajo_id IS NOT NULL");
+        // The legacy 1:1 relationship remains readable; new item links allow 1 Aviso -> N OT.
         builder.HasOne(e => e.Status).WithMany().HasForeignKey(e => e.StatusId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Type).WithMany().HasForeignKey(e => e.TypeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Priority).WithMany().HasForeignKey(e => e.PriorityId).OnDelete(DeleteBehavior.Restrict);
@@ -71,8 +76,30 @@ public sealed class WorkNotificationConfiguration : IEntityTypeConfiguration<Wor
         builder.HasOne(e => e.Faena).WithMany().HasForeignKey(e => e.FaenaId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Asset).WithMany().HasForeignKey(e => e.AssetId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.OperationalUnit).WithMany().HasForeignKey(e => e.OperationalUnitId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasOne(e => e.WorkOrder).WithOne(e => e.Notification).HasForeignKey<WorkNotificationEntity>(e => e.WorkOrderId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(e => e.WorkOrder).WithMany().HasForeignKey(e => e.WorkOrderId).OnDelete(DeleteBehavior.Restrict);
+        builder.ToTable(t => t.HasCheckConstraint("ck_avisos_estado_operacional", "estado_operacional IS NULL OR estado_operacional IN ('Operativo','OperativoConAlerta','FueraDeServicio')"));
     }
+}
+
+public sealed class WorkNotificationItemConfiguration : IEntityTypeConfiguration<WorkNotificationItemEntity>
+{
+    public void Configure(EntityTypeBuilder<WorkNotificationItemEntity> b)
+    {
+        b.ToTable("avisos_trabajo_items_sql"); b.ConfigureBase();
+        b.Property(x => x.NotificationId).HasColumnName("aviso_id"); b.Property(x => x.Sequence).HasColumnName("secuencia");
+        b.Property(x => x.AffectedAssetId).HasColumnName("activo_afectado_id"); b.Property(x => x.AffectedAssetCodeSnapshot).HasColumnName("activo_codigo_snapshot").HasMaxLength(120).IsRequired(); b.Property(x => x.AffectedAssetNameSnapshot).HasColumnName("activo_nombre_snapshot").HasMaxLength(240).IsRequired();
+        b.Property(x => x.ComponentRoleSnapshot).HasColumnName("rol_componente_snapshot").HasMaxLength(30); b.Property(x => x.TechnicalSystemId).HasColumnName("sistema_tecnico_id"); b.Property(x => x.TechnicalSubsystemId).HasColumnName("subsistema_tecnico_id"); b.Property(x => x.TechnicalComponentId).HasColumnName("componente_tecnico_id");
+        b.Property(x => x.Description).HasColumnName("descripcion").HasMaxLength(2000).IsRequired(); b.Property(x => x.Observations).HasColumnName("observaciones").HasMaxLength(2000); b.Property(x => x.Status).HasColumnName("estado").HasMaxLength(40).IsRequired(); b.Property(x => x.WorkOrderId).HasColumnName("orden_trabajo_id"); b.Property(x => x.WorkOrderTaskId).HasColumnName("tarea_ot_id");
+        b.HasOne(x => x.Notification).WithMany(x => x.Items).HasForeignKey(x => x.NotificationId).OnDelete(DeleteBehavior.Restrict); b.HasOne(x => x.AffectedAsset).WithMany().HasForeignKey(x => x.AffectedAssetId).OnDelete(DeleteBehavior.Restrict); b.HasOne(x => x.WorkOrder).WithMany().HasForeignKey(x => x.WorkOrderId).OnDelete(DeleteBehavior.Restrict); b.HasOne(x => x.WorkOrderTask).WithMany().HasForeignKey(x => x.WorkOrderTaskId).OnDelete(DeleteBehavior.Restrict); b.HasIndex(x => new { x.NotificationId, x.Sequence }).IsUnique(); b.HasIndex(x => x.AffectedAssetId);
+    }
+}
+public sealed class WorkNotificationEvidenceConfiguration : IEntityTypeConfiguration<WorkNotificationEvidenceEntity>
+{
+    public void Configure(EntityTypeBuilder<WorkNotificationEvidenceEntity> b) { b.ToTable("avisos_trabajo_evidencias_sql"); b.ConfigureBase(); b.Property(x => x.WorkNotificationItemId).HasColumnName("aviso_item_id"); b.Property(x => x.FileId).HasColumnName("archivo_id"); b.Property(x => x.UploadedByUserId).HasColumnName("subido_por_usuario_id").HasMaxLength(120); b.HasOne(x => x.WorkNotificationItem).WithMany(x => x.Evidences).HasForeignKey(x => x.WorkNotificationItemId).OnDelete(DeleteBehavior.Restrict); b.HasOne(x => x.File).WithMany().HasForeignKey(x => x.FileId).OnDelete(DeleteBehavior.Restrict); b.HasIndex(x => new { x.WorkNotificationItemId, x.FileId }).IsUnique(); }
+}
+public sealed class WorkNotificationStatusHistoryConfiguration : IEntityTypeConfiguration<WorkNotificationStatusHistoryEntity>
+{
+    public void Configure(EntityTypeBuilder<WorkNotificationStatusHistoryEntity> b) { b.ToTable("avisos_trabajo_historial_sql"); b.ConfigureBase(); b.Property(x => x.NotificationId).HasColumnName("aviso_id"); b.Property(x => x.PreviousStatus).HasColumnName("estado_origen").HasMaxLength(40); b.Property(x => x.NewStatus).HasColumnName("estado_destino").HasMaxLength(40).IsRequired(); b.Property(x => x.UserId).HasColumnName("usuario_id").HasMaxLength(120).IsRequired(); b.Property(x => x.OccurredAtUtc).HasColumnName("fecha_utc").HasColumnType("datetimeoffset"); b.Property(x => x.Reason).HasColumnName("motivo").HasMaxLength(1000); b.HasOne(x => x.Notification).WithMany(x => x.StatusHistory).HasForeignKey(x => x.NotificationId).OnDelete(DeleteBehavior.Restrict); b.HasIndex(x => new { x.NotificationId, x.OccurredAtUtc }); }
 }
 
 public sealed class WorkOrderConfiguration : IEntityTypeConfiguration<WorkOrderEntity>
@@ -331,4 +358,3 @@ public sealed class WorkOrderAssetConfiguration : IEntityTypeConfiguration<WorkO
         builder.ToTable(t => t.HasCheckConstraint("ck_orden_trabajo_activos_rol", "rol IN ('PRINCIPAL','AFECTADO','MONTAJE','DESMONTAJE')"));
     }
 }
-
