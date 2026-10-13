@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
+using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Domain.Enums;
@@ -13,7 +14,7 @@ using Microsoft.Extensions.Logging;
 namespace MaintenanceCMMS.Infrastructure.WorkNotifications;
 
 /// <summary>Authoritative Avisos workflow. Client supplied codes are always resolved and scoped server-side.</summary>
-public sealed class WorkNotificationService(CmmsDbContext db, IAuditService audit, ILogger<WorkNotificationService>? logger = null) : IWorkNotificationService
+public sealed class WorkNotificationService(CmmsDbContext db, IAuditService audit, ILogger<WorkNotificationService>? logger = null, IDocumentStorageService? storage = null) : IWorkNotificationService
 {
     public async Task<IReadOnlyCollection<WorkNotificationResponse>> ListAsync(WorkNotificationQuery query, UserAccessContext user, CancellationToken ct)
     {
@@ -81,6 +82,37 @@ public sealed class WorkNotificationService(CmmsDbContext db, IAuditService audi
         }, ct);
     }
 
+    public async Task<WorkNotificationResponse?> UploadEvidenceAsync(string id, string itemId, UploadWorkNotificationEvidenceRequest request, UserAccessContext user, CancellationToken ct)
+    {
+        EnsureCanCreate(user);
+        if (storage is null) throw new InvalidOperationException("El almacenamiento documental no está configurado.");
+        if (!storage.GetProviderInfo().SupportsUpload) throw new DomainException("El proveedor documental configurado no permite cargar evidencias desde el CMMS.");
+        if (!Guid.TryParse(itemId, out var parsedItemId)) throw new DomainException("El trabajo indicado no es válido.");
+        return await ExecuteAtomicAsync(async () =>
+        {
+            var notice = await FindAsync(id, true, ct);
+            if (notice is null) return null;
+            EnsureFaenaAccess(user, notice.Faena.Code);
+            EnsureStatus(notice, WorkNotificationStatus.Borrador, WorkNotificationStatus.DevueltoFaena);
+            var item = notice.Items.SingleOrDefault(candidate => candidate.Id == parsedItemId);
+            if (item is null) throw new DomainException("El trabajo no pertenece al aviso indicado.");
+
+            var saved = await storage.SaveEvidenceAsync(new DocumentStorageSaveRequest(
+                "WorkNotifications", "WorkNotificationItem", item.Id.ToString("D"), request.FileName, request.ContentType,
+                request.Content, user.UserId, DocumentStoragePurpose.Evidence, notice.Faena.Code, item.AffectedAssetCodeSnapshot,
+                Metadata: new Dictionary<string, string?> { ["workNotificationNumber"] = notice.NotificationNumber, ["workItemSequence"] = item.Sequence.ToString() }), ct);
+            var file = await db.Files.SingleAsync(candidate => candidate.FileKey == saved.FileKey && !candidate.IsDeleted, ct);
+            db.WorkNotificationEvidences.Add(new WorkNotificationEvidenceEntity
+            {
+                Id = Guid.NewGuid(), WorkNotificationItem = item, WorkNotificationItemId = item.Id, File = file,
+                FileId = file.Id, UploadedByUserId = user.UserId
+            });
+            await db.SaveChangesAsync(ct);
+            await AuditAsync(user, "work_notification.evidence_uploaded", notice, null, Snapshot(notice, StatusOf(notice)), $"Evidencia agregada al trabajo {item.Sequence}: {file.FileName}", ct);
+            return ToResponse((await FindAsync(id, false, ct))!);
+        }, ct);
+    }
+
     public async Task<WorkNotificationResponse?> SubmitAsync(string id, UserAccessContext user, CancellationToken ct)
     {
         EnsureCanCreate(user); return await TransitionAsync(id, user, WorkNotificationStatus.PendientePlanificacion, null, [WorkNotificationStatus.Borrador, WorkNotificationStatus.DevueltoFaena], "work_notification.submitted", ct);
@@ -128,7 +160,7 @@ public sealed class WorkNotificationService(CmmsDbContext db, IAuditService audi
             if (string.IsNullOrWhiteSpace(request.Descripcion)) throw new DomainException("Descripción de falla / trabajo requerido es obligatoria.");
             var asset = await ResolveItemAssetAsync(target, request.RolComponente, ct);
             var item = new WorkNotificationItemEntity { Id = Guid.NewGuid(), Notification = notice, NotificationId = notice.Id, Sequence = sequence++, AffectedAssetId = asset.Id, AffectedAsset = asset, AffectedAssetCodeSnapshot = asset.Code, AffectedAssetNameSnapshot = asset.Name, ComponentRoleSnapshot = request.RolComponente?.ToString(), TechnicalSystemId = ParseGuid(request.TechnicalSystemId, "sistema técnico"), TechnicalSubsystemId = ParseGuid(request.TechnicalSubsystemId, "subsistema técnico"), TechnicalComponentId = ParseGuid(request.TechnicalComponentId, "componente técnico"), Description = request.Descripcion.Trim(), Observations = Text(request.Observaciones), Status = WorkNotificationItemStatus.PendientePlanificacion.ToString() };
-            await ValidateTechnicalNodesAsync(item, ct); notice.Items.Add(item);
+            await ValidateTechnicalNodesAsync(item, notice.FaenaId, ct); notice.Items.Add(item);
             foreach (var fileId in request.EvidenciaFileIds?.Distinct(StringComparer.OrdinalIgnoreCase) ?? [])
             {
                 if (!Guid.TryParse(fileId, out var fileGuid)) throw new DomainException("La evidencia indicada no es válida.");
@@ -165,10 +197,19 @@ public sealed class WorkNotificationService(CmmsDbContext db, IAuditService audi
         var component = await db.OperationalUnitComponents.Include(x => x.Asset).Include(x => x.ComponentRole).SingleOrDefaultAsync(x => x.OperationalUnitId == target.Unit.Id && x.RemovedAtUtc == null && x.ComponentRole.Code == (role == NotificationComponentRole.Fabrica ? "FABRICA" : "CHASIS"), ct);
         return component?.Asset ?? throw new DomainException($"La unidad no tiene componente vigente {role}.");
     }
-    private async Task ValidateTechnicalNodesAsync(WorkNotificationItemEntity item, CancellationToken ct)
+    private async Task ValidateTechnicalNodesAsync(WorkNotificationItemEntity item, Guid faenaId, CancellationToken ct)
     {
-        var ids = new[] { item.TechnicalSystemId, item.TechnicalSubsystemId, item.TechnicalComponentId }.Where(x => x.HasValue).Select(x => x!.Value).ToArray(); if (ids.Length == 0) return;
-        if (await db.TechnicalNodes.CountAsync(x => ids.Contains(x.Id) && !x.IsObsolete, ct) != ids.Length) throw new DomainException("La jerarquía técnica indicada no es válida.");
+        var selected = new[] { item.TechnicalSystemId, item.TechnicalSubsystemId, item.TechnicalComponentId };
+        if (selected.All(value => !value.HasValue)) return;
+        if (selected.Any(value => !value.HasValue)) throw new DomainException("Debe seleccionar sistema, subsistema y componente.");
+        var ids = selected.Select(value => value!.Value).ToArray();
+        if (ids.Distinct().Count() != ids.Length) throw new DomainException("La jerarquía técnica indicada no es válida.");
+        var nodes = await db.TechnicalNodes.AsNoTracking().Where(node => ids.Contains(node.Id) && !node.IsObsolete && (!node.FaenaId.HasValue || node.FaenaId == faenaId)).ToArrayAsync(ct);
+        var system = nodes.SingleOrDefault(node => node.Id == item.TechnicalSystemId && node.Level == "Sistema");
+        var subsystem = nodes.SingleOrDefault(node => node.Id == item.TechnicalSubsystemId && node.Level == "Subsistema");
+        var component = nodes.SingleOrDefault(node => node.Id == item.TechnicalComponentId && node.Level == "Componente");
+        if (system is null || subsystem is null || component is null || subsystem.ParentId != system.Id || component.ParentId != subsystem.Id)
+            throw new DomainException("La jerarquía técnica indicada no es válida o no pertenece a la faena del aviso.");
     }
     private async Task<WorkCatalogEntity> CatalogAsync(string category, string code, CancellationToken ct) => await db.WorkCatalogs.SingleOrDefaultAsync(x => x.Category == category && x.Code == code, ct) ?? throw new DomainException($"Falta catálogo requerido {category}:{code}.");
     private async Task<string> NextNumberAsync(CancellationToken ct) => $"AV-{await SqlServerSequence.NextWorkNotificationValueAsync(db, ct):000000}";
@@ -191,7 +232,7 @@ public sealed class WorkNotificationService(CmmsDbContext db, IAuditService audi
         // it explicitly guarantees an INSERT and relationship fix-up adds it to StatusHistory.
         db.WorkNotificationStatusHistory.Add(history);
     }
-    private static WorkNotificationResponse ToResponse(WorkNotificationEntity n) => new(n.NotificationNumber, StatusOf(n), n.Faena.Code, n.Asset?.Code, n.OperationalUnit?.Code, n.DetectedAtUtc, Enum.TryParse<NotificationOperationalState>(n.OperationalStatus, true, out var operational) ? operational : NotificationOperationalState.Operativo, n.OutOfServiceSinceUtc, n.OperationalRestriction, n.MeterReading, n.Asset?.UsageMeasurementType, n.Observations, n.RequesterUserId, n.CreatedByUserAtUtc, n.Items.OrderBy(x => x.Sequence).Select(x => new WorkNotificationItemResponse(x.Id.ToString(), x.Sequence, x.AffectedAssetId.ToString(), x.AffectedAssetCodeSnapshot, x.AffectedAssetNameSnapshot, Enum.TryParse<NotificationComponentRole>(x.ComponentRoleSnapshot, true, out var role) ? role : null, x.TechnicalSystemId?.ToString(), x.TechnicalSubsystemId?.ToString(), x.TechnicalComponentId?.ToString(), x.Description, x.Observations, Enum.TryParse<WorkNotificationItemStatus>(x.Status, true, out var itemStatus) ? itemStatus : WorkNotificationItemStatus.PendientePlanificacion, x.CreatedAtUtc, x.Evidences.Select(e => new WorkNotificationEvidenceResponse(e.Id.ToString(), e.FileId.ToString(), e.File.FileName, e.CreatedAtUtc)).ToArray(), x.WorkOrderId?.ToString(), x.WorkOrderTaskId?.ToString())).ToArray(), n.StatusHistory.OrderBy(x => x.OccurredAtUtc).Select(x => new WorkNotificationHistoryResponse(x.Id.ToString(), Enum.TryParse<WorkNotificationStatus>(x.PreviousStatus, true, out var previous) ? previous : null, Enum.TryParse<WorkNotificationStatus>(x.NewStatus, true, out var next) ? next : WorkNotificationStatus.Borrador, x.UserId, x.OccurredAtUtc, x.Reason)).ToArray());
+    private static WorkNotificationResponse ToResponse(WorkNotificationEntity n) => new(n.NotificationNumber, StatusOf(n), n.Faena.Code, n.Asset?.Code, n.OperationalUnit?.Code, n.DetectedAtUtc, Enum.TryParse<NotificationOperationalState>(n.OperationalStatus, true, out var operational) ? operational : NotificationOperationalState.Operativo, n.OutOfServiceSinceUtc, n.OperationalRestriction, n.MeterReading, n.Asset?.UsageMeasurementType, n.Observations, n.RequesterUserId, n.CreatedByUserAtUtc, n.Items.OrderBy(x => x.Sequence).Select(x => new WorkNotificationItemResponse(x.Id.ToString(), x.Sequence, x.AffectedAssetId.ToString(), x.AffectedAssetCodeSnapshot, x.AffectedAssetNameSnapshot, Enum.TryParse<NotificationComponentRole>(x.ComponentRoleSnapshot, true, out var role) ? role : null, x.TechnicalSystemId?.ToString(), x.TechnicalSubsystemId?.ToString(), x.TechnicalComponentId?.ToString(), x.Description, x.Observations, Enum.TryParse<WorkNotificationItemStatus>(x.Status, true, out var itemStatus) ? itemStatus : WorkNotificationItemStatus.PendientePlanificacion, x.CreatedAtUtc, x.Evidences.Select(e => new WorkNotificationEvidenceResponse(e.Id.ToString(), e.FileId.ToString(), e.File.FileKey, e.File.FileName, e.File.MimeType ?? "application/octet-stream", e.File.SizeBytes ?? 0, e.CreatedAtUtc)).ToArray(), x.WorkOrderId?.ToString(), x.WorkOrderTaskId?.ToString())).ToArray(), n.StatusHistory.OrderBy(x => x.OccurredAtUtc).Select(x => new WorkNotificationHistoryResponse(x.Id.ToString(), Enum.TryParse<WorkNotificationStatus>(x.PreviousStatus, true, out var previous) ? previous : null, Enum.TryParse<WorkNotificationStatus>(x.NewStatus, true, out var next) ? next : WorkNotificationStatus.Borrador, x.UserId, x.OccurredAtUtc, x.Reason)).ToArray());
     private static WorkNotificationStatus StatusOf(WorkNotificationEntity n) => Enum.TryParse<WorkNotificationStatus>(n.Status?.Code, true, out var status) ? status : WorkNotificationStatus.Borrador;
     private static void ValidateHeader(DateTimeOffset? detected, NotificationOperationalState state, DateTimeOffset? outSince, string? restriction) { if (detected > DateTimeOffset.UtcNow.AddMinutes(5)) throw new DomainException("La fecha de detección no puede ser futura."); if (state == NotificationOperationalState.FueraDeServicio && outSince is null) throw new DomainException("Fuera de servicio exige fecha y hora."); if (state == NotificationOperationalState.OperativoConAlerta && string.IsNullOrWhiteSpace(restriction)) throw new DomainException("Operativo con alerta exige restricción operacional."); }
     private static void EnsureStatus(WorkNotificationEntity n, params WorkNotificationStatus[] allowed) { if (!allowed.Contains(StatusOf(n))) throw new DomainException("La transición no es válida para el estado actual del aviso."); }

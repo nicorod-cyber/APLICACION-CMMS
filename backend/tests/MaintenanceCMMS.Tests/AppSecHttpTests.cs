@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.Storage;
+using MaintenanceCMMS.Application.WorkNotifications;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
 using MaintenanceCMMS.Infrastructure.Options;
@@ -135,6 +136,28 @@ public sealed class AppSecHttpTests : IClassFixture<SecurityApiFixture>
         var download = await client.GetAsync("/api/sharepoint/download?fileKey=" + Uri.EscapeDataString(file.FileKey));
         Assert.Equal(SecurityTestFiles.Png, await download.Content.ReadAsByteArrayAsync());
         Assert.Equal("nosniff", download.Headers.GetValues("X-Content-Type-Options").Single());
+    }
+
+    [Fact]
+    public async Task WorkNotificationEvidence_IsItemScopedAndCannotBeReadCrossFaena()
+    {
+        var owner = await fixture.CreateUserAsync([AuthRoles.Technician], ["FAE-1"]);
+        using var ownerClient = await fixture.LoginAsync(owner.Username);
+        var create = await ownerClient.PostAsJsonAsync("/api/work-notifications/", new CreateWorkNotificationRequest("FAE-1", ActivoCodigo: "ACT-1", Trabajos: [new("Revisar fuga")]));
+        create.EnsureSuccessStatusCode();
+        var notice = await create.Content.ReadFromJsonAsync<WorkNotificationResponse>(new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web) { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } });
+
+        using var form = new MultipartFormDataContent();
+        var content = new ByteArrayContent(SecurityTestFiles.Png); content.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+        form.Add(content, "file", "notice-evidence.png");
+        var upload = await ownerClient.PostAsync($"/api/work-notifications/{notice!.AvisoId}/items/{notice.Trabajos.Single().Id}/evidences", form);
+        upload.EnsureSuccessStatusCode();
+        var updated = await upload.Content.ReadFromJsonAsync<WorkNotificationResponse>(new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web) { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } });
+        var fileKey = updated!.Trabajos.Single().Evidencias.Single().FileKey;
+
+        var outsider = await fixture.CreateUserAsync([AuthRoles.Technician], []);
+        using var outsiderClient = await fixture.LoginAsync(outsider.Username);
+        Assert.Equal(HttpStatusCode.Forbidden, (await outsiderClient.GetAsync("/api/sharepoint/download?fileKey=" + Uri.EscapeDataString(fileKey))).StatusCode);
     }
 }
 

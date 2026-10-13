@@ -32,6 +32,17 @@ public sealed class FileAccessPolicy(CmmsDbContext db, IAuthorizationPolicyServi
         if (!string.IsNullOrWhiteSpace(faena) && !authorization.CanViewFaena(user, faena)) return false;
         if (entityType.Equals("Activo", StringComparison.OrdinalIgnoreCase) || entityType.Equals("Asset", StringComparison.OrdinalIgnoreCase)) asset = entityId;
         if (entityType.Equals("OT", StringComparison.OrdinalIgnoreCase) || entityType.Equals("WorkOrder", StringComparison.OrdinalIgnoreCase)) ot = entityId;
+        if (entityType.Equals("WorkNotificationItem", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Guid.TryParse(entityId, out var itemId)) return false;
+            var target = await db.WorkNotificationItems
+                .Where(item => item.Id == itemId)
+                .Select(item => new { Faena = item.Notification.Faena.Code, Asset = item.AffectedAssetCodeSnapshot })
+                .SingleOrDefaultAsync(ct);
+            return target is not null && authorization.CanViewFaena(user, target.Faena)
+                && (string.IsNullOrWhiteSpace(faena) || string.Equals(faena, target.Faena, StringComparison.OrdinalIgnoreCase))
+                && (string.IsNullOrWhiteSpace(asset) || string.Equals(asset, target.Asset, StringComparison.OrdinalIgnoreCase));
+        }
         var resolved = false;
         if (!string.IsNullOrWhiteSpace(asset))
         {

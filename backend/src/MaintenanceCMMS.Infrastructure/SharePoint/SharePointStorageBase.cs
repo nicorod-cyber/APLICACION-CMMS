@@ -357,6 +357,7 @@ public abstract class SharePointStorageBase : IDocumentStorageService
     private async Task<bool> HasReferencesAsync(Guid fileId, CancellationToken cancellationToken)
     {
         return await _dbContext.DocumentVersions.AnyAsync(item => item.FileId == fileId, cancellationToken) ||
+               await _dbContext.WorkNotificationEvidences.AnyAsync(item => item.FileId == fileId, cancellationToken) ||
                await _dbContext.WorkOrderEvidences.AnyAsync(item => item.FileId == fileId && item.IsActive, cancellationToken) ||
                await _dbContext.WorkOrderSignatures.AnyAsync(item => item.FileId == fileId && item.IsActive, cancellationToken);
     }

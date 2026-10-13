@@ -51,7 +51,8 @@ public sealed record TechnicalNodeResponse(
     DateTimeOffset? FechaActualizacionUtc,
     string Ruta,
     bool TieneHijos,
-    bool EnUso);
+    bool EnUso,
+    string? Id = null);
 
 public sealed record TechnicalHierarchyTreeNode(
     TechnicalNodeResponse Node,

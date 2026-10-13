@@ -1,6 +1,7 @@
 using MaintenanceCMMS.Application.Auditing;
 using MaintenanceCMMS.Application.Auth;
 using MaintenanceCMMS.Application.WorkNotifications;
+using MaintenanceCMMS.Application.Storage;
 using MaintenanceCMMS.Domain.Common;
 using MaintenanceCMMS.Infrastructure.Data.SqlServer;
 using MaintenanceCMMS.Infrastructure.Data.SqlServer.Entities;
@@ -53,6 +54,39 @@ public sealed class WorkNotificationServiceTests
         await using var fixture = await CreateFixtureAsync(); var created = await fixture.Service.CreateAsync(Request(), Admin, CancellationToken.None); await fixture.Service.SubmitAsync(created.AvisoId, Admin, CancellationToken.None);
         var returned = await fixture.Service.ReturnToSiteAsync(created.AvisoId, new("Falta fotografía"), Admin, CancellationToken.None); Assert.Equal(WorkNotificationStatus.DevueltoFaena, returned!.Estado);
         var resent = await fixture.Service.SubmitAsync(created.AvisoId, Admin, CancellationToken.None); Assert.Equal(WorkNotificationStatus.PendientePlanificacion, resent!.Estado);
+    }
+
+    [Fact]
+    public async Task UploadEvidenceAsync_AssociatesMultipleFilesWithTheirSpecificItems()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var created = await fixture.Service.CreateAsync(Request() with { Trabajos = [new("Trabajo uno"), new("Trabajo dos")] }, Admin, CancellationToken.None);
+        var service = new WorkNotificationService(fixture.Db, new NullAuditService(), storage: new TestEvidenceStorage(fixture.Db));
+
+        await service.UploadEvidenceAsync(created.AvisoId, created.Trabajos.ElementAt(0).Id, new("uno.png", "image/png", SecurityTestFiles.Png), Admin, CancellationToken.None);
+        await service.UploadEvidenceAsync(created.AvisoId, created.Trabajos.ElementAt(0).Id, new("uno-2.png", "image/png", SecurityTestFiles.Png), Admin, CancellationToken.None);
+        var updated = await service.UploadEvidenceAsync(created.AvisoId, created.Trabajos.ElementAt(1).Id, new("dos.png", "image/png", SecurityTestFiles.Png), Admin, CancellationToken.None);
+
+        Assert.Equal(2, updated!.Trabajos.ElementAt(0).Evidencias.Count);
+        Assert.Contains(updated.Trabajos.ElementAt(0).Evidencias, item => item.NombreArchivo == "uno.png");
+        Assert.Contains(updated.Trabajos.ElementAt(0).Evidencias, item => item.NombreArchivo == "uno-2.png");
+        Assert.Equal("dos.png", updated.Trabajos.ElementAt(1).Evidencias.Single().NombreArchivo);
+        Assert.All(updated.Trabajos.SelectMany(item => item.Evidencias), evidence => Assert.False(string.IsNullOrWhiteSpace(evidence.FileKey)));
+    }
+
+    [Fact]
+    public async Task UploadEvidenceAsync_RejectsInvalidContentCrossSiteAndNonDraftState()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var created = await fixture.Service.CreateAsync(Request(), Admin, CancellationToken.None);
+        var service = new WorkNotificationService(fixture.Db, new NullAuditService(), storage: new TestEvidenceStorage(fixture.Db));
+        var itemId = created.Trabajos.Single().Id;
+
+        await Assert.ThrowsAsync<DomainException>(() => service.UploadEvidenceAsync(created.AvisoId, itemId, new("fake.png", "image/png", [1, 2, 3]), Admin, CancellationToken.None));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.UploadEvidenceAsync(created.AvisoId, itemId, new("site.png", "image/png", SecurityTestFiles.Png), OtherSite, CancellationToken.None));
+        await fixture.Service.SubmitAsync(created.AvisoId, Admin, CancellationToken.None);
+        await Assert.ThrowsAsync<DomainException>(() => service.UploadEvidenceAsync(created.AvisoId, itemId, new("late.png", "image/png", SecurityTestFiles.Png), Admin, CancellationToken.None));
+        Assert.Empty(await fixture.Db.WorkNotificationEvidences.ToListAsync());
     }
 
     [Fact]
@@ -178,6 +212,30 @@ public sealed class WorkNotificationServiceTests
     private sealed record Fixture(SqlServerWorkTestFixture Database, CmmsDbContext Db, WorkNotificationService Service) : IAsyncDisposable { public ValueTask DisposeAsync() => Database.DisposeAsync(); }
     private sealed class NullAuditService : IAuditService { public Task<string> RecordAsync(AuditEventRequest request, CancellationToken ct) => Task.FromResult("audit"); public Task<AuditQueryResult> QueryAsync(AuditQuery query, CancellationToken ct) => Task.FromResult(new AuditQueryResult(0, [])); }
     private sealed class ThrowingAuditService : IAuditService { public Task<string> RecordAsync(AuditEventRequest request, CancellationToken ct) => throw new InvalidOperationException("Fallo de auditoría para prueba de rollback."); public Task<AuditQueryResult> QueryAsync(AuditQuery query, CancellationToken ct) => Task.FromResult(new AuditQueryResult(0, [])); }
+    private sealed class TestEvidenceStorage(CmmsDbContext db) : IDocumentStorageService
+    {
+        public DocumentStorageMode Mode => DocumentStorageMode.LocalSimulation;
+        public DocumentStorageProviderInfo GetProviderInfo() => new(Mode, "Test", true, false, false, string.Empty, null);
+        public Task<DocumentStorageInfo> SaveDocumentAsync(DocumentStorageSaveRequest request, CancellationToken ct) => SaveEvidenceAsync(request, ct);
+        public async Task<DocumentStorageInfo> SaveEvidenceAsync(DocumentStorageSaveRequest request, CancellationToken ct)
+        {
+            UploadPolicy.Validate(request.FileName, request.ContentType, request.Content, imagesOnly: true, maximumBytes: 10 * 1024 * 1024);
+            var file = new FileMetadataEntity { Id = Guid.NewGuid(), FileKey = $"test/{Guid.NewGuid():N}/{request.FileName}", FileName = request.FileName, StoredFileName = request.FileName, Extension = Path.GetExtension(request.FileName).TrimStart('.'), Provider = Mode.ToString(), StorageMode = Mode.ToString(), Purpose = DocumentStoragePurpose.Evidence.ToString(), Module = request.Module, EntityType = request.EntityType, EntityId = request.EntityId, FaenaCode = request.FaenaCodigo, AssetCode = request.ActivoCodigo, LogicalUri = $"/api/sharepoint/download?fileKey=test", MimeType = request.ContentType, SizeBytes = request.Content.Length, Status = DocumentStorageStatus.Stored.ToString(), AuthorUserId = request.UploadedBy };
+            db.Files.Add(file);
+            await db.SaveChangesAsync(ct);
+            return new(file.FileKey, file.FileName, file.MimeType, Mode, DocumentStoragePurpose.Evidence, DocumentStorageStatus.Stored, file.Module, file.EntityType, file.EntityId, file.FaenaCode, file.AssetCode, null, "test", null, file.LogicalUri, file.SizeBytes.Value, 1, file.CreatedAtUtc, request.UploadedBy, null);
+        }
+        public Task<DocumentStorageInfo> SaveManualLinkAsync(ManualDocumentLinkRequest request, CancellationToken ct) => throw new NotSupportedException();
+        public Task<DocumentStorageInfo> SaveAlertPdfAsync(DocumentStorageSaveRequest request, CancellationToken ct) => throw new NotSupportedException();
+        public Task<DocumentStorageInfo> SaveImportBackupAsync(DocumentStorageSaveRequest request, CancellationToken ct) => throw new NotSupportedException();
+        public Task<DocumentStoragePathValidationResult> ValidatePathAsync(DocumentStoragePathRequest request, CancellationToken ct) => throw new NotSupportedException();
+        public Task<DocumentStorageFolderInfo> CreateFolderAsync(DocumentStorageFolderRequest request, CancellationToken ct) => throw new NotSupportedException();
+        public Task<DocumentStorageInfo?> GetAsync(string fileKey, CancellationToken ct) => throw new NotSupportedException();
+        public Task<string?> GetLinkAsync(string fileKey, CancellationToken ct) => throw new NotSupportedException();
+        public Task<IReadOnlyCollection<DocumentStorageInfo>> ListAsync(DocumentStorageQuery query, CancellationToken ct) => throw new NotSupportedException();
+        public Task<DocumentStorageDownload?> DownloadAsync(string fileKey, CancellationToken ct) => throw new NotSupportedException();
+        public Task<DocumentStorageDeleteResult> DeleteAsync(string fileKey, string deletedBy, bool deletePhysicalContent, CancellationToken ct) => throw new NotSupportedException();
+    }
 
     private sealed class HistoryStateProbe : SaveChangesInterceptor
     {

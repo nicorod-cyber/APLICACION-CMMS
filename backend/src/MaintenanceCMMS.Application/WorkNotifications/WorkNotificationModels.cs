@@ -16,6 +16,7 @@ public sealed record CreateWorkNotificationItemRequest(string Descripcion, strin
 public sealed record CreateWorkNotificationRequest(string? FaenaCodigo, string? ActivoCodigo = null, string? UnidadOperativaCodigo = null, DateTimeOffset? FechaDeteccion = null, NotificationOperationalState EstadoOperacional = NotificationOperationalState.Operativo, DateTimeOffset? FueraServicioDesde = null, string? RestriccionOperacional = null, decimal? LecturaMedidor = null, string? Observaciones = null, IReadOnlyCollection<CreateWorkNotificationItemRequest>? Trabajos = null);
 public sealed record UpdateWorkNotificationDraftRequest(DateTimeOffset? FechaDeteccion, NotificationOperationalState EstadoOperacional, DateTimeOffset? FueraServicioDesde, string? RestriccionOperacional, decimal? LecturaMedidor, string? Observaciones, IReadOnlyCollection<CreateWorkNotificationItemRequest> Trabajos);
 public sealed record WorkNotificationActionRequest(string Motivo);
+public sealed record UploadWorkNotificationEvidenceRequest(string FileName, string ContentType, byte[] Content);
 
 /// <summary>Raised when an Aviso changed after it was loaded for a state-changing operation.</summary>
 public sealed class WorkNotificationConcurrencyException : Exception
@@ -23,7 +24,7 @@ public sealed class WorkNotificationConcurrencyException : Exception
     public WorkNotificationConcurrencyException() : base("El aviso fue modificado por otro usuario.") { }
 }
 
-public sealed record WorkNotificationEvidenceResponse(string Id, string FileId, string NombreArchivo, DateTimeOffset CreadoEnUtc);
+public sealed record WorkNotificationEvidenceResponse(string Id, string FileId, string FileKey, string NombreArchivo, string ContentType, long SizeBytes, DateTimeOffset CreadoEnUtc);
 public sealed record WorkNotificationItemResponse(string Id, int Secuencia, string AffectedAssetId, string AffectedAssetCodeSnapshot, string AffectedAssetNameSnapshot, NotificationComponentRole? RolComponente, string? TechnicalSystemId, string? TechnicalSubsystemId, string? TechnicalComponentId, string Descripcion, string? Observaciones, WorkNotificationItemStatus Estado, DateTimeOffset CreadoEnUtc, IReadOnlyCollection<WorkNotificationEvidenceResponse> Evidencias, string? WorkOrderId = null, string? WorkOrderTaskId = null);
 public sealed record WorkNotificationHistoryResponse(string Id, WorkNotificationStatus? EstadoOrigen, WorkNotificationStatus EstadoDestino, string UsuarioId, DateTimeOffset FechaUtc, string? Motivo);
 public sealed record WorkNotificationResponse(string AvisoId, WorkNotificationStatus Estado, string FaenaCodigo, string? ActivoCodigo, string? UnidadOperativaCodigo, DateTimeOffset FechaDeteccion, NotificationOperationalState EstadoOperacional, DateTimeOffset? FueraServicioDesde, string? RestriccionOperacional, decimal? LecturaMedidor, string? UnidadMedicion, string? Observaciones, string CreadoPorUsuarioId, DateTimeOffset CreadoEnUtc, IReadOnlyCollection<WorkNotificationItemResponse> Trabajos, IReadOnlyCollection<WorkNotificationHistoryResponse> Historial);

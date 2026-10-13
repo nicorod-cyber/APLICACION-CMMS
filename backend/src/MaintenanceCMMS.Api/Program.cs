@@ -2229,6 +2229,44 @@ workNotificationsApi.MapPut("/{id}/draft", async (string id, UpdateWorkNotificat
     await WorkNotificationResultAsync(() => service.UpdateDraftAsync(id, request, UserAccessContext.FromClaims(user), cancellationToken)))
     .WithName("UpdateWorkNotificationDraft");
 
+workNotificationsApi.MapPost("/{id}/items/{itemId}/evidences", async (
+        string id,
+        string itemId,
+        HttpRequest request,
+        ClaimsPrincipal user,
+        IWorkNotificationService service,
+        CancellationToken cancellationToken) =>
+    {
+        if (!request.HasFormContentType)
+            return Results.BadRequest(new { message = "La evidencia debe enviarse como multipart/form-data." });
+        var form = await request.ReadFormAsync(cancellationToken);
+        var file = form.Files.GetFile("file");
+        if (file is null || file.Length == 0)
+            return Results.BadRequest(new { message = "Debe adjuntar una evidencia." });
+        try
+        {
+            await using var input = file.OpenReadStream();
+            using var memory = new MemoryStream();
+            await input.CopyToAsync(memory, cancellationToken);
+            var result = await service.UploadEvidenceAsync(id, itemId, new UploadWorkNotificationEvidenceRequest(
+                file.FileName,
+                string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
+                memory.ToArray()), UserAccessContext.FromClaims(user), cancellationToken);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (DomainException ex)
+        {
+            return Results.BadRequest(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+    })
+    .Accepts<IFormFile>("multipart/form-data")
+    .DisableAntiforgery()
+    .WithName("UploadWorkNotificationItemEvidence");
+
 workNotificationsApi.MapPost("/{id}/submit", async (string id, ClaimsPrincipal user, IWorkNotificationService service, CancellationToken cancellationToken) =>
     await WorkNotificationResultAsync(() => service.SubmitAsync(id, UserAccessContext.FromClaims(user), cancellationToken)))
     .WithName("SubmitWorkNotification");

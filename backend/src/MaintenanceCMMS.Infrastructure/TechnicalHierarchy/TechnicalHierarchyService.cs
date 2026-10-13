@@ -195,7 +195,7 @@ public sealed class TechnicalHierarchyService : ITechnicalHierarchyService
         var assets=n.Assets.Select(x=>x.Asset.Code).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToArray();
         var aliases=n.Aliases.Select(x=>x.Alias).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToArray();
         var children=all.Values.Any(x=>x.ParentId==n.Id&&!x.IsObsolete);
-        return new TechnicalNodeResponse(n.Code,n.Name,n.NormalizedName,ParseLevel(n.Level),n.Parent?.Code,n.Faena?.Code,n.Faena?.TechnicalLocation?.Code,fams,assets,aliases,n.IsObsolete,n.MergedIntoNode?.Code,n.CreatedAtUtc,n.UpdatedAtUtc,PathOf(n,all),children,children||assets.Length>0);
+        return new TechnicalNodeResponse(n.Code,n.Name,n.NormalizedName,ParseLevel(n.Level),n.Parent?.Code,n.Faena?.Code,n.Faena?.TechnicalLocation?.Code,fams,assets,aliases,n.IsObsolete,n.MergedIntoNode?.Code,n.CreatedAtUtc,n.UpdatedAtUtc,PathOf(n,all),children,children||assets.Length>0,n.Id.ToString("D"));
     }
 
     private static string PathOf(TechnicalNodeEntity node,IReadOnlyDictionary<string,TechnicalNodeEntity> all)
